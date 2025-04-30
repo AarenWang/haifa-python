@@ -9,6 +9,7 @@ class StackVM:
         self.script = script
         self.pc = 0
         outputs = []
+    
 
         while self.pc < len(self.script):
             instr = self.script[self.pc]
@@ -103,4 +104,3 @@ class StackVM:
                     return i
                 level -= 1
         raise ValueError("Unmatched control structure")
-
