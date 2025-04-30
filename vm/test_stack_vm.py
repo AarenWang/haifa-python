@@ -5,8 +5,8 @@ from stack_vm import StackVM  # 你的 VM 实现文件
 class TestStackVM(unittest.TestCase):
     def run_vm(self, script):
         vm = StackVM()
-        vm.run(script)
-        return vm
+        outputs = vm.run(script)
+        return vm, outputs
     
     
 
@@ -75,8 +75,8 @@ class TestStackVM(unittest.TestCase):
         }
         
         for name, script in test_cases.items():
-            vm = self.run_vm(script)
-            print(f"{name}: {vm.stack}")
+            vm, outputs = self.run_vm(script)
+            print(f"{name}: {vm.stack}: outputs: {outputs}")
         
 
 # Execute all test cases
