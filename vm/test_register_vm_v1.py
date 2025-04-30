@@ -53,6 +53,8 @@ class TestRegisterVM(unittest.TestCase):
         ]
         vm = self.run_vm(script)
         self.assertEqual(vm.registers["result"], 49)
+        
+ 
 
 if __name__ == '__main__':
     unittest.main()

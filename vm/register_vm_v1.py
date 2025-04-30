@@ -114,8 +114,6 @@ class RegisterVMAdvancedSafe():
                 # Function
                 elif op == "CALL":
                     fname = args[0]
-                    print(f"Calling function {fname} at line {self.pc}")
-                    print(f"Current param stack: {self.param_stack}")
                     # Save current state
                     self.call_stack.append((self.pc + 1, self.return_register))
                     self.local_param_stack = self.param_stack.copy()
@@ -125,7 +123,6 @@ class RegisterVMAdvancedSafe():
                     self.pc = self.functions[fname]
                     continue
                 elif op == "FUNC":
-                    print(f"Entering function at line {self.pc}")
                     # Skip function definition unless we're calling it
                     if not self.call_stack:
                         # Skip to ENDFUNC
@@ -136,16 +133,7 @@ class RegisterVMAdvancedSafe():
                         continue
                 elif op == "ENDFUNC":
                     if self.call_stack:
-                        print(f"Returning from function, storing {self.return_value} in {self.return_register}")
                         # Restore state and store return value
-                        self.pc, self.return_register = self.call_stack.pop()
-                        if self.return_register is not None and self.return_value is not None:
-                            self.registers[self.return_register] = self.return_value
-                        self.return_register = None
-                        self.return_value = None
-                        continue
-                elif op == "RET":
-                    if self.call_stack:
                         self.pc, self.return_register = self.call_stack.pop()
                         if self.return_register is not None and self.return_value is not None:
                             self.registers[self.return_register] = self.return_value
@@ -154,18 +142,13 @@ class RegisterVMAdvancedSafe():
                         continue
                 elif op == "RETURN":
                     self.return_value = self.val(args[0])
-                    print(f"Setting return value to {self.return_value}")
                 elif op == "PARAM":
                     self.param_stack.append(self.val(args[0]))
-                    print(f"Pushing param {self.val(args[0])} onto stack")
                 elif op == "ARG":
                     dest = args[0]
-                    value = self.local_param_stack.pop(0) if self.local_param_stack else 0
-                    print(f"Setting {dest} to {value}")
-                    self.registers[dest] = value
+                    self.registers[dest] = self.local_param_stack.pop(0) if self.local_param_stack else 0
                 elif op == "RESULT":
                     self.return_register = args[0]
-                    print(f"Will store return value in {self.return_register}")
                     # If we already have a return value, store it immediately
                     if self.return_value is not None:
                         self.registers[self.return_register] = self.return_value
