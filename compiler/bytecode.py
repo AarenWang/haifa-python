@@ -40,6 +40,20 @@ class Opcode(Enum):
     SHL = auto()
     SHR = auto()
     SAR = auto()
+    
+        # 数组支持
+    ARR_INIT = auto()
+    ARR_SET = auto()
+    ARR_GET = auto()
+    LEN = auto()
+
+    # 结构控制（可视化、调试用）
+    STRUCT_IF = auto()
+    STRUCT_ELSE = auto()
+    STRUCT_ENDIF = auto()
+    STRUCT_WHILE = auto()
+    STRUCT_ENDWHILE = auto()
+    STRUCT_BREAK = auto()
 
 
 @dataclass

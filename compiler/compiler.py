@@ -84,6 +84,31 @@ class ASTCompiler:
         elif isinstance(node, EndFuncNode):
             self.emit(Opcode.RETURN, "0")
 
+        elif isinstance(node, IfNode):
+            self.emit(Opcode.JZ, node.condition, node.else_label)
+        elif isinstance(node, ElseNode):
+            self.emit(Opcode.JMP, node.end_label)
+            self.emit(Opcode.LABEL, node.end_label.replace("endif", "else"))  # 可省略
+        elif isinstance(node, EndIfNode):
+            pass  # 只是结构标记，不发射任何字节码
+
+        elif isinstance(node, WhileNode):
+            self.emit(Opcode.JZ, node.condition, node.end_label)
+        elif isinstance(node, EndWhileNode):
+            self.emit(Opcode.JMP, node.loop_start)
+            self.emit(Opcode.LABEL, node.end_label)
+        elif isinstance(node, BreakNode):
+            self.emit(Opcode.JMP, node.end_label)
+
+        elif isinstance(node, ArrInitNode):
+            self.emit(Opcode.ARR_INIT, node.name, node.size)
+        elif isinstance(node, ArrSetNode):
+            self.emit(Opcode.ARR_SET, node.name, node.index, node.value)
+        elif isinstance(node, ArrGetNode):
+            self.emit(Opcode.ARR_GET, node.dst, node.name, node.index)
+        elif isinstance(node, LenNode):
+            self.emit(Opcode.LEN, node.dst, node.name)
+
         elif isinstance(node, NoOpNode):
             pass
         else:
