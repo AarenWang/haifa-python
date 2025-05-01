@@ -19,20 +19,20 @@ INSTRUCTION arg1 arg2 ...
 
 ## 🧮 算术与逻辑运算
 
-MOV r x           ; 将值 x（寄存器或常量）赋给寄存器 r
-ADD r a b         ; r = a + b
-SUB r a b         ; r = a - b
-MUL r a b         ; r = a * b
-DIV r a b         ; r = a / b（向下取整）
-MOD r a b         ; r = a % b
-NEG r x           ; r = -x
+MOV r x           ; 将值 x（寄存器或常量）赋给寄存器 r \n
+ADD r a b         ; r = a + b  \n
+SUB r a b         ; r = a - b  \n
+MUL r a b         ; r = a * b  \n
+DIV r a b         ; r = a / b（向下取整）\n
+MOD r a b         ; r = a % b  \n
+NEG r x           ; r = -x \n
 
-EQ r a b          ; r = (a == b) ? 1 : 0
-GT r a b          ; r = (a > b) ? 1 : 0
-LT r a b          ; r = (a < b) ? 1 : 0
-AND r a b         ; r = (a && b) ? 1 : 0
-OR r a b          ; r = (a || b) ? 1 : 0
-NOT r x           ; r = !x
+EQ r a b          ; r = (a == b) ? 1 : 0  \n
+GT r a b          ; r = (a > b) ? 1 : 0  \n
+LT r a b          ; r = (a < b) ? 1 : 0  \n
+AND r a b         ; r = (a && b) ? 1 : 0  \n
+OR r a b          ; r = (a || b) ? 1 : 0  \n
+NOT r x           ; r = !x \n
 
 ---
 
