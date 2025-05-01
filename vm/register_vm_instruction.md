@@ -19,35 +19,36 @@ INSTRUCTION arg1 arg2 ...
 
 ## 🧮 算术与逻辑运算
 
-MOV r x           ; 将值 x（寄存器或常量）赋给寄存器 r \n
-ADD r a b         ; r = a + b  \n
-SUB r a b         ; r = a - b  \n
-MUL r a b         ; r = a * b  \n
-DIV r a b         ; r = a / b（向下取整）\n
-MOD r a b         ; r = a % b  \n
-NEG r x           ; r = -x \n
+MOV r x           ; 将值 x（寄存器或常量）赋给寄存器 r <br/>
+ADD r a b         ; r = a + b  <br/>
+SUB r a b         ; r = a - b  <br/>
+MUL r a b         ; r = a * b  <br/>
+DIV r a b         ; r = a / b（向下取整）<br/>
+MOD r a b         ; r = a % b  <br/>
+NEG r x           ; r = -x <br/>
 
-EQ r a b          ; r = (a == b) ? 1 : 0  \n
-GT r a b          ; r = (a > b) ? 1 : 0  \n
-LT r a b          ; r = (a < b) ? 1 : 0  \n
-AND r a b         ; r = (a && b) ? 1 : 0  \n
-OR r a b          ; r = (a || b) ? 1 : 0  \n
-NOT r x           ; r = !x \n
+EQ r a b          ; r = (a == b) ? 1 : 0  <br/>
+GT r a b          ; r = (a > b) ? 1 : 0  <br/>
+LT r a b          ; r = (a < b) ? 1 : 0  <br/>
+AND r a b         ; r = (a && b) ? 1 : 0  <br/>
+OR r a b          ; r = (a || b) ? 1 : 0  <br/>
+NOT r x           ; r = !x <br/>
 
 ---
 
 ## 📦 数组操作
 
-ARR_INIT name size        ; 初始化数组
-ARR_SET name i v          ; 设置数组第 i 项为 v
-ARR_GET r name i          ; 获取数组第 i 项赋给 r
-LEN r name                ; r = 数组长度
+ARR_INIT name size        ; 初始化数组  <br/>
+ARR_SET name i v          ; 设置数组第 i 项为 v <br/>
+ARR_GET r name i          ; 获取数组第 i 项赋给 r <br/>
+LEN r name                ; r = 数组长度 <br/>
 
 ---
 
 ## 🔁 控制流
 
-LABEL name                ; 定义标签
+```
+LABEL name                ; 定义标签   
 JMP name                  ; 跳转到标签
 JZ cond label             ; cond 为 0 跳转到 label
 
@@ -62,11 +63,13 @@ WHILE cond
 ENDWHILE
 
 BREAK                     ; 跳出当前 WHILE
+```
 
 ---
 
 ## 🧠 函数调用
 
+```
 FUNC name
   ARG r1                  ; 函数参数（通过 PARAM 提供）
   ...
@@ -76,18 +79,22 @@ ENDFUNC
 PARAM x                  ; 设置函数参数（先于 CALL）
 CALL name                ; 调用函数
 RESULT r                 ; 获取返回值到寄存器 r
+```
 
 ---
 
 ## 📤 输出与调试
 
+```
 PRINT r                  ; 输出寄存器值
 DUMP                     ; 打印寄存器和数组状态
+```
 
 ---
 
 ## 📝 示例：数组求和 + 平方函数调用
 
+```
 ARR_INIT nums 3
 ARR_SET nums 0 2
 ARR_SET nums 1 4
@@ -116,3 +123,4 @@ FUNC square
   MUL result n n
   RETURN result
 ENDFUNC
+```
