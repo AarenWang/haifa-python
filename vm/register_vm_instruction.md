@@ -18,7 +18,7 @@ INSTRUCTION arg1 arg2 ...
 ---
 
 ## 🧮 算术与逻辑运算
-
+```
 MOV r x           ; 将值 x（寄存器或常量）赋给寄存器 r <br/>
 ADD r a b         ; r = a + b  <br/>
 SUB r a b         ; r = a - b  <br/>
@@ -33,16 +33,16 @@ LT r a b          ; r = (a < b) ? 1 : 0  <br/>
 AND r a b         ; r = (a && b) ? 1 : 0  <br/>
 OR r a b          ; r = (a || b) ? 1 : 0  <br/>
 NOT r x           ; r = !x <br/>
-
+```
 ---
 
 ## 📦 数组操作
-
-ARR_INIT name size        ; 初始化数组  <br/>
-ARR_SET name i v          ; 设置数组第 i 项为 v <br/>
-ARR_GET r name i          ; 获取数组第 i 项赋给 r <br/>
-LEN r name                ; r = 数组长度 <br/>
-
+```
+ARR_INIT name size        ; 初始化数组  
+ARR_SET name i v          ; 设置数组第 i 项为 v 
+ARR_GET r name i          ; 获取数组第 i 项赋给 r 
+LEN r name                ; r = 数组长度 
+```
 ---
 
 ## 🔁 控制流
