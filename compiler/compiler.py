@@ -95,8 +95,7 @@ class ASTCompiler:
         elif isinstance(node, WhileNode):
             self.emit(Opcode.JZ, node.condition, node.end_label)
         elif isinstance(node, EndWhileNode):
-            self.emit(Opcode.JMP, node.loop_start)
-            self.emit(Opcode.LABEL, node.end_label)
+            pass
         elif isinstance(node, BreakNode):
             self.emit(Opcode.JMP, node.end_label)
 

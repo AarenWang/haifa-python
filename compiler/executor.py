@@ -1,4 +1,5 @@
 from ast_nodes import *
+from value_utils import resolve_value
 
 class ExecutionContext:
     def __init__(self):
@@ -13,7 +14,7 @@ class ExecutionContext:
         self.pc = 0
 
     def val(self, x):
-        return int(x) if x.lstrip("-").isdigit() else self.registers.get(x, 0)
+        return resolve_value(x, lambda name: self.registers.get(name, 0))
 
 
 class Executor:

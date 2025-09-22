@@ -142,13 +142,18 @@ class FuncNode(ASTNode):
 
 class EndFuncNode(ASTNode):
     def execute(self, context):
-        if context.call_stack: context.pc, context.param_stack = context.call_stack.pop(); context.pc -= 1
+        if context.call_stack:
+            context.pc, context.param_stack, context.registers = context.call_stack.pop()
+            context.pc -= 1
 
 class CallNode(ASTNode):
     def __init__(self, name): self.name = name
     def execute(self, context):
-        context.call_stack.append((context.pc + 1, list(context.param_stack)))
-        context.param_stack.clear()
+        saved_params = context.param_stack
+        context.call_stack.append((context.pc + 1, saved_params, context.registers))
+        context.registers = dict(context.registers)
+        context.param_stack = list(saved_params)
+        saved_params.clear()
         context.pc = context.labels[self.name] - 1
 
 class ParamNode(ASTNode):
@@ -164,7 +169,9 @@ class ReturnNode(ASTNode):
     def __init__(self, value): self.value = value
     def execute(self, context):
         context.return_value = context.val(self.value)
-        if context.call_stack: context.pc, context.param_stack = context.call_stack.pop(); context.pc -= 1
+        if context.call_stack:
+            context.pc, context.param_stack, context.registers = context.call_stack.pop()
+            context.pc -= 1
 
 class ResultNode(ASTNode):
     def __init__(self, dst): self.dst = dst

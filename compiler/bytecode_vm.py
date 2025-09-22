@@ -1,4 +1,5 @@
 from bytecode import Opcode, Instruction
+from value_utils import resolve_value
 
 class BytecodeVM:
     def __init__(self, instructions):
@@ -6,11 +7,15 @@ class BytecodeVM:
         self.labels = {}
         self.registers = {}
         self.stack = []
+        self.arrays = {}
+        self.call_stack = []
+        self.param_stack = []
+        self.return_value = None
         self.pc = 0
         self.output = []
 
     def val(self, x):
-        return int(x) if x.lstrip('-').isdigit() else self.registers.get(x, 0)
+        return resolve_value(x, lambda name: self.registers.get(name, 0))
 
     def index_labels(self):
         for i, inst in enumerate(self.instructions):
@@ -34,6 +39,8 @@ class BytecodeVM:
                 self.registers[args[0]] = int(args[1])
             elif op == Opcode.MOV:
                 self.registers[args[0]] = self.val(args[1])
+            elif op == Opcode.LOAD_CONST:
+                self.registers[args[0]] = args[1]
             elif op == Opcode.ADD:
                 self.registers[args[0]] = self.val(args[1]) + self.val(args[2])
             elif op == Opcode.SUB:
@@ -87,6 +94,53 @@ class BytecodeVM:
                     continue
             elif op == Opcode.LABEL:
                 pass
+            elif op == Opcode.OBJ_GET:
+                source = self.val(args[1])
+                key = args[2]
+                if isinstance(source, dict) and key in source:
+                    self.registers[args[0]] = source[key]
+                else:
+                    self.registers[args[0]] = None
+            elif op == Opcode.PARAM:
+                self.param_stack.append(self.val(args[0]))
+            elif op == Opcode.ARG:
+                if self.param_stack:
+                    self.registers[args[0]] = self.param_stack.pop(0)
+            elif op == Opcode.CALL:
+                target = args[0]
+                saved_params = self.param_stack
+                self.call_stack.append((self.pc + 1, saved_params, self.registers))
+                self.registers = dict(self.registers)
+                self.param_stack = list(saved_params)
+                saved_params.clear()
+                self.pc = self.labels[target]
+                continue
+            elif op == Opcode.RETURN:
+                self.return_value = self.val(args[0]) if args else None
+                if self.call_stack:
+                    self.pc, self.param_stack, self.registers = self.call_stack.pop()
+                    continue
+            elif op == Opcode.RESULT:
+                self.registers[args[0]] = self.return_value
+
+            # 数组操作
+            elif op == Opcode.ARR_INIT:
+                size = int(self.val(args[1]))
+                self.arrays[args[0]] = [0] * size
+            elif op == Opcode.ARR_SET:
+                array = self.arrays.setdefault(args[0], [])
+                index = int(self.val(args[1]))
+                value = self.val(args[2])
+                if 0 <= index < len(array):
+                    array[index] = value
+            elif op == Opcode.ARR_GET:
+                array = self.arrays.get(args[1], [])
+                index = int(self.val(args[2]))
+                value = array[index] if 0 <= index < len(array) else None
+                self.registers[args[0]] = value
+            elif op == Opcode.LEN:
+                array = self.arrays.get(args[1], [])
+                self.registers[args[0]] = len(array)
 
             # 输出
             elif op == Opcode.PRINT:

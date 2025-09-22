@@ -4,6 +4,7 @@ from dataclasses import dataclass
 class Opcode(Enum):
     LOAD_IMM = auto()     # LOAD_IMM reg, value
     MOV = auto()          # MOV dst, src
+    LOAD_CONST = auto()   # LOAD_CONST dst, value (supports any JSON value)
     ADD = auto()
     SUB = auto()
     MUL = auto()
@@ -22,6 +23,8 @@ class Opcode(Enum):
     JZ = auto()           # JZ reg, label
 
     LABEL = auto()        # LABEL name
+
+    OBJ_GET = auto()      # OBJ_GET dst, src, key
 
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg
