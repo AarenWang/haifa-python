@@ -1,0 +1,25 @@
+import unittest
+
+from jq_runtime import run_filter
+
+
+class TestJQRuntime(unittest.TestCase):
+    def test_identity_returns_input(self):
+        data = {"foo": 1, "bar": 2}
+        self.assertEqual(run_filter(".", data), [data])
+
+    def test_field_access(self):
+        data = {"foo": {"bar": 42}}
+        self.assertEqual(run_filter(".foo.bar", data), [42])
+
+    def test_pipeline(self):
+        data = {"foo": {"bar": "baz"}}
+        self.assertEqual(run_filter(".foo | .bar", data), ["baz"])
+
+    def test_missing_field_yields_null(self):
+        data = {"foo": {}}
+        self.assertEqual(run_filter(".foo.missing", data), [None])
+
+
+if __name__ == "__main__":
+    unittest.main()

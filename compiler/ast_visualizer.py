@@ -1,8 +1,16 @@
-from graphviz import Digraph
+try:
+    from graphviz import Digraph  # type: ignore
+except ImportError:  # pragma: no cover - gracefully handled at runtime
+    Digraph = None  # type: ignore
 
 class ASTVisualizer:
-    def __init__(self):
-        self.graph = Digraph(comment="AST")
+    def __init__(self, graph_class=None):
+        if graph_class is None:
+            if Digraph is None:
+                raise RuntimeError("Graphviz package is required for AST visualization")
+            graph_class = Digraph
+
+        self.graph = graph_class(comment="AST")
         self.counter = 0
 
     def gen_id(self):
