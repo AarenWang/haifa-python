@@ -32,7 +32,7 @@ class JQCompiler:
 
     def _compile_pipeline(self, stages: List[JQNode], current_reg: str) -> None:
         if not stages:
-            self.instructions.append(Instruction(Opcode.PRINT, [current_reg]))
+            self.instructions.append(Instruction(Opcode.EMIT, [current_reg]))
             return
 
         stage, rest = stages[0], stages[1:]
@@ -80,6 +80,59 @@ class JQCompiler:
                 dest = self._new_temp()
                 self.instructions.append(Instruction(Opcode.LEN_VALUE, [dest, current_reg]))
                 self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "map" and len(stage.args) == 1:
+                result_reg = self._new_temp()
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [result_reg, []]))
+                self.instructions.append(Instruction(Opcode.PUSH_EMIT, [result_reg]))
+
+                source_reg = self._eval_expression(Identity(), current_reg)
+                index_reg = self._new_temp()
+                length_reg = self._new_temp()
+                cond_reg = self._new_temp()
+                elem_reg = self._new_temp()
+                loop_label = self._new_label("jq_map_loop")
+                end_label = self._new_label("jq_map_end")
+
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+                self.instructions.append(Instruction(Opcode.LEN_VALUE, [length_reg, source_reg]))
+                self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, length_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+                self.instructions.append(Instruction(Opcode.GET_INDEX, [elem_reg, source_reg, index_reg]))
+
+                expr_stages = flatten_pipe(stage.args[0])
+                self._compile_pipeline(expr_stages, elem_reg)
+
+                self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+                self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+                self.instructions.append(Instruction(Opcode.POP_EMIT, []))
+                self._compile_pipeline(rest, result_reg)
+                return
+
+            if stage.name == "select" and len(stage.args) == 1:
+                cond_buffer = self._new_temp()
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [cond_buffer, []]))
+                self.instructions.append(Instruction(Opcode.PUSH_EMIT, [cond_buffer]))
+                expr_stages = flatten_pipe(stage.args[0])
+                self._compile_pipeline(expr_stages, current_reg)
+                self.instructions.append(Instruction(Opcode.POP_EMIT, []))
+
+                len_reg = self._new_temp()
+                skip_label = self._new_label("jq_select_skip")
+                cont_label = self._new_label("jq_select_cont")
+                self.instructions.append(Instruction(Opcode.LEN_VALUE, [len_reg, cond_buffer]))
+                self.instructions.append(Instruction(Opcode.JZ, [len_reg, skip_label]))
+                last_index = self._new_temp()
+                self.instructions.append(Instruction(Opcode.SUB, [last_index, len_reg, "1"]))
+                last_value = self._new_temp()
+                self.instructions.append(Instruction(Opcode.GET_INDEX, [last_value, cond_buffer, last_index]))
+                self.instructions.append(Instruction(Opcode.JZ, [last_value, skip_label]))
+                self._compile_pipeline(rest, current_reg)
+                self.instructions.append(Instruction(Opcode.JMP, [cont_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [skip_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [cont_label]))
                 return
             raise NotImplementedError(f"Unsupported jq function: {stage.name}")
 

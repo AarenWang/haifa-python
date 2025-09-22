@@ -28,6 +28,10 @@ class Opcode(Enum):
     GET_INDEX = auto()    # GET_INDEX dst, src, index
     LEN_VALUE = auto()    # LEN_VALUE dst, src
 
+    PUSH_EMIT = auto()    # PUSH_EMIT target_reg
+    POP_EMIT = auto()     # POP_EMIT
+    EMIT = auto()         # EMIT value_reg
+
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg
     PARAM = auto()        # PARAM reg
