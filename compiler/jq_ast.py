@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 
 class JQNode:
@@ -46,6 +46,11 @@ class Sequence(JQNode):
     expressions: List[JQNode]
 
 
+@dataclass(frozen=True)
+class ObjectLiteral(JQNode):
+    pairs: List[Tuple[str, JQNode]]
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -62,5 +67,6 @@ __all__ = [
     "FunctionCall",
     "Pipe",
     "Sequence",
+    "ObjectLiteral",
     "flatten_pipe",
 ]

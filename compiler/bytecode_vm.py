@@ -120,6 +120,87 @@ class BytecodeVM:
                     self.registers[args[0]] = len(value)
                 except (TypeError, ValueError):
                     self.registers[args[0]] = 0
+            elif op == Opcode.OBJ_SET:
+                obj = self.registers.get(args[0])
+                if not isinstance(obj, dict):
+                    obj = {}
+                    self.registers[args[0]] = obj
+                obj[args[1]] = self.val(args[2])
+            elif op == Opcode.FLATTEN:
+                value = self.val(args[1])
+                if isinstance(value, list):
+                    flattened = []
+                    for item in value:
+                        if isinstance(item, list):
+                            flattened.extend(item)
+                        else:
+                            flattened.append(item)
+                elif value is None:
+                    flattened = []
+                else:
+                    flattened = value
+                self.registers[args[0]] = flattened
+            elif op == Opcode.REDUCE:
+                items_source = self.val(args[1])
+                if isinstance(items_source, (list, tuple)):
+                    items = list(items_source)
+                elif items_source is None:
+                    items = []
+                else:
+                    items = [items_source]
+                op_name = str(args[2]).lower()
+                has_initial = len(args) > 3 and args[3] not in (None, "")
+                initial_value = self.val(args[3]) if has_initial else None
+
+                if op_name == "sum":
+                    acc = initial_value if has_initial else 0
+                    for item in items:
+                        if item is not None:
+                            acc += item
+                elif op_name == "product":
+                    acc = initial_value if has_initial else 1
+                    for item in items:
+                        if item is not None:
+                            acc *= item
+                elif op_name == "min":
+                    if has_initial:
+                        acc = initial_value
+                    elif items:
+                        acc = items[0]
+                        items = items[1:]
+                    else:
+                        acc = None
+                    for item in items:
+                        if acc is None or (item is not None and item < acc):
+                            acc = item
+                elif op_name == "max":
+                    if has_initial:
+                        acc = initial_value
+                    elif items:
+                        acc = items[0]
+                        items = items[1:]
+                    else:
+                        acc = None
+                    for item in items:
+                        if acc is None or (item is not None and item > acc):
+                            acc = item
+                elif op_name == "concat":
+                    if has_initial:
+                        acc = initial_value
+                    else:
+                        acc = []
+                    if acc is None:
+                        acc = []
+                    if not isinstance(acc, list):
+                        acc = [acc]
+                    for item in items:
+                        if isinstance(item, list):
+                            acc.extend(item)
+                        elif item is not None:
+                            acc.append(item)
+                else:
+                    raise RuntimeError(f"Unsupported reduce operation: {op_name}")
+                self.registers[args[0]] = acc
             elif op == Opcode.PUSH_EMIT:
                 self.emit_stack.append(args[0])
             elif op == Opcode.POP_EMIT:

@@ -44,6 +44,36 @@ class TestJQRuntime(unittest.TestCase):
         ]
         self.assertEqual(run_filter(".[] | select(.ok) | .name", data), ["a", "c"])
 
+    def test_flatten_function(self):
+        data = {"items": [[1, 2], [3], [], [4, 5]]}
+        self.assertEqual(run_filter(".items | flatten()", data), [[1, 2, 3, 4, 5]])
+
+    def test_reduce_sum(self):
+        data = {"items": [1, 2, 3]}
+        self.assertEqual(run_filter(".items | reduce('sum')", data), [6])
+
+    def test_reduce_with_array_arg(self):
+        data = {"nums": [2, 3, 4]}
+        self.assertEqual(run_filter("reduce(.nums, 'product')", data), [24])
+
+    def test_select_with_multi_value_condition(self):
+        data = [
+            {"name": "a", "flags": [0, 1]},
+            {"name": "b", "flags": [0, 0]},
+            {"name": "c", "flags": [2]},
+        ]
+        self.assertEqual(
+            run_filter(".[] | select(.flags | map(.)) | .name", data),
+            ["a", "c"],
+        )
+
+    def test_object_literal(self):
+        data = {"items": [{"name": "Alice", "scores": [1, 2]}, {"name": "Bob", "scores": [3]}]}
+        self.assertEqual(
+            run_filter(".items[] | {name: .name, count: (.scores | length())}", data),
+            [{"name": "Alice", "count": 2}, {"name": "Bob", "count": 1}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

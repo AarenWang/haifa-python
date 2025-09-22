@@ -1,6 +1,6 @@
 import unittest
 
-from jq_ast import Field, Identity, IndexAll, Literal, Pipe, flatten_pipe
+from jq_ast import Field, Identity, IndexAll, Literal, ObjectLiteral, Pipe, flatten_pipe
 from jq_parser import JQSyntaxError, parse
 
 
@@ -47,6 +47,13 @@ class TestJQParser(unittest.TestCase):
     def test_invalid_expression(self):
         with self.assertRaises(JQSyntaxError):
             parse(".foo | | .bar")
+
+    def test_object_literal(self):
+        node = parse("{name: .foo, label: .bar}")
+        self.assertIsInstance(node, ObjectLiteral)
+        self.assertEqual(len(node.pairs), 2)
+        self.assertEqual(node.pairs[0][0], "name")
+        self.assertIsInstance(node.pairs[0][1], Field)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 
 from bytecode import Instruction, Opcode
-from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, flatten_pipe
+from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, flatten_pipe
 
 INPUT_REGISTER = "__jq_input"
 CURRENT_REGISTER = "__jq_curr"
@@ -52,6 +52,11 @@ class JQCompiler:
             self._compile_pipeline(rest, dest)
             return
 
+        if isinstance(stage, ObjectLiteral):
+            dest = self._eval_expression(stage, current_reg)
+            self._compile_pipeline(rest, dest)
+            return
+
         if isinstance(stage, IndexAll):
             source_reg = self._eval_expression(stage.source, current_reg)
             index_reg = self._new_temp()
@@ -79,6 +84,50 @@ class JQCompiler:
             if stage.name == "length" and not stage.args:
                 dest = self._new_temp()
                 self.instructions.append(Instruction(Opcode.LEN_VALUE, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "flatten":
+                if stage.args:
+                    array_reg = self._eval_expression(stage.args[0], current_reg)
+                else:
+                    array_reg = current_reg
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.FLATTEN, [dest, array_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "reduce":
+                array_expr = Identity()
+                op_literal = None
+                init_expr = None
+                arg_count = len(stage.args)
+                if arg_count == 0:
+                    pass
+                elif arg_count == 1:
+                    if isinstance(stage.args[0], Literal) and isinstance(stage.args[0].value, str):
+                        op_literal = stage.args[0]
+                    else:
+                        array_expr = stage.args[0]
+                elif arg_count == 2:
+                    array_expr = stage.args[0]
+                    op_literal = stage.args[1]
+                else:
+                    array_expr = stage.args[0]
+                    op_literal = stage.args[1]
+                    init_expr = stage.args[2]
+
+                array_reg = self._eval_expression(array_expr, current_reg)
+                op_name = "sum"
+                if op_literal is not None:
+                    if isinstance(op_literal, Literal) and isinstance(op_literal.value, str):
+                        op_name = op_literal.value.lower()
+                    else:
+                        raise NotImplementedError("reduce aggregator must be a string literal")
+                init_reg = ""
+                if init_expr is not None:
+                    init_reg = self._eval_expression(init_expr, current_reg)
+
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.REDUCE, [dest, array_reg, op_name, init_reg]))
                 self._compile_pipeline(rest, dest)
                 return
             if stage.name == "map" and len(stage.args) == 1:
@@ -119,16 +168,37 @@ class JQCompiler:
                 self._compile_pipeline(expr_stages, current_reg)
                 self.instructions.append(Instruction(Opcode.POP_EMIT, []))
 
+                # Flatten one level so that array results (e.g., from map(.))
+                # become multiple items for truth checking.
+                flat_buffer = self._new_temp()
+                self.instructions.append(Instruction(Opcode.FLATTEN, [flat_buffer, cond_buffer]))
+
                 len_reg = self._new_temp()
+                index_reg = self._new_temp()
+                cond_reg = self._new_temp()
+                item_reg = self._new_temp()
+                truth_reg = self._new_temp()
+                loop_label = self._new_label("jq_select_loop")
+                skip_item_label = self._new_label("jq_select_skip_item")
+                done_label = self._new_label("jq_select_done")
                 skip_label = self._new_label("jq_select_skip")
                 cont_label = self._new_label("jq_select_cont")
-                self.instructions.append(Instruction(Opcode.LEN_VALUE, [len_reg, cond_buffer]))
-                self.instructions.append(Instruction(Opcode.JZ, [len_reg, skip_label]))
-                last_index = self._new_temp()
-                self.instructions.append(Instruction(Opcode.SUB, [last_index, len_reg, "1"]))
-                last_value = self._new_temp()
-                self.instructions.append(Instruction(Opcode.GET_INDEX, [last_value, cond_buffer, last_index]))
-                self.instructions.append(Instruction(Opcode.JZ, [last_value, skip_label]))
+
+                self.instructions.append(Instruction(Opcode.LEN_VALUE, [len_reg, flat_buffer]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, 0]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+                self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, len_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [cond_reg, done_label]))
+                self.instructions.append(Instruction(Opcode.GET_INDEX, [item_reg, flat_buffer, index_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [item_reg, skip_item_label]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, 1]))
+                self.instructions.append(Instruction(Opcode.JMP, [done_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [skip_item_label]))
+                self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+                self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
+                self.instructions.append(Instruction(Opcode.JZ, [truth_reg, skip_label]))
                 self._compile_pipeline(rest, current_reg)
                 self.instructions.append(Instruction(Opcode.JMP, [cont_label]))
                 self.instructions.append(Instruction(Opcode.LABEL, [skip_label]))
@@ -168,7 +238,38 @@ class JQCompiler:
                 self.instructions.append(Instruction(Opcode.OBJ_GET, [dest, current, name]))
                 current = dest
             return current
-        raise NotImplementedError(f"Unsupported expression in jq compiler: {type(node).__name__}")
+        if isinstance(node, ObjectLiteral):
+            obj_reg = self._new_temp()
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [obj_reg, {}]))
+            for key, value_expr in node.pairs:
+                value_reg = self._eval_expression(value_expr, base_reg)
+                self.instructions.append(Instruction(Opcode.OBJ_SET, [obj_reg, key, value_reg]))
+            return obj_reg
+        return self._compile_expression(node, base_reg)
+
+    def _compile_expression(self, expr: JQNode, base_reg: str) -> str:
+        buffer_reg = self._new_temp()
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [buffer_reg, []]))
+        self.instructions.append(Instruction(Opcode.PUSH_EMIT, [buffer_reg]))
+        stages = flatten_pipe(expr)
+        self._compile_pipeline(stages, base_reg)
+        self.instructions.append(Instruction(Opcode.POP_EMIT, []))
+
+        len_reg = self._new_temp()
+        index_reg = self._new_temp()
+        value_reg = self._new_temp()
+        empty_label = self._new_label("jq_expr_empty")
+        done_label = self._new_label("jq_expr_done")
+
+        self.instructions.append(Instruction(Opcode.LEN_VALUE, [len_reg, buffer_reg]))
+        self.instructions.append(Instruction(Opcode.JZ, [len_reg, empty_label]))
+        self.instructions.append(Instruction(Opcode.SUB, [index_reg, len_reg, "1"]))
+        self.instructions.append(Instruction(Opcode.GET_INDEX, [value_reg, buffer_reg, index_reg]))
+        self.instructions.append(Instruction(Opcode.JMP, [done_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [empty_label]))
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [value_reg, None]))
+        self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
+        return value_reg
 
 
 def compile_to_bytecode(node: JQNode) -> List[Instruction]:
