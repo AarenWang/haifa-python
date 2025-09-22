@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import re
 from dataclasses import dataclass
 from typing import List, Optional
@@ -12,6 +13,7 @@ from jq_ast import (
     IndexAll,
     JQNode,
     Literal,
+    ObjectLiteral,
     Pipe,
 )
 
@@ -28,6 +30,9 @@ _TOKEN_REGEX = re.compile(
   | (?P<NUMBER>-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)
   | (?P<STRING>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')
   | (?P<IDENT>[A-Za-z_][A-Za-z0-9_]*)
+  | (?P<LBRACE>\{)
+  | (?P<RBRACE>\})
+  | (?P<COLON>:)
     """,
     re.VERBOSE,
 )
@@ -149,6 +154,8 @@ class JQParser:
             literal_token = self._advance()
             value = self._parse_literal_value(literal_token)
             return Literal(value)
+        if token.type == "LBRACE":
+            return self._parse_object_literal()
         if token.type == "LPAREN":
             self._advance()
             expr = self._parse_expression()
@@ -168,14 +175,41 @@ class JQParser:
 
     def _parse_literal_value(self, token: Token):
         if token.type == "NUMBER" or token.type == "STRING":
+            # Accept both JSON-style (double-quoted) and single-quoted strings.
+            # Fallback to ast.literal_eval for Python literal semantics.
             try:
                 return json.loads(token.value)
-            except json.JSONDecodeError as exc:
-                raise JQSyntaxError(f"Invalid literal {token.value!r}") from exc
+            except json.JSONDecodeError:
+                try:
+                    return ast.literal_eval(token.value)
+                except Exception as exc:
+                    raise JQSyntaxError(f"Invalid literal {token.value!r}") from exc
         lowered = token.value.lower()
         if lowered in _KEYWORDS:
             return _KEYWORDS[lowered]
         raise JQSyntaxError(f"Unsupported literal token {token.value!r}")
+
+    def _parse_object_literal(self) -> JQNode:
+        pairs = []
+        self._advance()  # consume '{'
+        if self._current().type != "RBRACE":
+            while True:
+                key_token = self._current()
+                if key_token.type == "STRING":
+                    key = json.loads(key_token.value)
+                    self._advance()
+                elif key_token.type == "IDENT":
+                    key = key_token.value
+                    self._advance()
+                else:
+                    raise JQSyntaxError(f"Invalid object key at position {key_token.position}")
+                self._expect("COLON")
+                value_expr = self._parse_expression()
+                pairs.append((key, value_expr))
+                if not self._match("COMMA"):
+                    break
+        self._expect("RBRACE")
+        return ObjectLiteral(pairs)
 
 
 def parse(source: str) -> JQNode:

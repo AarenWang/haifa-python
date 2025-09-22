@@ -32,6 +32,10 @@ class Opcode(Enum):
     POP_EMIT = auto()     # POP_EMIT
     EMIT = auto()         # EMIT value_reg
 
+    OBJ_SET = auto()      # OBJ_SET obj_reg, key, value_reg
+    FLATTEN = auto()      # FLATTEN dst, src
+    REDUCE = auto()       # REDUCE dst, src, op, init_reg?
+
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg
     PARAM = auto()        # PARAM reg
