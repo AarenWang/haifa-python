@@ -28,6 +28,18 @@ class TestJQCompiler(unittest.TestCase):
         self.assertEqual(obj_gets[0].args[2], "foo")
         self.assertEqual(obj_gets[1].args[2], "bar")
 
+    def test_index_all_generates_loop(self):
+        instructions = self.compile(".items[]")
+        opcodes = [inst.opcode for inst in instructions]
+        self.assertIn(Opcode.GET_INDEX, opcodes)
+        self.assertIn(Opcode.LEN_VALUE, opcodes)
+        labels = [inst.args[0] for inst in instructions if inst.opcode == Opcode.LABEL]
+        self.assertTrue(any(label.startswith("__jq_loop_") for label in labels))
+
+    def test_length_function(self):
+        instructions = self.compile(".items | length()")
+        self.assertIn(Opcode.LEN_VALUE, [inst.opcode for inst in instructions])
+
 
 if __name__ == "__main__":
     unittest.main()
