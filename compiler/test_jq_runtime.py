@@ -32,6 +32,18 @@ class TestJQRuntime(unittest.TestCase):
         data = {"items": [1, 2, 3]}
         self.assertEqual(run_filter(".items | length()", data), [3])
 
+    def test_map_function(self):
+        data = {"items": [{"v": 1}, {"v": 2}, {"v": 3}]}
+        self.assertEqual(run_filter(".items | map(.v)", data), [[1, 2, 3]])
+
+    def test_select_function(self):
+        data = [
+            {"name": "a", "ok": True},
+            {"name": "b", "ok": False},
+            {"name": "c", "ok": True},
+        ]
+        self.assertEqual(run_filter(".[] | select(.ok) | .name", data), ["a", "c"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,5 @@
+import copy
+
 from bytecode import Opcode, Instruction
 from value_utils import resolve_value
 
@@ -11,6 +13,7 @@ class BytecodeVM:
         self.call_stack = []
         self.param_stack = []
         self.return_value = None
+        self.emit_stack = []
         self.pc = 0
         self.output = []
 
@@ -40,7 +43,10 @@ class BytecodeVM:
             elif op == Opcode.MOV:
                 self.registers[args[0]] = self.val(args[1])
             elif op == Opcode.LOAD_CONST:
-                self.registers[args[0]] = args[1]
+                value = args[1]
+                if isinstance(value, (list, dict)):
+                    value = copy.deepcopy(value)
+                self.registers[args[0]] = value
             elif op == Opcode.ADD:
                 self.registers[args[0]] = self.val(args[1]) + self.val(args[2])
             elif op == Opcode.SUB:
@@ -114,6 +120,22 @@ class BytecodeVM:
                     self.registers[args[0]] = len(value)
                 except (TypeError, ValueError):
                     self.registers[args[0]] = 0
+            elif op == Opcode.PUSH_EMIT:
+                self.emit_stack.append(args[0])
+            elif op == Opcode.POP_EMIT:
+                if self.emit_stack:
+                    self.emit_stack.pop()
+            elif op == Opcode.EMIT:
+                value = self.val(args[0])
+                if self.emit_stack:
+                    target = self.emit_stack[-1]
+                    container = self.registers.get(target)
+                    if not isinstance(container, list):
+                        container = [] if container is None else list(container if isinstance(container, list) else [container])
+                    container.append(value)
+                    self.registers[target] = container
+                else:
+                    self.output.append(value)
             elif op == Opcode.PARAM:
                 self.param_stack.append(self.val(args[0]))
             elif op == Opcode.ARG:
