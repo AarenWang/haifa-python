@@ -20,6 +20,18 @@ class TestJQRuntime(unittest.TestCase):
         data = {"foo": {}}
         self.assertEqual(run_filter(".foo.missing", data), [None])
 
+    def test_index_all_iteration(self):
+        data = {"items": [1, 2, 3]}
+        self.assertEqual(run_filter(".items[]", data), [1, 2, 3])
+
+    def test_index_all_with_field(self):
+        data = {"items": [{"name": "a"}, {"name": "b"}]}
+        self.assertEqual(run_filter(".items[] | .name", data), ["a", "b"])
+
+    def test_length_builtin(self):
+        data = {"items": [1, 2, 3]}
+        self.assertEqual(run_filter(".items | length()", data), [3])
+
 
 if __name__ == "__main__":
     unittest.main()

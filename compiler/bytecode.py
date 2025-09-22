@@ -25,6 +25,8 @@ class Opcode(Enum):
     LABEL = auto()        # LABEL name
 
     OBJ_GET = auto()      # OBJ_GET dst, src, key
+    GET_INDEX = auto()    # GET_INDEX dst, src, index
+    LEN_VALUE = auto()    # LEN_VALUE dst, src
 
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg

@@ -101,6 +101,19 @@ class BytecodeVM:
                     self.registers[args[0]] = source[key]
                 else:
                     self.registers[args[0]] = None
+            elif op == Opcode.GET_INDEX:
+                container = self.val(args[1])
+                index = int(self.val(args[2]))
+                value = None
+                if isinstance(container, (list, tuple)) and -len(container) <= index < len(container):
+                    value = container[index]
+                self.registers[args[0]] = value
+            elif op == Opcode.LEN_VALUE:
+                value = self.val(args[1])
+                try:
+                    self.registers[args[0]] = len(value)
+                except (TypeError, ValueError):
+                    self.registers[args[0]] = 0
             elif op == Opcode.PARAM:
                 self.param_stack.append(self.val(args[0]))
             elif op == Opcode.ARG:

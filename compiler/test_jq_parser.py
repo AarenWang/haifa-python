@@ -39,6 +39,11 @@ class TestJQParser(unittest.TestCase):
         self.assertIsInstance(node, Literal)
         self.assertEqual(node.value, "hello")
 
+    def test_function_call(self):
+        node = parse("length()")
+        self.assertEqual(node.name, "length")
+        self.assertEqual(node.args, [])
+
     def test_invalid_expression(self):
         with self.assertRaises(JQSyntaxError):
             parse(".foo | | .bar")
