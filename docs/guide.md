@@ -207,6 +207,25 @@ Headless 模式基于 `curses` 渲染，常用按键：
 
 ## 10. Lua 子集快速体验（Milestone 1）
 - CLI：`pylua your_script.lua` 或 `pylua --execute 'return 1+2'`。
-- 当前支持：赋值、算术表达式、`if/else`、`while`、函数定义与调用、`return`。
+- 当前支持：赋值、算术表达式、`if/else`、`while`、函数定义与调用、闭包（Milestone 2A）、`return`。
 - 示例脚本：`examples/hello.lua`。
 - 后续里程碑将逐步加入闭包、标准库、协程等特性。
+
+### 闭包示例
+```lua
+function make_counter()
+    local x = 0
+    return function()
+        x = x + 1
+        return x
+    end
+end
+
+local c1 = make_counter()
+local c2 = make_counter()
+local a = c1()
+local b = c1()
+local c = c2()
+return a, b, c -- 输出 1, 2, 1
+```
+运行：`pylua --execute '<上述代码>' --print-output`

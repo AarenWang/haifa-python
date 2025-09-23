@@ -46,6 +46,11 @@ class CallExpr(Expr):
     callee: Expr
     args: List[Expr]
 
+@dataclass
+class FunctionExpr(Expr):
+    params: List[str]
+    body: "Block"
+
 # Statement nodes
 
 @dataclass
@@ -102,6 +107,7 @@ __all__ = [
     "BinaryOp",
     "UnaryOp",
     "CallExpr",
+    "FunctionExpr",
     "Stmt",
     "Assignment",
     "IfStmt",

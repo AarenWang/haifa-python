@@ -31,6 +31,13 @@ class Opcode(Enum):
     IS_NULL = auto()     # IS_NULL dst, src
     COALESCE = auto()    # COALESCE dst, lhs, rhs
 
+    MAKE_CELL = auto()   # MAKE_CELL dst, src
+    CELL_GET = auto()    # CELL_GET dst, cell
+    CELL_SET = auto()    # CELL_SET cell, src
+    CLOSURE = auto()     # CLOSURE dst, label, cell1, cell2, ...
+    CALL_VALUE = auto()  # CALL_VALUE callee_reg
+    BIND_UPVALUE = auto()# BIND_UPVALUE dst_cell, index
+
     JMP = auto()          # JMP label
     JZ = auto()           # JZ reg, label
 

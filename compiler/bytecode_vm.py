@@ -1,7 +1,13 @@
 import copy
+from dataclasses import dataclass
 
 from .bytecode import Opcode, Instruction
 from .value_utils import resolve_value
+
+
+@dataclass
+class Cell:
+    value: object
 
 class BytecodeVM:
     def __init__(self, instructions):
@@ -16,6 +22,7 @@ class BytecodeVM:
         self.emit_stack = []
         self.pc = 0
         self.output = []
+        self.current_upvalues = []
         # Opcode dispatch table for cleaner control flow
         self._handlers = {
             Opcode.LOAD_IMM: self._op_LOAD_IMM,
@@ -44,6 +51,12 @@ class BytecodeVM:
             Opcode.IS_ARR: self._op_IS_ARR,
             Opcode.IS_NULL: self._op_IS_NULL,
             Opcode.COALESCE: self._op_COALESCE,
+            Opcode.MAKE_CELL: self._op_MAKE_CELL,
+            Opcode.CELL_GET: self._op_CELL_GET,
+            Opcode.CELL_SET: self._op_CELL_SET,
+            Opcode.CLOSURE: self._op_CLOSURE,
+            Opcode.CALL_VALUE: self._op_CALL_VALUE,
+            Opcode.BIND_UPVALUE: self._op_BIND_UPVALUE,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -179,6 +192,61 @@ class BytecodeVM:
             result = 0
         self.registers[dst] = result
 
+    def _op_MAKE_CELL(self, args):
+        dst, src = args
+        self.registers[dst] = Cell(self.val(src))
+
+    def _op_CELL_GET(self, args):
+        dst, cell_reg = args
+        cell = self.registers.get(cell_reg)
+        if not isinstance(cell, Cell):
+            raise RuntimeError(f"CELL_GET expects cell in {cell_reg}")
+        self.registers[dst] = cell.value
+
+    def _op_CELL_SET(self, args):
+        cell_reg, src = args
+        cell = self.registers.get(cell_reg)
+        if not isinstance(cell, Cell):
+            raise RuntimeError(f"CELL_SET expects cell in {cell_reg}")
+        cell.value = self.val(src)
+
+    def _op_CLOSURE(self, args):
+        if len(args) < 2:
+            raise RuntimeError("CLOSURE requires destination and label")
+        dst = args[0]
+        label = args[1]
+        upvalues = []
+        for cell_reg in args[2:]:
+            cell = self.registers.get(cell_reg)
+            if not isinstance(cell, Cell):
+                raise RuntimeError(f"CLOSURE expects cell register, got {cell_reg}")
+            upvalues.append(cell)
+        self.registers[dst] = {"label": label, "upvalues": upvalues}
+
+    def _op_CALL_VALUE(self, args):
+        callee_reg = args[0]
+        closure = self.registers.get(callee_reg)
+        if not isinstance(closure, dict) or "label" not in closure:
+            raise RuntimeError(f"CALL_VALUE expects closure in {callee_reg}")
+        saved_params = self.param_stack
+        self.call_stack.append((self.pc + 1, saved_params, self.registers, self.current_upvalues))
+        self.registers = dict(self.registers)
+        self.param_stack = list(saved_params)
+        saved_params.clear()
+        self.current_upvalues = list(closure.get("upvalues", []))
+        self.pc = self.labels[closure["label"]]
+        return "jump"
+
+    def _op_BIND_UPVALUE(self, args):
+        dst, index_arg = args
+        if isinstance(index_arg, str) and not index_arg.lstrip("-+").isdigit():
+            index = int(self.val(index_arg))
+        else:
+            index = int(index_arg)
+        if index < 0 or index >= len(self.current_upvalues):
+            raise RuntimeError("BIND_UPVALUE index out of range")
+        self.registers[dst] = self.current_upvalues[index]
+
     # 位运算
     def _op_AND_BIT(self, args):
         self.registers[args[0]] = self.val(args[1]) & self.val(args[2])
@@ -235,18 +303,20 @@ class BytecodeVM:
     def _op_CALL(self, args):
         target = args[0]
         saved_params = self.param_stack
-        self.call_stack.append((self.pc + 1, saved_params, self.registers))
+        self.call_stack.append((self.pc + 1, saved_params, self.registers, self.current_upvalues))
         self.registers = dict(self.registers)
         self.param_stack = list(saved_params)
         saved_params.clear()
+        self.current_upvalues = []
         self.pc = self.labels[target]
         return "jump"
 
     def _op_RETURN(self, args):
         self.return_value = self.val(args[0]) if args else None
         if self.call_stack:
-            self.pc, self.param_stack, self.registers = self.call_stack.pop()
+            self.pc, self.param_stack, self.registers, self.current_upvalues = self.call_stack.pop()
             return "jump"
+        self.current_upvalues = []
 
     def _op_RESULT(self, args):
         self.registers[args[0]] = self.return_value

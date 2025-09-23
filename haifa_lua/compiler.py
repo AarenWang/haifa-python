@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+import itertools
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from compiler.bytecode import Instruction, Opcode
 
+from .analysis import FunctionInfo, analyze
 from .ast import (
     Assignment,
     BinaryOp,
@@ -13,6 +16,7 @@ from .ast import (
     Chunk,
     Expr,
     ExprStmt,
+    FunctionExpr,
     FunctionStmt,
     Identifier,
     IfStmt,
@@ -25,25 +29,48 @@ from .ast import (
 )
 
 
+@dataclass
+class VarBinding:
+    storage: str
+    is_cell: bool = False
+
+
 class CompileError(RuntimeError):
     pass
 
 
-class LuaCompiler:
-    def __init__(self):
-        self.instructions: List[Instruction] = []
-        self.temp_counter = 0
-        self.function_blocks: List[Instruction] = []
-        self.current_scope: List[Dict[str, str]] = []
-        self.exit_label = "__lua_exit"
-        self._top_level_block = False
+_FUNC_LABEL_COUNTER = itertools.count()
 
-    def compile(self, chunk: Chunk) -> List[Instruction]:
+
+class LuaCompiler:
+    def __init__(self, closure_map: Dict[int, FunctionInfo], function_info: FunctionInfo, upvalue_names: Optional[List[str]] = None):
+        self.closure_map = closure_map
+        self.function_info = function_info
+        self.upvalue_names = upvalue_names or []
+
+        self.instructions: List[Instruction] = []
+        self.function_blocks: List[Instruction] = []
+        self.scope_stack: List[Dict[str, VarBinding]] = []
+        self.temp_counter = 0
+        self.func_counter = 0
+        self.exit_label = "__lua_exit"
+        self.is_top_level = False
+
+    # ------------------------------------------------------------------
+    @classmethod
+    def compile_chunk(cls, chunk: Chunk) -> List[Instruction]:
+        closure_map, root_info = analyze(chunk)
+        compiler = cls(closure_map, root_info, root_info.upvalues)
+        return compiler._compile_chunk(chunk)
+
+    def _compile_chunk(self, chunk: Chunk) -> List[Instruction]:
         self.instructions.clear()
         self.function_blocks.clear()
         self.temp_counter = 0
-        self.current_scope = [{}]
-        self.exit_label = "__lua_exit"
+        self.func_counter = 0
+        self.scope_stack = [{}]
+        self.is_top_level = True
+        self._bind_upvalues()
         self._compile_block(chunk.body, top_level=True)
         self.instructions.append(Instruction(Opcode.JMP, [self.exit_label]))
         self.instructions.extend(self.function_blocks)
@@ -51,38 +78,51 @@ class LuaCompiler:
         self.instructions.append(Instruction(Opcode.HALT, []))
         return list(self.instructions)
 
-    # ----------------------------- helpers ----------------------------- #
+    # ------------------------------------------------------------------
+    def _push_scope(self):
+        self.scope_stack.append({})
+
+    def _pop_scope(self):
+        self.scope_stack.pop()
+
     def _new_temp(self) -> str:
         name = f"__t{self.temp_counter}"
         self.temp_counter += 1
         return name
 
-    def _resolve_var(self, name: str) -> str:
-        for scope in reversed(self.current_scope):
+    def _alloc_local_reg(self, name: str) -> str:
+        reg = f"L_{len(self.scope_stack)-1}_{name}_{self.temp_counter}"
+        self.temp_counter += 1
+        return reg
+
+    def _alloc_cell_reg(self, name: str) -> str:
+        reg = f"C_{len(self.scope_stack)-1}_{name}_{self.temp_counter}"
+        self.temp_counter += 1
+        return reg
+
+    def _lookup_binding(self, name: str) -> Optional[VarBinding]:
+        for scope in reversed(self.scope_stack):
             if name in scope:
                 return scope[name]
-        reg = f"G_{name}"
-        return reg
+        return None
 
-    def _declare_var(self, name: str) -> str:
-        reg = f"L_{len(self.current_scope)-1}_{name}_{self.temp_counter}"
-        self.temp_counter += 1
-        self.current_scope[-1][name] = reg
-        return reg
+    def _bind_upvalues(self):
+        if not self.upvalue_names:
+            return
+        scope = self.scope_stack[-1]
+        for idx, name in enumerate(self.upvalue_names):
+            cell_reg = self._alloc_cell_reg(name)
+            scope[name] = VarBinding(storage=cell_reg, is_cell=True)
+            self.instructions.append(Instruction(Opcode.BIND_UPVALUE, [cell_reg, str(idx)]))
 
-    def _load_literal(self, value, hint: Optional[str] = None) -> str:
-        dst = hint or self._new_temp()
-        if isinstance(value, int):
-            self.instructions.append(Instruction(Opcode.LOAD_IMM, [dst, value]))
-        else:
-            self.instructions.append(Instruction(Opcode.LOAD_CONST, [dst, value]))
-        return dst
-
-    # ----------------------------- statements ------------------------- #
+    # ------------------------------------------------------------------ Statements
     def _compile_block(self, block: Block, top_level: bool = False):
-        prev = self._top_level_block
-        self._top_level_block = top_level
-        self.current_scope.append({})
+        prev_top = self.is_top_level
+        if top_level:
+            self.is_top_level = True
+        else:
+            self.is_top_level = False
+        self._push_scope()
         for stmt in block.statements:
             if isinstance(stmt, Assignment):
                 self._compile_assignment(stmt)
@@ -93,26 +133,41 @@ class LuaCompiler:
             elif isinstance(stmt, ReturnStmt):
                 self._compile_return(stmt)
             elif isinstance(stmt, FunctionStmt):
-                self._compile_function(stmt)
+                self._compile_function_stmt(stmt)
             elif isinstance(stmt, ExprStmt):
                 self._compile_expr(stmt.expr)
             else:
                 raise CompileError(f"Unsupported statement: {stmt}")
-        self.current_scope.pop()
-        self._top_level_block = prev
+        self._pop_scope()
+        self.is_top_level = prev_top
 
     def _compile_assignment(self, stmt: Assignment):
         value_reg = self._compile_expr(stmt.value)
+        binding = self._lookup_binding(stmt.target.name)
         if stmt.is_local:
-            target_reg = self._declare_var(stmt.target.name)
+            captured = stmt.target.name in self.function_info.captured_locals
+            if captured:
+                cell_reg = self._alloc_cell_reg(stmt.target.name)
+                self.scope_stack[-1][stmt.target.name] = VarBinding(cell_reg, True)
+                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, value_reg]))
+            else:
+                reg = self._alloc_local_reg(stmt.target.name)
+                self.scope_stack[-1][stmt.target.name] = VarBinding(reg, False)
+                self.instructions.append(Instruction(Opcode.MOV, [reg, value_reg]))
+            return
+
+        if binding:
+            if binding.is_cell:
+                self.instructions.append(Instruction(Opcode.CELL_SET, [binding.storage, value_reg]))
+            else:
+                self.instructions.append(Instruction(Opcode.MOV, [binding.storage, value_reg]))
         else:
-            target_reg = self._resolve_var(stmt.target.name)
-        self.instructions.append(Instruction(Opcode.MOV, [target_reg, value_reg]))
+            self.instructions.append(Instruction(Opcode.MOV, [f"G_{stmt.target.name}", value_reg]))
 
     def _compile_if(self, stmt: IfStmt):
         cond_reg = self._compile_expr(stmt.condition)
-        else_label = f"__else_{id(stmt)}"
-        end_label = f"__endif_{id(stmt)}"
+        else_label = f"__else_{self._new_temp()}"
+        end_label = f"__endif_{self._new_temp()}"
         self.instructions.append(Instruction(Opcode.JZ, [cond_reg, else_label]))
         self._compile_block(stmt.then_branch)
         self.instructions.append(Instruction(Opcode.JMP, [end_label]))
@@ -122,8 +177,8 @@ class LuaCompiler:
         self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
 
     def _compile_while(self, stmt: WhileStmt):
-        start_label = f"__while_start_{id(stmt)}"
-        end_label = f"__while_end_{id(stmt)}"
+        start_label = f"__while_start_{self._new_temp()}"
+        end_label = f"__while_end_{self._new_temp()}"
         self.instructions.append(Instruction(Opcode.LABEL, [start_label]))
         cond_reg = self._compile_expr(stmt.condition)
         self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
@@ -137,94 +192,181 @@ class LuaCompiler:
         else:
             value_reg = self._compile_expr(stmt.value)
             self.instructions.append(Instruction(Opcode.RETURN, [value_reg]))
-        if self._top_level_block:
+        if self.is_top_level:
             self.instructions.append(Instruction(Opcode.JMP, [self.exit_label]))
 
-    def _compile_function(self, stmt: FunctionStmt):
+    def _compile_function_stmt(self, stmt: FunctionStmt):
+        # treat as global function binding
         func_label = stmt.name.name
-        # store reference in globals（用于直接 CALL）
+        info = self.closure_map.get(id(stmt), FunctionInfo())
         self.instructions.append(Instruction(Opcode.LOAD_CONST, [f"G_{func_label}", func_label]))
-
-        func_compiler = LuaCompiler()
-        func_compiler.instructions.append(Instruction(Opcode.LABEL, [func_label]))
-        func_compiler.current_scope = [{}]
-        # 参数放在最外层作用域
+        compiler = LuaCompiler(self.closure_map, info, info.upvalues)
+        compiler.instructions.append(Instruction(Opcode.LABEL, [func_label]))
+        compiler.scope_stack = [{}]
+        compiler._bind_upvalues()
+        # parameters
         for param in stmt.params:
-            reg = func_compiler._declare_var(param)
-            func_compiler.instructions.append(Instruction(Opcode.ARG, [reg]))
-        func_compiler._compile_block(stmt.body)
-        func_compiler.instructions.append(Instruction(Opcode.RETURN, ["0"]))
-        self.function_blocks.extend(func_compiler.instructions)
+            captured = param in info.captured_locals
+            reg = compiler._alloc_local_reg(param)
+            compiler.scope_stack[-1][param] = VarBinding(reg, False)
+            compiler.instructions.append(Instruction(Opcode.ARG, [reg]))
+            if captured:
+                cell_reg = compiler._alloc_cell_reg(param)
+                compiler.scope_stack[-1][param] = VarBinding(cell_reg, True)
+                compiler.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+        compiler._compile_block(stmt.body)
+        compiler.instructions.append(Instruction(Opcode.RETURN, ["0"]))
+        self.function_blocks.extend(compiler.instructions)
+        self.function_blocks.extend(compiler.function_blocks)
 
-    # ----------------------------- expressions ------------------------ #
+    # ------------------------------------------------------------------ Expressions
     def _compile_expr(self, expr: Expr) -> str:
         if isinstance(expr, NumberLiteral):
-            return self._load_literal(expr.value)
+            return self._emit_literal(expr.value)
         if isinstance(expr, StringLiteral):
-            return self._load_literal(expr.value)
+            return self._emit_literal(expr.value)
         if isinstance(expr, BooleanLiteral):
-            return self._load_literal(int(expr.value))
+            return self._emit_literal(int(expr.value))
         if isinstance(expr, NilLiteral):
-            return self._load_literal(None)
+            return self._emit_literal(None)
         if isinstance(expr, Identifier):
-            return self._resolve_var(expr.name)
+            return self._read_identifier(expr.name)
         if isinstance(expr, UnaryOp):
             operand = self._compile_expr(expr.operand)
             dst = self._new_temp()
             if expr.op == "-":
                 self.instructions.append(Instruction(Opcode.NEG, [dst, operand]))
-                return dst
-            if expr.op == "not":
+            elif expr.op == "not":
                 self.instructions.append(Instruction(Opcode.NOT, [dst, operand]))
-                return dst
-            raise CompileError(f"Unsupported unary operator {expr.op}")
-        if isinstance(expr, BinaryOp):
-            left = self._compile_expr(expr.left)
-            right = self._compile_expr(expr.right)
-            dst = self._new_temp()
-            op = expr.op
-            if op == "+":
-                self.instructions.append(Instruction(Opcode.ADD, [dst, left, right]))
-            elif op == "-":
-                self.instructions.append(Instruction(Opcode.SUB, [dst, left, right]))
-            elif op == "*":
-                self.instructions.append(Instruction(Opcode.MUL, [dst, left, right]))
-            elif op == "/":
-                self.instructions.append(Instruction(Opcode.DIV, [dst, left, right]))
-            elif op == "%":
-                self.instructions.append(Instruction(Opcode.MOD, [dst, left, right]))
-            elif op == "==":
-                self.instructions.append(Instruction(Opcode.EQ, [dst, left, right]))
-            elif op == "~=":
-                tmp = self._new_temp()
-                self.instructions.append(Instruction(Opcode.EQ, [tmp, left, right]))
-                self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
-            elif op == "<":
-                self.instructions.append(Instruction(Opcode.LT, [dst, left, right]))
-            elif op == ">":
-                self.instructions.append(Instruction(Opcode.GT, [dst, left, right]))
-            elif op == "<=":
-                tmp = self._new_temp()
-                self.instructions.append(Instruction(Opcode.GT, [tmp, left, right]))
-                self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
-            elif op == ">=":
-                tmp = self._new_temp()
-                self.instructions.append(Instruction(Opcode.LT, [tmp, left, right]))
-                self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
             else:
-                raise CompileError(f"Unsupported binary operator {op}")
+                raise CompileError(f"Unsupported unary operator {expr.op}")
             return dst
+        if isinstance(expr, BinaryOp):
+            return self._compile_binary(expr)
         if isinstance(expr, CallExpr):
-            if not isinstance(expr.callee, Identifier):
-                raise CompileError("Only direct function calls supported in Milestone 1")
-            func_name = expr.callee.name
-            for arg in expr.args:
-                arg_reg = self._compile_expr(arg)
-                self.instructions.append(Instruction(Opcode.PARAM, [arg_reg]))
-            self.instructions.append(Instruction(Opcode.CALL, [func_name]))
-            dst = self._new_temp()
-            self.instructions.append(Instruction(Opcode.RESULT, [dst]))
-            return dst
+            return self._compile_call(expr)
+        if isinstance(expr, FunctionExpr):
+            return self._compile_function_expr(expr)
         raise CompileError(f"Unsupported expression: {expr}")
+
+    def _compile_binary(self, expr: BinaryOp) -> str:
+        left = self._compile_expr(expr.left)
+        right = self._compile_expr(expr.right)
+        dst = self._new_temp()
+        op = expr.op
+        table = {
+            "+": Opcode.ADD,
+            "-": Opcode.SUB,
+            "*": Opcode.MUL,
+            "/": Opcode.DIV,
+            "%": Opcode.MOD,
+        }
+        if op in table:
+            self.instructions.append(Instruction(table[op], [dst, left, right]))
+            return dst
+        comp_table = {
+            "==": Opcode.EQ,
+            "<": Opcode.LT,
+            ">": Opcode.GT,
+        }
+        if op in comp_table:
+            self.instructions.append(Instruction(comp_table[op], [dst, left, right]))
+            return dst
+        if op == "~=":
+            tmp = self._new_temp()
+            self.instructions.append(Instruction(Opcode.EQ, [tmp, left, right]))
+            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            return dst
+        if op == "<=":
+            tmp = self._new_temp()
+            self.instructions.append(Instruction(Opcode.GT, [tmp, left, right]))
+            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            return dst
+        if op == ">=":
+            tmp = self._new_temp()
+            self.instructions.append(Instruction(Opcode.LT, [tmp, left, right]))
+            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            return dst
+        if op == "and":
+            tmp = self._new_temp()
+            self.instructions.append(Instruction(Opcode.AND, [tmp, left, right]))
+            self.instructions.append(Instruction(Opcode.MOV, [dst, tmp]))
+            return dst
+        if op == "or":
+            tmp = self._new_temp()
+            self.instructions.append(Instruction(Opcode.OR, [tmp, left, right]))
+            self.instructions.append(Instruction(Opcode.MOV, [dst, tmp]))
+            return dst
+        raise CompileError(f"Unsupported binary operator {op}")
+
+    def _compile_call(self, expr: CallExpr) -> str:
+        direct_label = None
+        if isinstance(expr.callee, Identifier) and self._lookup_binding(expr.callee.name) is None:
+            direct_label = expr.callee.name
+        callee_reg = None
+        if direct_label is None:
+            callee_reg = self._compile_expr(expr.callee)
+        for arg in expr.args:
+            arg_reg = self._compile_expr(arg)
+            self.instructions.append(Instruction(Opcode.PARAM, [arg_reg]))
+        if direct_label is not None:
+            self.instructions.append(Instruction(Opcode.CALL, [direct_label]))
+        else:
+            self.instructions.append(Instruction(Opcode.CALL_VALUE, [callee_reg]))
+        dst = self._new_temp()
+        self.instructions.append(Instruction(Opcode.RESULT, [dst]))
+        return dst
+
+    def _compile_function_expr(self, expr: FunctionExpr) -> str:
+        label = f"__func_{next(_FUNC_LABEL_COUNTER)}"
+        info = self.closure_map.get(id(expr), FunctionInfo())
+        child = LuaCompiler(self.closure_map, info, info.upvalues)
+        child.instructions.append(Instruction(Opcode.LABEL, [label]))
+        child.scope_stack = [{}]
+        child._bind_upvalues()
+        for param in expr.params:
+            captured = param in info.captured_locals
+            reg = child._alloc_local_reg(param)
+            child.scope_stack[-1][param] = VarBinding(reg, False)
+            child.instructions.append(Instruction(Opcode.ARG, [reg]))
+            if captured:
+                cell_reg = child._alloc_cell_reg(param)
+                child.scope_stack[-1][param] = VarBinding(cell_reg, True)
+                child.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+        child._compile_block(expr.body)
+        child.instructions.append(Instruction(Opcode.RETURN, ["0"]))
+        self.function_blocks.extend(child.instructions)
+        self.function_blocks.extend(child.function_blocks)
+
+        dst = self._new_temp()
+        upvalue_cells = [self._binding_cell(name) for name in info.upvalues]
+        args = [dst, label] + upvalue_cells
+        self.instructions.append(Instruction(Opcode.CLOSURE, args))
+        return dst
+
+    # ------------------------------------------------------------------ Helpers
+    def _binding_cell(self, name: str) -> str:
+        binding = self._lookup_binding(name)
+        if not binding or not binding.is_cell:
+            raise CompileError(f"Expected captured variable '{name}' to be a cell")
+        return binding.storage
+
+    def _emit_literal(self, value, hint: Optional[str] = None) -> str:
+        dst = hint or self._new_temp()
+        if isinstance(value, int):
+            self.instructions.append(Instruction(Opcode.LOAD_IMM, [dst, value]))
+        else:
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [dst, value]))
+        return dst
+
+    def _read_identifier(self, name: str) -> str:
+        binding = self._lookup_binding(name)
+        if binding:
+            if binding.is_cell:
+                dst = self._new_temp()
+                self.instructions.append(Instruction(Opcode.CELL_GET, [dst, binding.storage]))
+                return dst
+            return binding.storage
+        return f"G_{name}"
 
 __all__ = ["LuaCompiler", "CompileError"]
