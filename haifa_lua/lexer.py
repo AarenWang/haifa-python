@@ -149,9 +149,17 @@ class LuaLexer:
         start = self.pos
         while True:
             ch = self._peek()
-            if not (ch.isalnum() or ch == "_"):
-                break
-            self._advance()
+            if ch.isalnum() or ch == "_":
+                self._advance()
+                continue
+            if ch == ".":
+                next_ch = self._peek(1)
+                if next_ch == ".":
+                    break
+                if next_ch.isalnum() or next_ch == "_":
+                    self._advance()
+                    continue
+            break
         value = self.source[start:self.pos]
         kind = value if value in KEYWORDS else "IDENT"
         return Token(kind, value, line, col)

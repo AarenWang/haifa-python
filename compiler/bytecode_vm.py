@@ -234,20 +234,30 @@ class BytecodeVM:
 
     def _op_CALL_VALUE(self, args):
         callee_reg = args[0]
-        closure = self.registers.get(callee_reg)
-        if not isinstance(closure, dict) or "label" not in closure:
-            raise RuntimeError(f"CALL_VALUE expects closure in {callee_reg}")
-        saved_param_stack = self.param_stack
-        saved_pending = self.pending_params
-        args_to_pass = list(saved_pending)
-        saved_pending.clear()
-        self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
-        self.registers = dict(self.registers)
-        self.param_stack = args_to_pass
-        self.pending_params = []
-        self.current_upvalues = list(closure.get("upvalues", []))
-        self.pc = self.labels[closure["label"]]
-        return "jump"
+        callee = self.registers.get(callee_reg)
+        pending = self.pending_params
+        args_to_pass = list(pending)
+        pending.clear()
+        if isinstance(callee, dict) and "label" in callee:
+            saved_param_stack = self.param_stack
+            saved_pending = pending
+            self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
+            self.registers = dict(self.registers)
+            self.param_stack = args_to_pass
+            self.pending_params = []
+            self.current_upvalues = list(callee.get("upvalues", []))
+            self.pc = self.labels[callee["label"]]
+            return "jump"
+        if getattr(callee, "__lua_builtin__", False):
+            result = callee(args_to_pass, self)
+        elif callable(callee):
+            result = callee(*args_to_pass)
+        else:
+            raise RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
+        values = self._coerce_call_result(result)
+        self.last_return = values
+        self.return_value = values[0] if values else None
+        return None
 
     def _op_BIND_UPVALUE(self, args):
         dst, index_arg = args
@@ -299,6 +309,18 @@ class BytecodeVM:
         self.current_upvalues = []
         self.pending_params = []
         return "halt"
+
+    def _coerce_call_result(self, result):
+        if result is None:
+            return []
+        if isinstance(result, list):
+            return list(result)
+        if isinstance(result, tuple):
+            return list(result)
+        values = getattr(result, "values", None)
+        if values is not None:
+            return list(values)
+        return [result]
 
     # 位运算
     def _op_AND_BIT(self, args):
