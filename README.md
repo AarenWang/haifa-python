@@ -99,3 +99,38 @@ PRINT, HALT
 - 语法高亮编辑器或 REPL
 - 图形化调试器（字节码逐步执行）
 - WebAssembly 或 JIT 编译后端
+
+# ✅ 架构分层（Core VM vs JQ Runtime）
+- Core VM（通用层）：
+  - 指令集聚焦算术/逻辑/控制流/函数调用/数组/常量与打印等通用能力。
+  - 文件：`compiler/bytecode.py`, `compiler/bytecode_vm.py`。
+- JQ Runtime（工具层）：
+  - 解析 jq 表达式并编译为字节码，借助 VM 执行；后续逐步将 JQ 专属指令/处理器迁移至独立 `JQVM`。
+  - 文件：`compiler/jq_parser.py`, `compiler/jq_ast.py`, `compiler/jq_compiler.py`, `compiler/jq_vm.py`, `compiler/jq_runtime.py`。
+  - 现阶段 `JQVM` 继承自核心 VM，实现入口隔离，后续将继续抽离 JQ-only 指令。
+
+# ✅ jq CLI 用法增强（变量与输出模式）
+- 变量支持：
+  - `$var` 变量引用；`expr as $x | ...` 绑定变量后继续原管道。
+  - 通过 CLI 注入：`--arg name value`（字符串），`--argjson name json`（JSON）。
+- 输入模式：
+  - `-n/--null-input` 使用 `null` 作为单一输入。
+  - `-R/--raw-input` 按行读取原始文本为字符串输入。
+  - `--slurp` 将整个 JSON 文档视为一个值。
+- 输出控制：
+  - `-r/--raw-output` 对字符串结果直接输出（无引号）。
+  - `-c/--compact-output` 紧凑 JSON（无空格）。
+- 过滤器文件：
+  - `-f/--filter-file` 从文件加载过滤器表达式。
+
+示例：
+```bash
+# 使用变量注入
+python -m compiler.jq_cli '$foo | .x' -n --argjson foo '{"x": 42}'
+
+# 原始行输入 + 原始输出
+printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
+
+# 过滤器文件与紧凑输出
+python -m compiler.jq_cli -f filter.jq --input data.json -c
+```

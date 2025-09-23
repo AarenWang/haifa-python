@@ -35,6 +35,8 @@ except ModuleNotFoundError:  # package import fallback
         BinaryOp,
         Index,
         Slice,
+        VarRef,
+        AsBinding,
     )
 
 # Order matters: multi-char operators first
@@ -53,6 +55,7 @@ _TOKEN_REGEX = re.compile(
   | (?P<LPAREN>\()
   | (?P<RPAREN>\))
   | (?P<COMMA>,)
+  | (?P<VAR>\$[A-Za-z_][A-Za-z0-9_]*)
   | (?P<PLUS>\+)
   | (?P<MINUS>-)
   | (?P<STAR>\*)
@@ -142,9 +145,19 @@ class JQParser:
 
     def _parse_pipe(self) -> JQNode:
         node = self._parse_term()
-        while self._match("PIPE"):
-            right = self._parse_term()
-            node = Pipe(node, right)
+        while True:
+            # as-binding: term 'as' $var (then continue)
+            if self._current().type == "IDENT" and self._current().value == "as":
+                self._advance()
+                var_tok = self._expect("VAR")
+                node = AsBinding(node, var_tok.value[1:])
+                # Continue to allow further 'as' or pipes
+                continue
+            if self._match("PIPE"):
+                right = self._parse_term()
+                node = Pipe(node, right)
+                continue
+            break
         return node
 
     def _parse_term(self) -> JQNode:
@@ -306,6 +319,9 @@ class JQParser:
         if token.type == "DOT":
             self._advance()
             return Identity()
+        if token.type == "VAR":
+            self._advance()
+            return VarRef(token.value[1:])
         if token.type == "IDENT" and token.value not in _KEYWORDS:
             ident = self._advance()
             if self._match("LPAREN"):

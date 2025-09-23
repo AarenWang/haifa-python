@@ -91,6 +91,12 @@ class Opcode(Enum):
     MAX_BY = auto()       # MAX_BY dst, src, keys_buf
     GROUP_BY = auto()     # GROUP_BY dst, src, keys_buf
 
+    # String/regex tools (Milestone 6)
+    TOSTRING = auto()     # TOSTRING dst, src
+    TONUMBER = auto()     # TONUMBER dst, src
+    SPLIT = auto()        # SPLIT dst, src_string, sep
+    GSUB = auto()         # GSUB dst, src_string, pattern, replacement
+
 
 @dataclass
 class Instruction:
