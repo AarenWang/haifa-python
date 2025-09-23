@@ -10,6 +10,7 @@
 ### 1.2 调用方式
 - Python 模块：`python -m compiler.jq_cli <filter> [options]`
 - 安装脚本：`pyjq <filter> [options]`
+- Lua 子集：`pylua <file.lua>` 或 `pylua --execute '<expr>'`
 
 ### 1.3 常用选项
 

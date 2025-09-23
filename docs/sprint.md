@@ -1,5 +1,6 @@
 我已梳理现有实现与 docs 规划，并对标 jq 的常用能力，下面给出差距与迭代拆分建议。
 
+
 ## 现状小结
 
 jq 前端：已支持标识符/字段、.、.foo、.[]、对象字面量、| 管道、函数调用子集（length, map, select, flatten, reduce）。见 compiler/jq_parser.py:1、compiler/jq_ast.py:1、compiler/jq_compiler.py:1。
