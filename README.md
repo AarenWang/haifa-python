@@ -9,6 +9,7 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
 - **分层设计**：核心指令集保持精简通用；jq 功能通过独立的 `JQOpcode` 与 `JQVM` 扩展。
 - **JSON 友好**：支持对象/数组/字符串/布尔/Null 等值类型，兼容 jq 常用过滤器、排序、聚合与字符串处理。
 - **CLI 体验**：`python -m compiler.jq_cli` 提供 jq 风格命令行，覆盖变量、输入模式、输出格式等选项。
+- **流式运行**：jq 运行时缓存编译结果并按需流式输出，适合处理大规模输入。
 - **测试齐备**：`pytest` 覆盖核心指令、jq 解析与运行时、端到端 CLI 等 100+ 用例。
 
 ## 目录结构速览
@@ -64,6 +65,16 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
 ```bash
 # 从 stdin 读取 JSON，输出对象的键
 cat data.json | python -m compiler.jq_cli 'keys'
+# 或使用安装后的 pyjq 命令
+cat data.json | pyjq 'keys'
+
+# 示例 data.json
+{
+  "items": [
+    {"name": "apple", "price": 12},
+    {"name": "pear", "price": 15}
+  ]
+}
 
 # 使用变量并启用紧凑输出
 python -m compiler.jq_cli '.items[] | {name, price}' \
@@ -79,6 +90,8 @@ printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
 - `-n/--null-input`、`-R/--raw-input`、`--slurp` 控制输入模式。
 - `-r/--raw-output`、`-c/--compact-output` 控制输出格式。
 - `-f/--filter-file` 从文件加载过滤器。
+- `--debug` 输出完整堆栈，便于定位编译/执行错误。
+- `--visualize [gui|curses]` 选择可视化模式（默认 `gui`，可回退到 `curses`）。
 
 ## 安装与分发
 

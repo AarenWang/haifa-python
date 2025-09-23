@@ -7,7 +7,11 @@
 ### 1.1 位置参数
 - `filter`：jq 表达式字符串。可省略并使用 `--filter-file` 指定文件。
 
-### 1.2 常用选项
+### 1.2 调用方式
+- Python 模块：`python -m compiler.jq_cli <filter> [options]`
+- 安装脚本：`pyjq <filter> [options]`
+
+### 1.3 常用选项
 
 | 选项 | 说明 |
 | --- | --- |
@@ -20,7 +24,7 @@
 | `-c/--compact-output` | 输出紧凑 JSON |
 | `--arg name value` | 设置 `$name` 字符串变量 |
 | `--argjson name json` | 设置 `$name` JSON 变量 |
-| `--visualize` | 启动 VM 可视化器 |
+| `--visualize [mode]` | 启动 VM 可视化器；`mode` 为 `gui` (默认) 或 `curses` |
 | `--debug` | 输出完整堆栈调试信息 |
 
 ## 2. 支持的 jq 语法元素
@@ -117,8 +121,10 @@ pyjq 'reduce(.items; "concat"; [])' --input arrays.json
 
 ## 6. 可视化支持
 
-- `--visualize`：调用 `vm_visualizer` 展示字节码执行。
-- GUI 不可用时尝试 headless 模式；若均失败会提示错误原因。
+- `--visualize gui`：调用 `vm_visualizer` 展示字节码执行（需 `pygame`）。
+- `--visualize curses`：调用 `vm_visualizer_headless`（基于 `curses`）。
+- 默认行为：`--visualize` 等价于 `--visualize gui`，若 GUI 失败会自动回退到 headless。
+- Headless 控制：`SPACE/p` 切换自动执行，`n`/右箭头单步，`r` 重置，`q` 退出。
 
 ## 7. 测试覆盖概览
 
