@@ -112,13 +112,31 @@ PRINT, HALT
 - WebAssembly 或 JIT 编译后端
 
 # ✅ 使用方式
-## 运行 jq CLI
+## 运行 jq CLI（变量与输出增强）
 ```bash
 cd compiler
 python -m jq_cli ".items[] | select(.active) | {name: .name, total: reduce(.scores, 'sum')}" --input data.json
 ```
 
-默认逐条输出 JSON 行，支持 `--slurp` 将整个输入视为单个值。
+支持的增强功能：
+- 变量与绑定：
+  - `$var` 变量引用，`expr as $x | ...` 将 expr 绑定到 `$x` 后继续原管道。
+  - CLI 注入：`--arg name value`（字符串），`--argjson name json`（JSON）。
+- 输入模式：`--slurp`（整文作为单值）、`-n/--null-input`（null 作为输入）、`-R/--raw-input`（按行读取原始文本为字符串）。
+- 输出格式：`-r/--raw-output` 对字符串直接输出（不加引号），`-c/--compact-output` 紧凑 JSON。
+- 过滤器文件：`-f/--filter-file` 从文件读取过滤器表达式。
+
+示例：
+```bash
+# 变量注入并使用
+python -m jq_cli '$foo | .x' -n --argjson foo '{"x": 42}'
+
+# 原始输入 & 原始输出
+printf "a\nb\n" | python -m jq_cli '.' -R -r
+
+# 使用过滤器文件与紧凑输出
+python -m jq_cli -f filter.jq --input data.json -c
+```
 
 ## 运行测试
 ```bash
