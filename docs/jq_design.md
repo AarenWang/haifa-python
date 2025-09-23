@@ -14,6 +14,14 @@
 - JQ VM（jq_vm）作为工具层入口，承载/注册 jq 专属处理器；
 - 编译器（jq_compiler）对接 JQ VM，后续逐步将 jq-only 指令从 Core 迁出。
 
+### 指令分层对照
+
+| 层级 | 定义位置 | 主要发射方 | 执行侧 | 说明 |
+| --- | --- | --- | --- | --- |
+| Core Opcode | `compiler/bytecode.py:Opcode` | `compiler/compiler.py`（类汇编）<br>`compiler/jq_compiler.py`（管道控制） | `compiler/bytecode_vm.py:BytecodeVM` | 通用寄存器/算术/跳转/数组/调用等基础指令，Core VM 必须支持 |
+| JQ Opcode | `compiler/jq_bytecode.py:JQOpcode` | `compiler/jq_compiler.py`（jq 语义） | `compiler/jq_vm.py:JQVM` | jq 过滤器、遍历、聚合、字符串处理等扩展指令，仅 jq VM 实现 |
+| 结构标记 Opcode | `compiler/bytecode.py:Opcode.STRUCT_*` | `ast_visualizer` 等调试工具 | `compiler/vm_visualizer.py` | 辅助可视化/调试的伪指令，不进入运行 VM 主循环 |
+
 ## 非目标
 - 不追求 100% 覆盖 `jq` 全部语法/函数，重点围绕常用子集。
 - 暂不实现即时编译、并行执行、流式增量 JSON 解析等高级特性。

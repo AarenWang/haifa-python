@@ -7,6 +7,8 @@ except ModuleNotFoundError:
 
 
 class ASTCompiler:
+    """Translates assembly AST nodes into core VM bytecode using `Opcode`."""
+
     def __init__(self):
         self.instructions = []
 

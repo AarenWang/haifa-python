@@ -24,18 +24,6 @@ class Opcode(Enum):
 
     LABEL = auto()        # LABEL name
 
-    OBJ_GET = auto()      # OBJ_GET dst, src, key
-    GET_INDEX = auto()    # GET_INDEX dst, src, index
-    LEN_VALUE = auto()    # LEN_VALUE dst, src
-
-    PUSH_EMIT = auto()    # PUSH_EMIT target_reg
-    POP_EMIT = auto()     # POP_EMIT
-    EMIT = auto()         # EMIT value_reg
-
-    OBJ_SET = auto()      # OBJ_SET obj_reg, key, value_reg
-    FLATTEN = auto()      # FLATTEN dst, src
-    REDUCE = auto()       # REDUCE dst, src, op, init_reg?
-
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg
     PARAM = auto()        # PARAM reg
@@ -68,34 +56,7 @@ class Opcode(Enum):
     STRUCT_ENDWHILE = auto()
     STRUCT_BREAK = auto()
 
-    # jq core filters (Milestone 3)
-    KEYS = auto()         # KEYS dst, src
-    HAS = auto()          # HAS dst, container, needle
-    CONTAINS = auto()     # CONTAINS dst, container, needle
-    JOIN = auto()         # JOIN dst, array, sep
-    REVERSE = auto()      # REVERSE dst, value
-    FIRST = auto()        # FIRST dst, value
-    LAST = auto()         # LAST dst, value
-    ANY = auto()          # ANY dst, value
-    ALL = auto()          # ALL dst, value
-    AGG_ADD = auto()      # AGG_ADD dst, value (array aggregation)
-
-    # Sorting and aggregation family (Milestone 4)
-    SORT = auto()         # SORT dst, src
-    SORT_BY = auto()      # SORT_BY dst, src, keys_buf
-    UNIQUE = auto()       # UNIQUE dst, src
-    UNIQUE_BY = auto()    # UNIQUE_BY dst, src, keys_buf
-    MIN = auto()          # MIN dst, src
-    MAX = auto()          # MAX dst, src
-    MIN_BY = auto()       # MIN_BY dst, src, keys_buf
-    MAX_BY = auto()       # MAX_BY dst, src, keys_buf
-    GROUP_BY = auto()     # GROUP_BY dst, src, keys_buf
-
-    # String/regex tools (Milestone 6)
-    TOSTRING = auto()     # TOSTRING dst, src
-    TONUMBER = auto()     # TONUMBER dst, src
-    SPLIT = auto()        # SPLIT dst, src_string, sep
-    GSUB = auto()         # GSUB dst, src_string, pattern, replacement
+    # (JQ-specific opcodes moved to compiler/jq_bytecode.py)
 
 
 @dataclass

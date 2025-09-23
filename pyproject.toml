@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "haifa-jq"
+version = "0.1.0"
+description = "Hybrid core VM and jq runtime implemented in Python"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "Haifa Python"}]
+license = {text = "MIT"}
+keywords = ["virtual-machine", "jq", "bytecode", "compiler"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+]
+
+[project.urls]
+Homepage = "https://example.com/haifa-python"
+
+[project.scripts]
+pyjq = "compiler.jq_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["compiler", "vm"]
