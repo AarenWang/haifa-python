@@ -1,9 +1,21 @@
 import argparse
 import json
+import os
 import sys
 from typing import Iterable, List, Optional
 
-from .jq_runtime import run_filter_many
+
+_RUNNING_AS_SCRIPT = __package__ in (None, "")
+
+if _RUNNING_AS_SCRIPT:
+    # When bundled by PyInstaller or executed as a top-level script, ensure
+    # package modules remain importable by adding the project root to sys.path.
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from compiler.jq_runtime import run_filter_many  # type: ignore
+else:
+    from .jq_runtime import run_filter_many
 
 
 def _load_json_from_source(path: Optional[str]) -> str:
@@ -73,20 +85,30 @@ def main(argv: Optional[List[str]] = None) -> int:
                 env[name] = json.loads(value)
         
         if args.visualize:
-            # Prefer package-relative imports for core pieces
-            from .jq_parser import parse_jq_program
-            from .jq_compiler import compile_to_bytecode, INPUT_REGISTER
-            from .jq_vm import JQVM
+            if _RUNNING_AS_SCRIPT:
+                from compiler.jq_parser import parse_jq_program  # type: ignore
+                from compiler.jq_compiler import compile_to_bytecode, INPUT_REGISTER  # type: ignore
+                from compiler.jq_vm import JQVM  # type: ignore
+            else:
+                from .jq_parser import parse_jq_program
+                from .jq_compiler import compile_to_bytecode, INPUT_REGISTER
+                from .jq_vm import JQVM
             # Try GUI visualizer first; fallback to headless if pygame not available
             VMVisualizer = None
             gui_exc = None
             try:
-                from .vm_visualizer import VMVisualizer as _GUIVisualizer
+                if _RUNNING_AS_SCRIPT:
+                    from compiler.vm_visualizer import VMVisualizer as _GUIVisualizer  # type: ignore
+                else:
+                    from .vm_visualizer import VMVisualizer as _GUIVisualizer
                 VMVisualizer = _GUIVisualizer
             except Exception as e:
                 gui_exc = e
                 try:
-                    from .vm_visualizer_headless import VMVisualizer as _HeadlessVisualizer
+                    if _RUNNING_AS_SCRIPT:
+                        from compiler.vm_visualizer_headless import VMVisualizer as _HeadlessVisualizer  # type: ignore
+                    else:
+                        from .vm_visualizer_headless import VMVisualizer as _HeadlessVisualizer
                     VMVisualizer = _HeadlessVisualizer
                 except Exception as headless_exc:
                     print(
