@@ -15,17 +15,32 @@
 
 ## 里程碑拆分
 
-### Milestone 1：Lua 语法与基础执行
-- [ ] Lua 语法解析器：支持表达式、赋值、`if`、`while`/`repeat`、函数定义与调用。
-- [ ] Lua AST 节点与 Core VM 映射初版：局部变量、全局表、简单函数调用（无闭包）。
-- [ ] 扩展 VM 指令：`TABLE_NEW`, `TABLE_SET`, `TABLE_GET`, `RETURN_MULTI`, `CALL_VARARG` 等初版。
-- [ ] `pylua` CLI 可执行基础脚本；提供示例和单元测试。
+### Milestone 1：Lua 语法与基础执行 ✅（已完成）
+- [x] Lua 语法解析器：支持表达式、赋值、`if`、`while`、函数定义与调用。
+- [x] Lua AST 节点与 Core VM 映射初版：局部变量、全局表、直接函数调用。
+- [x] 基础 CLI：`pylua --execute/脚本`，配套单元测试 `test_lua_basic`。
+- [x] 文档更新：README/guide/reference 说明 Lua 子集与示例脚本。
 
 ### Milestone 2：闭包、Upvalue、标准库
-- [ ] 设计函数闭包捕获模型，引入 Upvalue 访问 opcode。
-- [ ] 支持多返回值、可变参数、尾调用优化。
-- [ ] 实现标准库核心：`print`, `math`, `table`, `string` 子集中常用函数。
-- [ ] 增强测试覆盖（闭包、表操作、标准库调用）。
+
+为降低风险，拆分为三个迭代：
+
+**Milestone 2A：闭包与 Upvalue 基础**
+- [ ] VM 扩展：闭包模型与 upvalue 指令（`MAKE_CELL`, `CELL_GET`, `CELL_SET`, `CLOSURE`, `CALL_VALUE`, `BIND_UPVALUE`）。
+- [ ] 语义分析：识别自由变量、构建闭包捕获列表。
+- [ ] 编译器：局部变量转 Cell 模型，支持函数返回闭包、闭包调用。
+- [ ] 单元/集成测试：累加器、共享 upvalue、多层嵌套调用。
+
+**Milestone 2B：多返回值与可变参数**
+- [ ] 支持 Lua 函数多返回值、尾调用、`...` 可变参数。
+- [ ] VM 指令：`RETURN_MULTI`, `CALL_VARARG`、栈帧扩展。
+- [ ] 增加测试：多返回值解构、链式调用、vararg 处理。
+
+**Milestone 2C：标准库核心**
+- [ ] 内建库：`print`, `math` 基础函数、`table.insert/remove`, `string.len` 等常用函数。
+- [ ] 全局环境与库注册机制，允许热更新。
+- [ ] 文档/示例：`docs/lua_guide.md` 草案、标准库使用示例。
+- [ ] 集成测试：综合脚本验证库与闭包、多返回值的互操作。
 
 ### Milestone 3：协程与调试增强
 - [ ] 协程语义：`coroutine.create/resume/yield`，VM 上实现多执行上下文。
