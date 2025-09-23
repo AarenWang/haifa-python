@@ -49,6 +49,10 @@ class ASTCompiler:
             self.emit(Opcode.OR, node.dst, node.lhs, node.rhs)
         elif isinstance(node, NotNode):
             self.emit(Opcode.NOT, node.dst, node.src)
+        elif isinstance(node, ClearNode):
+            self.emit(Opcode.CLR, node.dst)
+        elif isinstance(node, CmpImmNode):
+            self.emit(Opcode.CMP_IMM, node.dst, node.src, node.imm)
 
         elif isinstance(node, AndBitNode):
             self.emit(Opcode.AND_BIT, node.dst, node.lhs, node.rhs)
@@ -73,6 +77,10 @@ class ASTCompiler:
             self.emit(Opcode.JMP, node.label)
         elif isinstance(node, JzNode):
             self.emit(Opcode.JZ, node.cond, node.label)
+        elif isinstance(node, JnzNode):
+            self.emit(Opcode.JNZ, node.cond, node.label)
+        elif isinstance(node, JmpRelNode):
+            self.emit(Opcode.JMP_REL, node.offset)
 
         elif isinstance(node, CallNode):
             self.emit(Opcode.CALL, node.name)
@@ -113,6 +121,20 @@ class ASTCompiler:
             self.emit(Opcode.ARR_GET, node.dst, node.name, node.index)
         elif isinstance(node, LenNode):
             self.emit(Opcode.LEN, node.dst, node.name)
+        elif isinstance(node, PushNode):
+            self.emit(Opcode.PUSH, node.src)
+        elif isinstance(node, PopNode):
+            self.emit(Opcode.POP, node.dst)
+        elif isinstance(node, ArrCopyNode):
+            self.emit(Opcode.ARR_COPY, node.dst, node.src, node.start, node.length)
+        elif isinstance(node, IsObjNode):
+            self.emit(Opcode.IS_OBJ, node.dst, node.src)
+        elif isinstance(node, IsArrNode):
+            self.emit(Opcode.IS_ARR, node.dst, node.src)
+        elif isinstance(node, IsNullNode):
+            self.emit(Opcode.IS_NULL, node.dst, node.src)
+        elif isinstance(node, CoalesceNode):
+            self.emit(Opcode.COALESCE, node.dst, node.lhs, node.rhs)
 
         elif isinstance(node, NoOpNode):
             pass

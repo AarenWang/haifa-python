@@ -19,6 +19,18 @@ class Opcode(Enum):
     OR = auto()
     NOT = auto()
 
+    CLR = auto()         # CLR reg -> set register to 0
+    CMP_IMM = auto()     # CMP_IMM dst, src, imm -> dst = -1/0/1 comparing src to immediate
+    JNZ = auto()         # JNZ reg, label
+    JMP_REL = auto()     # JMP_REL offset (relative jump)
+    PUSH = auto()        # PUSH src
+    POP = auto()         # POP dst
+    ARR_COPY = auto()    # ARR_COPY dst, src, start, length
+    IS_OBJ = auto()      # IS_OBJ dst, src
+    IS_ARR = auto()      # IS_ARR dst, src
+    IS_NULL = auto()     # IS_NULL dst, src
+    COALESCE = auto()    # COALESCE dst, lhs, rhs
+
     JMP = auto()          # JMP label
     JZ = auto()           # JZ reg, label
 

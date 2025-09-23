@@ -84,7 +84,22 @@
 | `gsub(regex; repl)` | 函数 | 正则替换 |
 | `join(sep)` | 函数 | 数组字符串 join |
 
-### 3.1 `reduce` 语义
+### 3.1 Core 扩展指令
+
+| 指令 | 说明 |
+| --- | --- |
+| `CLR reg` | 将寄存器 `reg` 置为 0 |
+| `CMP_IMM dst src imm` | 对 `src` 与立即数 `imm` 进行比较，结果为 -1/0/1 |
+| `JNZ reg label` | 若 `reg` 非零则跳转到 `label` |
+| `JMP_REL offset` | 相对跳转，偏移量可为负值 |
+| `PUSH src` / `POP dst` | 对 VM 内建数据栈进行压入/弹出 |
+| `ARR_COPY dst src start len` | 拷贝 `src[start:start+len]` 至数组 `dst` |
+| `IS_OBJ dst src` | 判断 `src` 是否为对象 (`dict`) |
+| `IS_ARR dst src` | 判断 `src` 是否为数组 (`list`) |
+| `IS_NULL dst src` | 判断 `src` 是否为 `None` |
+| `COALESCE dst lhs rhs` | 若 `lhs` 为 `None` 则取 `rhs`，否则保留 `lhs` |
+
+### 3.2 `reduce` 语义
 
 ```jq
 reduce(array_expr; op_string; init?)
@@ -124,7 +139,9 @@ pyjq 'reduce(.items; "concat"; [])' --input arrays.json
 - `--visualize gui`：调用 `vm_visualizer` 展示字节码执行（需 `pygame`）。
 - `--visualize curses`：调用 `vm_visualizer_headless`（基于 `curses`）。
 - 默认行为：`--visualize` 等价于 `--visualize gui`，若 GUI 失败会自动回退到 headless。
+- GUI 控制：`P` 运行/暂停，`SPACE` 单步，`/` 搜索指令（回车确认、ESC 取消），`L` 导出执行轨迹（JSONL），`R` 重置，`Q` 退出。寄存器面板会高亮最新变更。
 - Headless 控制：`SPACE/p` 切换自动执行，`n`/右箭头单步，`r` 重置，`q` 退出。
+- GUI 导出的轨迹文件位于当前目录 (`vm_trace_YYYYMMDD_HHMMSS.jsonl`)。
 
 ## 7. 测试覆盖概览
 

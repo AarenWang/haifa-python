@@ -62,6 +62,22 @@ class NotNode(ASTNode):
     def execute(self, context): context.registers[self.dst] = int(not bool(context.val(self.src)))
 
 
+class ClearNode(ASTNode):
+    def __init__(self, dst): self.dst = dst
+    def execute(self, context): context.registers[self.dst] = 0
+
+
+class CmpImmNode(ASTNode):
+    def __init__(self, dst, src, imm): self.dst = dst; self.src = src; self.imm = imm
+    def execute(self, context):
+        left = context.val(self.src)
+        imm_val = context.val(self.imm) if not str(self.imm).lstrip("-+").isdigit() else int(self.imm)
+        if left < imm_val: result = -1
+        elif left > imm_val: result = 1
+        else: result = 0
+        context.registers[self.dst] = result
+
+
 # 位操作 AST 节点
 class AndBitNode(ASTNode):
     def __init__(self, dst, lhs, rhs): self.dst = dst; self.lhs = lhs; self.rhs = rhs
@@ -130,6 +146,15 @@ class JzNode(ASTNode):
     def execute(self, context):
         if context.val(self.cond) == 0: context.pc = context.labels[self.label] - 1
 
+class JnzNode(ASTNode):
+    def __init__(self, cond, label): self.cond = cond; self.label = label
+    def execute(self, context):
+        if context.val(self.cond) != 0: context.pc = context.labels[self.label] - 1
+
+class JmpRelNode(ASTNode):
+    def __init__(self, offset): self.offset = int(offset)
+    def execute(self, context): context.pc += self.offset
+
 class LabelNode(ASTNode):
     def __init__(self, name): self.name = name
     def execute(self, context): pass
@@ -194,6 +219,47 @@ class ArrGetNode(ASTNode):
 class LenNode(ASTNode):
     def __init__(self, dst, name): self.dst = dst; self.name = name
     def execute(self, context): context.registers[self.dst] = len(context.arrays[self.name])
+
+
+class PushNode(ASTNode):
+    def __init__(self, src): self.src = src
+    def execute(self, context): context.stack.append(context.val(self.src))
+
+
+class PopNode(ASTNode):
+    def __init__(self, dst): self.dst = dst
+    def execute(self, context): context.registers[self.dst] = context.stack.pop() if context.stack else None
+
+
+class ArrCopyNode(ASTNode):
+    def __init__(self, dst, src, start, length):
+        self.dst = dst; self.src = src; self.start = start; self.length = length
+    def execute(self, context):
+        start = int(context.val(self.start))
+        length = int(context.val(self.length))
+        context.arrays[self.dst] = list(context.arrays.get(self.src, [])[start:start+length]) if length >= 0 else []
+
+
+class IsObjNode(ASTNode):
+    def __init__(self, dst, src): self.dst = dst; self.src = src
+    def execute(self, context): context.registers[self.dst] = int(isinstance(context.val(self.src), dict))
+
+
+class IsArrNode(ASTNode):
+    def __init__(self, dst, src): self.dst = dst; self.src = src
+    def execute(self, context): context.registers[self.dst] = int(isinstance(context.val(self.src), list))
+
+
+class IsNullNode(ASTNode):
+    def __init__(self, dst, src): self.dst = dst; self.src = src
+    def execute(self, context): context.registers[self.dst] = int(context.val(self.src) is None)
+
+
+class CoalesceNode(ASTNode):
+    def __init__(self, dst, lhs, rhs): self.dst = dst; self.lhs = lhs; self.rhs = rhs
+    def execute(self, context):
+        left_val = context.val(self.lhs)
+        context.registers[self.dst] = context.val(self.rhs) if left_val is None else left_val
 
 
 # 输出与空操作

@@ -71,6 +71,10 @@ def parse(script_lines):
         elif op == "AND": ast.append(AndNode(*args))
         elif op == "OR": ast.append(OrNode(*args))
         elif op == "NOT": ast.append(NotNode(*args))
+        elif op == "CLR": ast.append(ClearNode(*args))
+        elif op == "CMP_IMM":
+            if len(args) != 3: raise SyntaxError("CMP_IMM requires dst src imm")
+            ast.append(CmpImmNode(*args))
 
         elif op == "AND_BIT": ast.append(AndBitNode(*args))
         elif op == "OR_BIT": ast.append(OrBitNode(*args))
@@ -83,6 +87,8 @@ def parse(script_lines):
         elif op == "PRINT": ast.append(PrintNode(*args))
         elif op == "LABEL": ast.append(LabelNode(*args))
         elif op == "JZ": ast.append(JzNode(*args))
+        elif op == "JNZ": ast.append(JnzNode(*args))
+        elif op == "JMP_REL": ast.append(JmpRelNode(*args))
         elif op == "JMP": ast.append(JumpNode(*args))
 
         elif op == "FUNC": ast.append(FuncNode(*args))
@@ -97,6 +103,13 @@ def parse(script_lines):
         elif op == "ARR_SET": ast.append(ArrSetNode(*args))
         elif op == "ARR_GET": ast.append(ArrGetNode(*args))
         elif op == "LEN": ast.append(LenNode(*args))
+        elif op == "PUSH": ast.append(PushNode(*args))
+        elif op == "POP": ast.append(PopNode(*args))
+        elif op == "ARR_COPY": ast.append(ArrCopyNode(*args))
+        elif op == "IS_OBJ": ast.append(IsObjNode(*args))
+        elif op == "IS_ARR": ast.append(IsArrNode(*args))
+        elif op == "IS_NULL": ast.append(IsNullNode(*args))
+        elif op == "COALESCE": ast.append(CoalesceNode(*args))
 
         else:
             ast.append(NoOpNode())
