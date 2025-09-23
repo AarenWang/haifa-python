@@ -15,11 +15,19 @@ from jq_ast import (
     Literal,
     ObjectLiteral,
     Pipe,
+    UnaryOp,
+    BinaryOp,
 )
 
+# Order matters: multi-char operators first
 _TOKEN_REGEX = re.compile(
     r"""
     (?P<WS>\s+)
+  | (?P<COALESCE>//)
+  | (?P<EQEQ>==)
+  | (?P<NEQ>!=)
+  | (?P<GTE>>=)
+  | (?P<LTE><=)
   | (?P<PIPE>\|)
   | (?P<DOT>\.)
   | (?P<LBRACKET>\[)
@@ -27,6 +35,13 @@ _TOKEN_REGEX = re.compile(
   | (?P<LPAREN>\()
   | (?P<RPAREN>\))
   | (?P<COMMA>,)
+  | (?P<PLUS>\+)
+  | (?P<MINUS>-)
+  | (?P<STAR>\*)
+  | (?P<SLASH>/)
+  | (?P<PERCENT>%)
+  | (?P<GT>>)
+  | (?P<LT><)
   | (?P<NUMBER>-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)
   | (?P<STRING>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')
   | (?P<IDENT>[A-Za-z_][A-Za-z0-9_]*)
@@ -103,6 +118,7 @@ class JQParser:
 
     # Grammar ---------------------------------------------------------
     def _parse_expression(self) -> JQNode:
+        # Highest-level: pipe chains
         node = self._parse_pipe()
         return node
 
@@ -114,6 +130,110 @@ class JQParser:
         return node
 
     def _parse_term(self) -> JQNode:
+        # Historically a placeholder; keep calling the lowest-precedence non-pipe
+        return self._parse_or()
+
+    # Precedence climbing (low -> high)
+    def _parse_or(self) -> JQNode:
+        node = self._parse_and()
+        while self._current().type == "IDENT" and self._current().value == "or":
+            self._advance()
+            right = self._parse_and()
+            node = BinaryOp("or", node, right)
+        return node
+
+    def _parse_and(self) -> JQNode:
+        node = self._parse_coalesce()
+        while self._current().type == "IDENT" and self._current().value == "and":
+            self._advance()
+            right = self._parse_coalesce()
+            node = BinaryOp("and", node, right)
+        return node
+
+    def _parse_coalesce(self) -> JQNode:
+        node = self._parse_equality()
+        while self._match("COALESCE"):
+            right = self._parse_equality()
+            node = BinaryOp("//", node, right)
+        return node
+
+    def _parse_equality(self) -> JQNode:
+        node = self._parse_comparison()
+        while True:
+            if self._match("EQEQ"):
+                right = self._parse_comparison()
+                node = BinaryOp("==", node, right)
+                continue
+            if self._match("NEQ"):
+                right = self._parse_comparison()
+                node = BinaryOp("!=", node, right)
+                continue
+            break
+        return node
+
+    def _parse_comparison(self) -> JQNode:
+        node = self._parse_additive()
+        while True:
+            if self._match("GTE"):
+                right = self._parse_additive()
+                node = BinaryOp(">=", node, right)
+                continue
+            if self._match("LTE"):
+                right = self._parse_additive()
+                node = BinaryOp("<=", node, right)
+                continue
+            if self._match("GT"):
+                right = self._parse_additive()
+                node = BinaryOp(">", node, right)
+                continue
+            if self._match("LT"):
+                right = self._parse_additive()
+                node = BinaryOp("<", node, right)
+                continue
+            break
+        return node
+
+    def _parse_additive(self) -> JQNode:
+        node = self._parse_multiplicative()
+        while True:
+            if self._match("PLUS"):
+                right = self._parse_multiplicative()
+                node = BinaryOp("+", node, right)
+                continue
+            if self._match("MINUS"):
+                right = self._parse_multiplicative()
+                node = BinaryOp("-", node, right)
+                continue
+            break
+        return node
+
+    def _parse_multiplicative(self) -> JQNode:
+        node = self._parse_unary()
+        while True:
+            if self._match("STAR"):
+                right = self._parse_unary()
+                node = BinaryOp("*", node, right)
+                continue
+            if self._match("SLASH"):
+                right = self._parse_unary()
+                node = BinaryOp("/", node, right)
+                continue
+            if self._match("PERCENT"):
+                right = self._parse_unary()
+                node = BinaryOp("%", node, right)
+                continue
+            break
+        return node
+
+    def _parse_unary(self) -> JQNode:
+        # not, unary minus
+        token = self._current()
+        if token.type == "IDENT" and token.value == "not":
+            self._advance()
+            return UnaryOp("not", self._parse_unary())
+        if token.type == "MINUS":
+            self._advance()
+            return UnaryOp("-", self._parse_unary())
         return self._parse_postfix()
 
     def _parse_postfix(self) -> JQNode:

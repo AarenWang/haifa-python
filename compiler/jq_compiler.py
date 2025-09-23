@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 
 from bytecode import Instruction, Opcode
-from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, flatten_pipe
+from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, UnaryOp, BinaryOp, flatten_pipe
 
 INPUT_REGISTER = "__jq_input"
 CURRENT_REGISTER = "__jq_curr"
@@ -53,6 +53,11 @@ class JQCompiler:
             return
 
         if isinstance(stage, ObjectLiteral):
+            dest = self._eval_expression(stage, current_reg)
+            self._compile_pipeline(rest, dest)
+            return
+        # Generic expression stage limited to operator expressions
+        if isinstance(stage, (UnaryOp, BinaryOp)):
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
@@ -225,6 +230,73 @@ class JQCompiler:
             dest = self._new_temp()
             self.instructions.append(Instruction(Opcode.LOAD_CONST, [dest, node.value]))
             return dest
+        if isinstance(node, UnaryOp):
+            operand = self._eval_expression(node.operand, base_reg)
+            dest = self._new_temp()
+            if node.op == "-":
+                self.instructions.append(Instruction(Opcode.NEG, [dest, operand]))
+                return dest
+            if node.op == "not":
+                self.instructions.append(Instruction(Opcode.NOT, [dest, operand]))
+                return dest
+            raise NotImplementedError(f"Unsupported unary operator: {node.op}")
+        if isinstance(node, BinaryOp):
+            # Arithmetic and logic directly mapped
+            if node.op in {"+", "-", "*", "/", "%", "==", ">", "<", "and", "or"}:
+                left = self._eval_expression(node.left, base_reg)
+                right = self._eval_expression(node.right, base_reg)
+                dest = self._new_temp()
+                opmap = {
+                    "+": Opcode.ADD,
+                    "-": Opcode.SUB,
+                    "*": Opcode.MUL,
+                    "/": Opcode.DIV,
+                    "%": Opcode.MOD,
+                    "==": Opcode.EQ,
+                    ">": Opcode.GT,
+                    "<": Opcode.LT,
+                    "and": Opcode.AND,
+                    "or": Opcode.OR,
+                }
+                self.instructions.append(Instruction(opmap[node.op], [dest, left, right]))
+                return dest
+            # Derived comparisons: !=, >=, <=
+            if node.op == "!=":
+                eq_reg = self._eval_expression(BinaryOp("==", node.left, node.right), base_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.NOT, [dest, eq_reg]))
+                return dest
+            if node.op == ">=":
+                # not (left < right)
+                lt_reg = self._eval_expression(BinaryOp("<", node.left, node.right), base_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.NOT, [dest, lt_reg]))
+                return dest
+            if node.op == "<=":
+                # not (left > right)
+                gt_reg = self._eval_expression(BinaryOp(">", node.left, node.right), base_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.NOT, [dest, gt_reg]))
+                return dest
+            if node.op == "//":
+                # Coalesce: return left if not null, else right
+                left_reg = self._eval_expression(node.left, base_reg)
+                dest = self._new_temp()
+                null_reg = self._new_temp()
+                cond_reg = self._new_temp()
+                notnull_label = self._new_label("jq_coalesce_use_left")
+                done_label = self._new_label("jq_coalesce_done")
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [null_reg, None]))
+                self.instructions.append(Instruction(Opcode.EQ, [cond_reg, left_reg, null_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [cond_reg, notnull_label]))
+                right_reg = self._eval_expression(node.right, base_reg)
+                self.instructions.append(Instruction(Opcode.MOV, [dest, right_reg]))
+                self.instructions.append(Instruction(Opcode.JMP, [done_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [notnull_label]))
+                self.instructions.append(Instruction(Opcode.MOV, [dest, left_reg]))
+                self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
+                return dest
+            raise NotImplementedError(f"Unsupported binary operator: {node.op}")
         if isinstance(node, Field):
             names: List[str] = []
             source = node

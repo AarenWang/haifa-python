@@ -54,6 +54,7 @@ class BytecodeVM:
             elif op == Opcode.MUL:
                 self.registers[args[0]] = self.val(args[1]) * self.val(args[2])
             elif op == Opcode.DIV:
+                # 保持与现有测试一致：整数整除
                 self.registers[args[0]] = self.val(args[1]) // self.val(args[2])
             elif op == Opcode.MOD:
                 self.registers[args[0]] = self.val(args[1]) % self.val(args[2])
@@ -95,7 +96,8 @@ class BytecodeVM:
                 self.pc = self.labels[args[0]]
                 continue
             elif op == Opcode.JZ:
-                if self.val(args[0]) == 0:
+                # 统一真值语义：Python falsy 视为跳转（False/None/0/""/[]/{}/...）
+                if not bool(self.val(args[0])):
                     self.pc = self.labels[args[1]]
                     continue
             elif op == Opcode.LABEL:
