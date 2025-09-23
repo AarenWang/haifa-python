@@ -49,6 +49,7 @@ class CallExpr(Expr):
 @dataclass
 class FunctionExpr(Expr):
     params: List[str]
+    vararg: bool
     body: "Block"
 
 # Statement nodes
@@ -76,14 +77,19 @@ class WhileStmt(Stmt):
     body: "Block"
 
 @dataclass
+class VarargExpr(Expr):
+    pass
+
+@dataclass
 class ReturnStmt(Stmt):
-    value: Optional[Expr]
+    values: List[Expr]
 
 @dataclass
 class FunctionStmt(Stmt):
     name: Identifier
     params: List[str]
     body: "Block"
+    vararg: bool = False
 
 @dataclass
 class ExprStmt(Stmt):
@@ -108,6 +114,7 @@ __all__ = [
     "UnaryOp",
     "CallExpr",
     "FunctionExpr",
+    "VarargExpr",
     "Stmt",
     "Assignment",
     "IfStmt",

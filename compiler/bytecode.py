@@ -37,6 +37,11 @@ class Opcode(Enum):
     CLOSURE = auto()     # CLOSURE dst, label, cell1, cell2, ...
     CALL_VALUE = auto()  # CALL_VALUE callee_reg
     BIND_UPVALUE = auto()# BIND_UPVALUE dst_cell, index
+    VARARG = auto()      # VARARG dst
+    VARARG_FIRST = auto()# VARARG_FIRST dst, src
+    RETURN_MULTI = auto()# RETURN_MULTI r1, r2, ...
+    RESULT_MULTI = auto()# RESULT_MULTI dst1, dst2, ...
+    RESULT_LIST = auto() # RESULT_LIST dst
 
     JMP = auto()          # JMP label
     JZ = auto()           # JZ reg, label
@@ -46,6 +51,7 @@ class Opcode(Enum):
     CALL = auto()         # CALL name
     RETURN = auto()       # RETURN reg
     PARAM = auto()        # PARAM reg
+    PARAM_EXPAND = auto() # PARAM_EXPAND reg
     ARG = auto()          # ARG dst
     RESULT = auto()       # RESULT dst
 

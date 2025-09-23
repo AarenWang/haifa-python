@@ -105,6 +105,13 @@
 | `CLOSURE dst label cell1 cell2 ...` | 构建闭包对象并捕获 upvalue 列表 |
 | `BIND_UPVALUE dst index` | 在函数体内绑定上层传入的 upvalue |
 | `CALL_VALUE reg` | 调用存储在寄存器中的闭包/函数值 |
+| `VARARG dst` | 将当前函数剩余参数打包成列表写入 `dst` |
+| `VARARG_FIRST dst src` | 读取列表 `src` 的首元素（空列表得到 `nil`） |
+| `RETURN_MULTI r1 r2 ...` | 返回多个值，列表会被展开 |
+| `RESULT_MULTI dst1 dst2 ...` | 将最近一次调用的返回值依次写入目标寄存器（不足补 `nil`） |
+| `RESULT_LIST dst` | 将最近一次调用的返回值整体拷贝为列表 |
+| `PARAM reg` | 入栈调用参数 |
+| `PARAM_EXPAND reg` | 将列表参数展开后逐个入栈 |
 
 ### 3.2 `reduce` 语义
 

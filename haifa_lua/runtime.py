@@ -21,6 +21,8 @@ def run_source(source: str, globals: Optional[dict] = None) -> List[object]:
     if globals:
         vm.registers.update({f"G_{k}": v for k, v in globals.items()})
     output = vm.run()
+    if not output and vm.last_return:
+        return list(vm.last_return)
     if vm.return_value is not None and not output:
         return [vm.return_value]
     return output

@@ -88,6 +88,9 @@ class LuaLexer:
         if ch == "\0":
             return None
 
+        if ch == "." and self._peek(1) == "." and self._peek(2) == ".":
+            self._advance(3)
+            return Token("VARARG", "...", start_line, start_col)
         if ch.isdigit() or (ch == "." and self._peek(1).isdigit()):
             return self._number(start_line, start_col)
         if ch == '"' or ch == "'":

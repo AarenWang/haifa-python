@@ -103,3 +103,89 @@ def test_closure_independent_instances():
     return a + b * 10 + c * 100
     """
     assert run_source(src) == [121]
+
+
+def test_multi_return_basic():
+    src = """
+    function pair()
+        return 1, 2
+    end
+
+    return pair()
+    """
+    assert run_source(src) == [1, 2]
+
+
+def test_vararg_passthrough():
+    src = """
+    function pass_through(...)
+        return ...
+    end
+
+    return pass_through(1, 2, 3)
+    """
+    assert run_source(src) == [1, 2, 3]
+
+
+def test_vararg_return_with_prefix():
+    src = """
+    function mix(...)
+        return 1, ...
+    end
+
+    return mix(2, 3)
+    """
+    assert run_source(src) == [1, 2, 3]
+
+
+def test_vararg_return_non_last():
+    src = """
+    function head(...)
+        return ..., 99
+    end
+
+    return head(7, 8)
+    """
+    assert run_source(src) == [7, 99]
+
+
+def test_call_expands_last_argument():
+    src = """
+    function pair()
+        return 4, 5
+    end
+
+    function gather(...)
+        return ...
+    end
+
+    return gather(1, pair())
+    """
+    assert run_source(src) == [1, 4, 5]
+
+
+def test_call_collapses_nonlast_vararg():
+    src = """
+    function gather(...)
+        return ...
+    end
+
+    function wrap(...)
+        return gather(..., 42)
+    end
+
+    return wrap(8, 9)
+    """
+    assert run_source(src) == [8, 42]
+
+
+def test_vararg_assignment_first_value():
+    src = """
+    function first(...)
+        local x = ...
+        return x
+    end
+
+    return first(10, 11)
+    """
+    assert run_source(src) == [10]

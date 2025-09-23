@@ -1,5 +1,6 @@
 import copy
 from dataclasses import dataclass
+from typing import List
 
 from .bytecode import Opcode, Instruction
 from .value_utils import resolve_value
@@ -18,11 +19,13 @@ class BytecodeVM:
         self.arrays = {}
         self.call_stack = []
         self.param_stack = []
+        self.pending_params = []
         self.return_value = None
         self.emit_stack = []
         self.pc = 0
         self.output = []
         self.current_upvalues = []
+        self.last_return: List[object] = []
         # Opcode dispatch table for cleaner control flow
         self._handlers = {
             Opcode.LOAD_IMM: self._op_LOAD_IMM,
@@ -57,6 +60,11 @@ class BytecodeVM:
             Opcode.CLOSURE: self._op_CLOSURE,
             Opcode.CALL_VALUE: self._op_CALL_VALUE,
             Opcode.BIND_UPVALUE: self._op_BIND_UPVALUE,
+            Opcode.VARARG: self._op_VARARG,
+            Opcode.VARARG_FIRST: self._op_VARARG_FIRST,
+            Opcode.RETURN_MULTI: self._op_RETURN_MULTI,
+            Opcode.RESULT_MULTI: self._op_RESULT_MULTI,
+            Opcode.RESULT_LIST: self._op_RESULT_LIST,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -73,6 +81,7 @@ class BytecodeVM:
             Opcode.CALL: self._op_CALL,
             Opcode.RETURN: self._op_RETURN,
             Opcode.RESULT: self._op_RESULT,
+            Opcode.PARAM_EXPAND: self._op_PARAM_EXPAND,
             Opcode.ARR_INIT: self._op_ARR_INIT,
             Opcode.ARR_SET: self._op_ARR_SET,
             Opcode.ARR_GET: self._op_ARR_GET,
@@ -228,11 +237,14 @@ class BytecodeVM:
         closure = self.registers.get(callee_reg)
         if not isinstance(closure, dict) or "label" not in closure:
             raise RuntimeError(f"CALL_VALUE expects closure in {callee_reg}")
-        saved_params = self.param_stack
-        self.call_stack.append((self.pc + 1, saved_params, self.registers, self.current_upvalues))
+        saved_param_stack = self.param_stack
+        saved_pending = self.pending_params
+        args_to_pass = list(saved_pending)
+        saved_pending.clear()
+        self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
         self.registers = dict(self.registers)
-        self.param_stack = list(saved_params)
-        saved_params.clear()
+        self.param_stack = args_to_pass
+        self.pending_params = []
         self.current_upvalues = list(closure.get("upvalues", []))
         self.pc = self.labels[closure["label"]]
         return "jump"
@@ -246,6 +258,47 @@ class BytecodeVM:
         if index < 0 or index >= len(self.current_upvalues):
             raise RuntimeError("BIND_UPVALUE index out of range")
         self.registers[dst] = self.current_upvalues[index]
+
+    def _op_VARARG(self, args):
+        dst = args[0]
+        self.registers[dst] = list(self.param_stack)
+
+    def _op_VARARG_FIRST(self, args):
+        dst, src = args
+        values = self.val(src)
+        if isinstance(values, list) and values:
+            self.registers[dst] = values[0]
+        else:
+            self.registers[dst] = None
+
+    def _op_RETURN_MULTI(self, args):
+        values = []
+        for reg in args:
+            val = self.val(reg)
+            if isinstance(val, list):
+                values.extend(val)
+            else:
+                values.append(val)
+        return self._return_with(values)
+
+    def _op_RESULT_MULTI(self, args):
+        for idx, dst in enumerate(args):
+            value = self.last_return[idx] if idx < len(self.last_return) else None
+            self.registers[dst] = value
+
+    def _op_RESULT_LIST(self, args):
+        dst = args[0]
+        self.registers[dst] = list(self.last_return)
+
+    def _return_with(self, values: List[object]):
+        self.last_return = list(values)
+        self.return_value = self.last_return[0] if self.last_return else None
+        if self.call_stack:
+            self.pc, self.param_stack, self.registers, self.current_upvalues, self.pending_params = self.call_stack.pop()
+            return "jump"
+        self.current_upvalues = []
+        self.pending_params = []
+        return "halt"
 
     # 位运算
     def _op_AND_BIT(self, args):
@@ -294,7 +347,14 @@ class BytecodeVM:
 
     # 函数调用
     def _op_PARAM(self, args):
-        self.param_stack.append(self.val(args[0]))
+        self.pending_params.append(self.val(args[0]))
+
+    def _op_PARAM_EXPAND(self, args):
+        values = self.val(args[0])
+        if isinstance(values, list):
+            self.pending_params.extend(list(values))
+        else:
+            self.pending_params.append(values)
 
     def _op_ARG(self, args):
         if self.param_stack:
@@ -302,24 +362,25 @@ class BytecodeVM:
 
     def _op_CALL(self, args):
         target = args[0]
-        saved_params = self.param_stack
-        self.call_stack.append((self.pc + 1, saved_params, self.registers, self.current_upvalues))
+        saved_param_stack = self.param_stack
+        saved_pending = self.pending_params
+        args_to_pass = list(saved_pending)
+        saved_pending.clear()
+        self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
         self.registers = dict(self.registers)
-        self.param_stack = list(saved_params)
-        saved_params.clear()
+        self.param_stack = args_to_pass
+        self.pending_params = []
         self.current_upvalues = []
         self.pc = self.labels[target]
         return "jump"
 
     def _op_RETURN(self, args):
-        self.return_value = self.val(args[0]) if args else None
-        if self.call_stack:
-            self.pc, self.param_stack, self.registers, self.current_upvalues = self.call_stack.pop()
-            return "jump"
-        self.current_upvalues = []
+        value = self.val(args[0]) if args else None
+        return self._return_with([value])
 
     def _op_RESULT(self, args):
-        self.registers[args[0]] = self.return_value
+        value = self.last_return[0] if self.last_return else None
+        self.registers[args[0]] = value
 
     # 数组操作
     def _op_ARR_INIT(self, args):
