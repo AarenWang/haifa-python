@@ -7,6 +7,9 @@
 ### 使用 pip 安装
 ```bash
 pip install .
+# 方式一：直接调用 Python 模块
+python -m compiler.jq_cli --help
+# 方式二：使用安装后的 pyjq 命令
 pyjq --help
 ```
 
@@ -20,6 +23,10 @@ pyinstaller --onefile --name pyjq compiler/jq_cli.py
 
 ## 2. 基本命令结构
 ```bash
+# 直接运行 Python 模块
+python -m compiler.jq_cli '<filter>' [--input FILE] [options]
+
+# 使用 pyjq 命令
 pyjq '<filter>' [--input FILE] [options]
 ```
 
@@ -48,39 +55,49 @@ pyjq '<filter>' [--input FILE] [options]
 
 ### 5.1 访问字段与管道
 ```bash
-pyjq '.user.name' --input user.json
+python -m compiler.jq_cli '.user.name' --input user.json
 pyjq '.items[] | .price' --input orders.json
+```
+
+示例 `user.json`：
+```json
+{
+  "user": {
+    "name": "Alice",
+    "email": "alice@example.com"
+  }
+}
 ```
 
 ### 5.2 变量与绑定
 ```bash
-pyjq '$foo | .value' -n --argjson foo '{"value": 42}'
+python -m compiler.jq_cli '$foo | .value' -n --argjson foo '{"value": 42}'
 pyjq '.[] | (.|keys) as $k | {name: .name, keys: $k}' --input data.json
 ```
 
 ### 5.3 数组与集合操作
 ```bash
 # map/select
-pyjq '.items | map(.score)' --input scores.json
+python -m compiler.jq_cli '.items | map(.score)' --input scores.json
 pyjq '.[] | select(.active)' --input users.json
 
 # slice/index
-pyjq '.items[0:3]' --input data.json
+python -m compiler.jq_cli '.items[0:3]' --input data.json
 
 # 排序与唯一
 pyjq '.items | sort_by(.age)' --input people.json
-pyjq '.items | unique_by(.id)' --input people.json
+python -m compiler.jq_cli '.items | unique_by(.id)' --input people.json
 ```
 
 ### 5.4 聚合与 reduce
 ```bash
-pyjq '.values | reduce("sum")' --input numbers.json
+python -m compiler.jq_cli '.values | reduce("sum")' --input numbers.json
 pyjq 'reduce(.items, "product")' --input numbers.json
 ```
 
 ### 5.5 字符串处理
 ```bash
-pyjq '.message | tostring' --input payload.json
+python -m compiler.jq_cli '.message | tostring' --input payload.json
 pyjq '.items | join(", ")' --input list.json
 ```
 
@@ -88,9 +105,22 @@ pyjq '.items | join(", ")' --input list.json
 
 使用 `--visualize` 结合内建 VM 可视化器，查看字节码执行：
 ```bash
+python -m compiler.jq_cli '.items[] | .name' --input data.json --visualize
 pyjq '.items[] | .name' --input data.json --visualize
+# 强制使用 headless 模式
+python -m compiler.jq_cli '.items[] | .name' --input data.json --visualize curses
 ```
-如果 GUI 环境受限，CLI 会尝试回退到 headless 可视化器，需要确保 SDL/headless 依赖已安装。
+GUI 版可视化依赖 `pygame`，需要提前安装：
+```bash
+python -m pip install pygame
+```
+若无法使用图形界面，CLI 会自动尝试导入 `vm_visualizer_headless`，以控制台形式输出执行轨迹。
+
+Headless 模式基于 `curses` 渲染，常用按键：
+- `SPACE` / `p`：开始/暂停自动执行
+- `n` / 右方向键：单步执行
+- `r`：重置并回到初始状态
+- `q`：退出
 
 ## 7. 常见问题
 

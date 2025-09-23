@@ -79,6 +79,13 @@ class TestJQCLI(unittest.TestCase):
         self.assertIn("Traceback", err)
         self.assertIn("JQRuntimeError", err)
 
+    def test_cli_visualize_curses_mode(self):
+        with mock.patch("compiler.vm_visualizer_headless.VMVisualizer") as mock_vis:
+            mock_vis.return_value.run.return_value = None
+            exit_code = main([".", "--visualize", "curses", "-n"])
+        self.assertEqual(exit_code, 0)
+        mock_vis.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

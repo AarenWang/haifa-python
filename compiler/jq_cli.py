@@ -49,7 +49,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-c", "--compact-output", action="store_true", help="Compact JSON output (no spaces)")
     parser.add_argument("--arg", action="append", nargs=2, metavar=("name", "value"), help="Set variable $name to string value")
     parser.add_argument("--argjson", action="append", nargs=2, metavar=("name", "json"), help="Set variable $name to JSON value")
-    parser.add_argument("--visualize", action="store_true", help="Visualize VM execution")
+    parser.add_argument(
+        "--visualize",
+        nargs="?",
+        const="gui",
+        choices=["gui", "curses"],
+        help="Visualize VM execution (optional mode: gui or curses)",
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -93,6 +99,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 env[name] = json.loads(value)
         
         if args.visualize:
+            selected_mode = args.visualize or "gui"
             if _RUNNING_AS_SCRIPT:
                 from compiler.jq_parser import parse_jq_program  # type: ignore
                 from compiler.jq_compiler import compile_to_bytecode, INPUT_REGISTER  # type: ignore
@@ -101,46 +108,55 @@ def main(argv: Optional[List[str]] = None) -> int:
                 from .jq_parser import parse_jq_program
                 from .jq_compiler import compile_to_bytecode, INPUT_REGISTER
                 from .jq_vm import JQVM
-            # Try GUI visualizer first; fallback to headless if pygame not available
-            VMVisualizer = None
-            gui_exc = None
-            try:
-                if _RUNNING_AS_SCRIPT:
-                    from compiler.vm_visualizer import VMVisualizer as _GUIVisualizer  # type: ignore
-                else:
-                    from .vm_visualizer import VMVisualizer as _GUIVisualizer
-                VMVisualizer = _GUIVisualizer
-            except Exception as e:
-                gui_exc = e
-                try:
-                    if _RUNNING_AS_SCRIPT:
-                        from compiler.vm_visualizer_headless import VMVisualizer as _HeadlessVisualizer  # type: ignore
-                    else:
-                        from .vm_visualizer_headless import VMVisualizer as _HeadlessVisualizer
-                    VMVisualizer = _HeadlessVisualizer
-                except Exception as headless_exc:
-                    print(
-                        "Visualizer unavailable. GUI error: "
-                        f"{gui_exc}; Headless error: {headless_exc}",
-                        file=sys.stderr,
-                    )
-                    return 1
 
             if not inputs:
                 print("Cannot visualize with empty input.", file=sys.stderr)
                 return 1
-            
-            # For visualization, we run one input at a time.
-            # Using the first input for simplicity.
+
+            vm_class = None
+            gui_exc = None
+
+            if selected_mode == "gui":
+                try:
+                    if _RUNNING_AS_SCRIPT:
+                        from compiler.vm_visualizer import VMVisualizer as vm_class  # type: ignore
+                    else:
+                        from .vm_visualizer import VMVisualizer as vm_class
+                except Exception as e:
+                    gui_exc = e
+                    selected_mode = "curses"
+
+            if selected_mode == "curses":
+                try:
+                    if _RUNNING_AS_SCRIPT:
+                        from compiler.vm_visualizer_headless import VMVisualizer as vm_class  # type: ignore
+                    else:
+                        from .vm_visualizer_headless import VMVisualizer as vm_class
+                except Exception as headless_exc:
+                    if gui_exc is not None:
+                        print(
+                            "Visualizer unavailable. GUI error: "
+                            f"{gui_exc}; Headless error: {headless_exc}",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(f"Visualizer unavailable: {headless_exc}", file=sys.stderr)
+                    return 1
+
+            # For visualization, we run one input at a time (use first).
             first_input = next(iter(inputs), None)
 
-            ast = parse_jq_program(args.filter)
+            ast = parse_jq_program(filter_expr)
             bytecode = compile_to_bytecode(ast)
-            
+
             vm = JQVM(bytecode)
             vm.registers[INPUT_REGISTER] = first_input
-            
-            visualizer = VMVisualizer(vm)
+
+            if env:
+                for name, value in env.items():
+                    vm.registers[f"__jq_var_{name}"] = value
+
+            visualizer = vm_class(vm)
             visualizer.run()
             return 0
 
