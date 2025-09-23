@@ -9,6 +9,11 @@
 - 提供命令行入口，与标准输入/输出对接，兼容常见 `jq` 用法。
 - 保持现有类汇编指令集与测试可运行，避免破坏现有功能。
 
+## 分层架构（自里程碑 5/6 起）
+- Core VM（bytecode_vm）只承载通用指令；
+- JQ VM（jq_vm）作为工具层入口，承载/注册 jq 专属处理器；
+- 编译器（jq_compiler）对接 JQ VM，后续逐步将 jq-only 指令从 Core 迁出。
+
 ## 非目标
 - 不追求 100% 覆盖 `jq` 全部语法/函数，重点围绕常用子集。
 - 暂不实现即时编译、并行执行、流式增量 JSON 解析等高级特性。
@@ -62,6 +67,23 @@
 - `//` 编译为空值合并（左值非 null 则取左，否则取右）。
 - VM `JZ` 采用统一真值语义（Python falsy 即跳转），兼容既有用例；保留 `DIV` 为整除以通过既有测试。
 - 新增解析/运行时用例，全部测试通过（70 passed）。
+
+2025-09-23（Milestone 2 完成）
+- 支持索引与切片：`.foo[0]`、`.[-1]`、`.[i:j]`、`.[ :j]`、`.[i: ]`，负索引归一化且边界截断。
+- 编译为 `GET_INDEX` + 循环收集；切片结果作为数组值。
+
+2025-09-23（Milestone 3 完成）
+- 核心集合过滤器：`keys`, `has`, `contains`, `add`, `join`, `reverse`, `first`, `last`, `any`, `all`。
+- 新增 VM 指令或模板展开，覆盖对象/数组/字符串的常见语义；稳定等值判定。
+
+2025-09-23（Milestone 4 完成）
+- 排序与聚合家族：`sort`, `sort_by(expr)`, `min/max`, `min_by/max_by`, `unique/unique_by`, `group_by(expr)`。
+- 采用（keys, values）配对策略与健壮排序键，保证混合类型下的稳定排序与分组。
+
+2025-09-23（Milestone 5 完成）
+- 变量与绑定：语法支持 `$var` 与 `expr as $x`，变量在编译期映射到固定寄存器 `__jq_var_<name>`。
+- CLI 互操作：`--arg/--argjson` 变量注入，`-n/--null-input`，`-R/--raw-input`，`--slurp` 输入模式，`-r/--raw-output`，`-c/--compact-output` 输出模式，`-f/--filter-file` 读取过滤器文件。
+- 测试覆盖：变量绑定链式管道、raw/compact 输出、null-input 与 raw-input、filter 文件等端到端用例。
 
 ### 阶段 3：扩展特性与优化
 - **更多过滤器**

@@ -81,6 +81,10 @@ class BytecodeVM:
             Opcode.MIN_BY: self._op_MIN_BY,
             Opcode.MAX_BY: self._op_MAX_BY,
             Opcode.GROUP_BY: self._op_GROUP_BY,
+            Opcode.TOSTRING: self._op_TOSTRING,
+            Opcode.TONUMBER: self._op_TONUMBER,
+            Opcode.SPLIT: self._op_SPLIT,
+            Opcode.GSUB: self._op_GSUB,
             Opcode.PRINT: self._op_PRINT,
             Opcode.HALT: self._op_HALT,
         }
@@ -634,6 +638,62 @@ class BytecodeVM:
                 bucket.append(v)
             if bucket:
                 out.append(bucket)
+        self.registers[args[0]] = out
+
+    # ---------- Strings / regex ----------
+    def _op_TOSTRING(self, args):
+        val = self.val(args[1])
+        if isinstance(val, str):
+            self.registers[args[0]] = val
+            return
+        try:
+            s = json.dumps(val, ensure_ascii=False)
+        except Exception:
+            s = str(val)
+        self.registers[args[0]] = s
+
+    def _op_TONUMBER(self, args):
+        val = self.val(args[1])
+        out = None
+        try:
+            if isinstance(val, (int, float)):
+                out = val
+            elif isinstance(val, bool):
+                out = 1 if val else 0
+            elif isinstance(val, str):
+                try:
+                    out = json.loads(val)
+                    if not isinstance(out, (int, float)):
+                        out = float(val) if val.strip() else None
+                except Exception:
+                    out = float(val) if val.strip() else None
+            else:
+                out = None
+        except Exception:
+            out = None
+        self.registers[args[0]] = out
+
+    def _op_SPLIT(self, args):
+        s = self.val(args[1])
+        sep = self.val(args[2])
+        if isinstance(s, str) and isinstance(sep, str):
+            parts = s.split(sep)
+        else:
+            parts = []
+        self.registers[args[0]] = parts
+
+    def _op_GSUB(self, args):
+        import re
+        s = self.val(args[1])
+        pat = self.val(args[2])
+        repl = self.val(args[3])
+        if isinstance(s, str) and isinstance(pat, str) and isinstance(repl, str):
+            try:
+                out = re.sub(pat, repl, s)
+            except re.error:
+                out = s
+        else:
+            out = s
         self.registers[args[0]] = out
 
     # 输出/终止

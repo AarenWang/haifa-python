@@ -15,6 +15,8 @@ from .jq_ast import (
     BinaryOp,
     Index,
     Slice,
+    VarRef,
+    AsBinding,
     flatten_pipe,
 )
 
@@ -69,8 +71,14 @@ class JQCompiler:
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
+        if isinstance(stage, AsBinding):
+            value_reg = self._eval_expression(stage.source, current_reg)
+            var_reg = self._var_reg(stage.name)
+            self.instructions.append(Instruction(Opcode.MOV, [var_reg, value_reg]))
+            self._compile_pipeline(rest, current_reg)
+            return
         # Generic expression stage limited to expression nodes
-        if isinstance(stage, (UnaryOp, BinaryOp, Index, Slice)):
+        if isinstance(stage, (UnaryOp, BinaryOp, Index, Slice, VarRef)):
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
@@ -99,6 +107,30 @@ class JQCompiler:
             return
 
         if isinstance(stage, FunctionCall):
+            # Milestone 6: string/regex tools
+            if stage.name == "tostring" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.TOSTRING, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "tonumber" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.TONUMBER, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "split" and len(stage.args) == 1:
+                sep_reg = self._eval_expression(stage.args[0], current_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.SPLIT, [dest, current_reg, sep_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "gsub" and len(stage.args) == 2:
+                pat_reg = self._eval_expression(stage.args[0], current_reg)
+                repl_reg = self._eval_expression(stage.args[1], current_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.GSUB, [dest, current_reg, pat_reg, repl_reg]))
+                self._compile_pipeline(rest, dest)
+                return
             # Milestone 4: sort & aggregation
             if stage.name == "sort" and len(stage.args) == 0:
                 dest = self._new_temp()
@@ -452,6 +484,9 @@ class JQCompiler:
         self._label_counter += 1
         return name
 
+    def _var_reg(self, name: str) -> str:
+        return f"__jq_var_{name}"
+
     def _eval_expression(self, node: JQNode, base_reg: str) -> str:
         if isinstance(node, Identity):
             return base_reg
@@ -459,6 +494,8 @@ class JQCompiler:
             dest = self._new_temp()
             self.instructions.append(Instruction(Opcode.LOAD_CONST, [dest, node.value]))
             return dest
+        if isinstance(node, VarRef):
+            return self._var_reg(node.name)
         if isinstance(node, UnaryOp):
             operand = self._eval_expression(node.operand, base_reg)
             dest = self._new_temp()

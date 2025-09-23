@@ -77,6 +77,17 @@ class Slice(JQNode):
     end: Optional[JQNode]
 
 
+@dataclass(frozen=True)
+class VarRef(JQNode):
+    name: str  # without leading '$'
+
+
+@dataclass(frozen=True)
+class AsBinding(JQNode):
+    source: JQNode  # expression to evaluate and bind
+    name: str       # variable name without leading '$'
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -98,5 +109,7 @@ __all__ = [
     "BinaryOp",
     "Index",
     "Slice",
+    "VarRef",
+    "AsBinding",
     "flatten_pipe",
 ]
