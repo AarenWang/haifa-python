@@ -80,6 +80,17 @@ class Opcode(Enum):
     ALL = auto()          # ALL dst, value
     AGG_ADD = auto()      # AGG_ADD dst, value (array aggregation)
 
+    # Sorting and aggregation family (Milestone 4)
+    SORT = auto()         # SORT dst, src
+    SORT_BY = auto()      # SORT_BY dst, src, keys_buf
+    UNIQUE = auto()       # UNIQUE dst, src
+    UNIQUE_BY = auto()    # UNIQUE_BY dst, src, keys_buf
+    MIN = auto()          # MIN dst, src
+    MAX = auto()          # MAX dst, src
+    MIN_BY = auto()       # MIN_BY dst, src, keys_buf
+    MAX_BY = auto()       # MAX_BY dst, src, keys_buf
+    GROUP_BY = auto()     # GROUP_BY dst, src, keys_buf
+
 
 @dataclass
 class Instruction:

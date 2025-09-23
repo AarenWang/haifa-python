@@ -1,4 +1,5 @@
 import copy
+import json
 
 from bytecode import Opcode, Instruction
 from value_utils import resolve_value
@@ -71,6 +72,15 @@ class BytecodeVM:
             Opcode.ANY: self._op_ANY,
             Opcode.ALL: self._op_ALL,
             Opcode.AGG_ADD: self._op_AGG_ADD,
+            Opcode.SORT: self._op_SORT,
+            Opcode.SORT_BY: self._op_SORT_BY,
+            Opcode.UNIQUE: self._op_UNIQUE,
+            Opcode.UNIQUE_BY: self._op_UNIQUE_BY,
+            Opcode.MIN: self._op_MIN,
+            Opcode.MAX: self._op_MAX,
+            Opcode.MIN_BY: self._op_MIN_BY,
+            Opcode.MAX_BY: self._op_MAX_BY,
+            Opcode.GROUP_BY: self._op_GROUP_BY,
             Opcode.PRINT: self._op_PRINT,
             Opcode.HALT: self._op_HALT,
         }
@@ -486,6 +496,132 @@ class BytecodeVM:
                 for x in val:
                     res.extend(x)
                 out = res
+        self.registers[args[0]] = out
+
+    # ---------- Sorting & aggregation family ----------
+    def _sort_key(self, x):
+        # Provide a robust key for mixed types: (rank, value)
+        # Ranks: None < bool < number < string < list < dict < other
+        if x is None:
+            return (0, 0)
+        if isinstance(x, bool):
+            return (1, int(x))
+        if isinstance(x, (int, float)):
+            return (2, x)
+        if isinstance(x, str):
+            return (3, x)
+        if isinstance(x, list):
+            try:
+                return (4, [self._sort_key(v) for v in x])
+            except Exception:
+                return (4, len(x))
+        if isinstance(x, dict):
+            try:
+                items = sorted((str(k), x[k]) for k in x.keys())
+                return (5, [(k, self._sort_key(v)) for k, v in items])
+            except Exception:
+                # Fallback to JSON string for stability
+                return (5, json.dumps(x, sort_keys=True, ensure_ascii=False))
+        return (6, str(x))
+
+    def _op_SORT(self, args):
+        src = self.val(args[1])
+        if isinstance(src, list):
+            out = sorted(src, key=self._sort_key)
+        else:
+            out = src
+        self.registers[args[0]] = out
+
+    def _op_SORT_BY(self, args):
+        src = self.val(args[1])
+        keys = self.registers.get(args[2])
+        if isinstance(src, list) and isinstance(keys, list):
+            pairs = list(zip(keys, src))
+            pairs.sort(key=lambda kv: self._sort_key(kv[0]))
+            out = [v for _, v in pairs]
+        else:
+            out = src
+        self.registers[args[0]] = out
+
+    def _op_UNIQUE(self, args):
+        src = self.val(args[1])
+        if isinstance(src, list):
+            seen = []
+            out = []
+            for v in src:
+                if not any(v == s for s in seen):
+                    seen.append(v)
+                    out.append(v)
+        else:
+            out = src
+        self.registers[args[0]] = out
+
+    def _op_UNIQUE_BY(self, args):
+        src = self.val(args[1])
+        keys = self.registers.get(args[2])
+        if isinstance(src, list) and isinstance(keys, list):
+            seen = []
+            out = []
+            for k, v in zip(keys, src):
+                sk = self._sort_key(k)
+                if sk not in seen:
+                    seen.append(sk)
+                    out.append(v)
+        else:
+            out = src
+        self.registers[args[0]] = out
+
+    def _op_MIN(self, args):
+        src = self.val(args[1])
+        out = None
+        if isinstance(src, list) and src:
+            out = min(src, key=self._sort_key)
+        self.registers[args[0]] = out
+
+    def _op_MAX(self, args):
+        src = self.val(args[1])
+        out = None
+        if isinstance(src, list) and src:
+            out = max(src, key=self._sort_key)
+        self.registers[args[0]] = out
+
+    def _op_MIN_BY(self, args):
+        src = self.val(args[1])
+        keys = self.registers.get(args[2])
+        out = None
+        if isinstance(src, list) and isinstance(keys, list) and src:
+            idx = min(range(len(src)), key=lambda i: self._sort_key(keys[i]))
+            out = src[idx]
+        self.registers[args[0]] = out
+
+    def _op_MAX_BY(self, args):
+        src = self.val(args[1])
+        keys = self.registers.get(args[2])
+        out = None
+        if isinstance(src, list) and isinstance(keys, list) and src:
+            idx = max(range(len(src)), key=lambda i: self._sort_key(keys[i]))
+            out = src[idx]
+        self.registers[args[0]] = out
+
+    def _op_GROUP_BY(self, args):
+        src = self.val(args[1])
+        keys = self.registers.get(args[2])
+        out = []
+        if isinstance(src, list) and isinstance(keys, list):
+            # stable sort by key then group contiguous equal keys
+            pairs = list(zip(keys, src))
+            pairs.sort(key=lambda kv: self._sort_key(kv[0]))
+            current_key = object()
+            bucket = []
+            for k, v in pairs:
+                sk = self._sort_key(k)
+                if bucket and sk != current_key:
+                    out.append(bucket)
+                    bucket = []
+                current_key = sk
+                bucket.append(v)
+            if bucket:
+                out.append(bucket)
         self.registers[args[0]] = out
 
     # 输出/终止
