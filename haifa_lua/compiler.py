@@ -236,7 +236,6 @@ class LuaCompiler:
         # treat as global function binding
         func_label = stmt.name.name
         info = self.closure_map.get(id(stmt), FunctionInfo())
-        self.instructions.append(Instruction(Opcode.LOAD_CONST, [f"G_{func_label}", func_label]))
         compiler = LuaCompiler(self.closure_map, info, info.upvalues)
         compiler.instructions.append(Instruction(Opcode.LABEL, [func_label]))
         compiler.scope_stack = [{}]
@@ -246,6 +245,7 @@ class LuaCompiler:
         compiler.instructions.append(Instruction(Opcode.RETURN, ["0"]))
         self.function_blocks.extend(compiler.instructions)
         self.function_blocks.extend(compiler.function_blocks)
+        self.instructions.append(Instruction(Opcode.CLOSURE, [f"G_{func_label}", func_label]))
 
     # ------------------------------------------------------------------ Expressions
     def _compile_expr(self, expr: Expr) -> str:
@@ -330,12 +330,7 @@ class LuaCompiler:
         raise CompileError(f"Unsupported binary operator {op}")
 
     def _compile_call(self, expr: CallExpr, want_list: bool = False) -> str:
-        direct_label = None
-        if isinstance(expr.callee, Identifier) and self._lookup_binding(expr.callee.name) is None:
-            direct_label = expr.callee.name
-        callee_reg = None
-        if direct_label is None:
-            callee_reg = self._compile_expr(expr.callee)
+        callee_reg = self._compile_expr(expr.callee)
         total_args = len(expr.args)
         prepared_args = []
         for idx, arg in enumerate(expr.args):
@@ -355,10 +350,7 @@ class LuaCompiler:
         for reg, expand in prepared_args:
             opcode = Opcode.PARAM_EXPAND if expand else Opcode.PARAM
             self.instructions.append(Instruction(opcode, [reg]))
-        if direct_label is not None:
-            self.instructions.append(Instruction(Opcode.CALL, [direct_label]))
-        else:
-            self.instructions.append(Instruction(Opcode.CALL_VALUE, [callee_reg]))
+        self.instructions.append(Instruction(Opcode.CALL_VALUE, [callee_reg]))
         if want_list:
             dst = self._new_temp()
             self.instructions.append(Instruction(Opcode.RESULT_LIST, [dst]))

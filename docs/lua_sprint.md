@@ -50,10 +50,10 @@
 - [ ] 增加测试：多返回值解构、链式调用、vararg 处理。
 
 **Milestone 2C：标准库核心**
-- [ ] 内建库：`print`, `math` 基础函数、`table.insert/remove`, `string.len` 等常用函数。
-- [ ] 全局环境与库注册机制，允许热更新。
-- [ ] 文档/示例：`docs/lua_guide.md` 草案、标准库使用示例。
-- [ ] 集成测试：综合脚本验证库与闭包、多返回值的互操作。
+- [x] 内建库：`print`, `math` 基础函数、`table.insert/remove`, `string.len` 等常用函数。
+- [x] 全局环境与库注册机制，允许热更新。
+- [x] 文档/示例：`docs/lua_guide.md` 草案、标准库使用示例。
+- [x] 集成测试：综合脚本验证库与闭包、多返回值的互操作。
 
 ### Milestone 3：协程与调试增强
 - [ ] 协程语义：`coroutine.create/resume/yield`，VM 上实现多执行上下文。
