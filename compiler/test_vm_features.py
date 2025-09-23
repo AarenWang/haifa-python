@@ -1,6 +1,7 @@
 from .parser import parse
 from .compiler import ASTCompiler
 from .bytecode_vm import BytecodeVM
+from .bytecode import Opcode, Instruction
 
 import unittest
 
@@ -149,3 +150,78 @@ class TestVMFeatures(unittest.TestCase):
         ]
         output = self.run_script(script)
         assert output == [13]
+
+
+    def test_extended_core_opcodes(self):
+        instructions = [
+            Instruction(Opcode.LOAD_IMM, ['a', 5]),
+            Instruction(Opcode.CLR, ['zero']),
+            Instruction(Opcode.CMP_IMM, ['cmp_eq', 'a', '5']),
+            Instruction(Opcode.CMP_IMM, ['cmp_gt', 'a', '3']),
+            Instruction(Opcode.CMP_IMM, ['cmp_lt', 'a', '10']),
+            Instruction(Opcode.JNZ, ['cmp_gt', 'gt_true']),
+            Instruction(Opcode.LOAD_IMM, ['flag', 0]),
+            Instruction(Opcode.JMP_REL, ['2']),
+            Instruction(Opcode.LABEL, ['gt_true']),
+            Instruction(Opcode.LOAD_IMM, ['flag', 1]),
+            Instruction(Opcode.PUSH, ['a']),
+            Instruction(Opcode.LOAD_IMM, ['a', 99]),
+            Instruction(Opcode.POP, ['restored']),
+            Instruction(Opcode.ARR_INIT, ['src', '4']),
+            Instruction(Opcode.ARR_SET, ['src', '0', '1']),
+            Instruction(Opcode.ARR_SET, ['src', '1', '2']),
+            Instruction(Opcode.ARR_SET, ['src', '2', '3']),
+            Instruction(Opcode.ARR_SET, ['src', '3', '4']),
+            Instruction(Opcode.ARR_COPY, ['dst', 'src', '1', '2']),
+            Instruction(Opcode.ARR_GET, ['dst_item0', 'dst', '0']),
+            Instruction(Opcode.ARR_GET, ['dst_item1', 'dst', '1']),
+            Instruction(Opcode.LEN, ['dst_len', 'dst']),
+            Instruction(Opcode.LOAD_CONST, ['obj', {'k': 42}]),
+            Instruction(Opcode.LOAD_CONST, ['arr_val', [1, 2]]),
+            Instruction(Opcode.LOAD_CONST, ['nil', None]),
+            Instruction(Opcode.IS_OBJ, ['is_obj', 'obj']),
+            Instruction(Opcode.IS_ARR, ['is_arr', 'arr_val']),
+            Instruction(Opcode.IS_NULL, ['is_null', 'nil']),
+            Instruction(Opcode.COALESCE, ['coal1', 'nil', 'arr_val']),
+            Instruction(Opcode.COALESCE, ['coal2', 'obj', 'arr_val']),
+            Instruction(Opcode.LOAD_IMM, ['jump_test', 0]),
+            Instruction(Opcode.JMP_REL, ['2']),
+            Instruction(Opcode.LOAD_IMM, ['jump_test', 1]),
+            Instruction(Opcode.LOAD_IMM, ['jump_test', 2]),
+            Instruction(Opcode.PRINT, ['zero']),
+            Instruction(Opcode.PRINT, ['cmp_eq']),
+            Instruction(Opcode.PRINT, ['cmp_gt']),
+            Instruction(Opcode.PRINT, ['cmp_lt']),
+            Instruction(Opcode.PRINT, ['flag']),
+            Instruction(Opcode.PRINT, ['restored']),
+            Instruction(Opcode.PRINT, ['dst_len']),
+            Instruction(Opcode.PRINT, ['dst_item0']),
+            Instruction(Opcode.PRINT, ['dst_item1']),
+            Instruction(Opcode.PRINT, ['is_obj']),
+            Instruction(Opcode.PRINT, ['is_arr']),
+            Instruction(Opcode.PRINT, ['is_null']),
+            Instruction(Opcode.PRINT, ['coal1']),
+            Instruction(Opcode.PRINT, ['coal2']),
+            Instruction(Opcode.PRINT, ['jump_test']),
+            Instruction(Opcode.HALT, []),
+        ]
+
+        vm = BytecodeVM(instructions)
+        output = vm.run()
+        assert output == [
+            0,
+            0,
+            1,
+            -1,
+            1,
+            5,
+            2,
+            2,
+            3,
+            1,
+            1,
+            1,
+            [1, 2],
+            {'k': 42},
+            2,
+        ]

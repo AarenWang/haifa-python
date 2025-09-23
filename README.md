@@ -41,6 +41,15 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
    pytest
    ```
 
+## Core 指令概览
+- **运算/赋值**：`MOV`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `CLR`, `CMP_IMM`
+- **逻辑/跳转**：`EQ`, `GT`, `LT`, `AND`, `OR`, `NOT`, `JMP`, `JZ`, `JNZ`, `JMP_REL`, `LABEL`
+- **位操作**：`AND_BIT`, `OR_BIT`, `XOR`, `NOT_BIT`, `SHL`, `SHR`, `SAR`
+- **栈与调用**：`CALL`, `RETURN`, `PARAM`, `ARG`, `RESULT`, `PUSH`, `POP`
+- **数组**：`ARR_INIT`, `ARR_SET`, `ARR_GET`, `ARR_COPY`, `LEN`
+- **类型/空值工具**：`IS_OBJ`, `IS_ARR`, `IS_NULL`, `COALESCE`
+- **输出/辅助**：`PRINT`, `HALT`
+
 ### 运行类汇编脚本
 - 编写汇编风格脚本，例如：
   ```
@@ -108,7 +117,7 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
   vm = BytecodeVM(bytecode)
   VMVisualizer(vm).run()
   ```
-  在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。
+  在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。支持 `/` 搜索指令、寄存器变更高亮，以及 `L` 导出执行轨迹（JSONL）。
 
 ### jq 命令行示例
 ```bash

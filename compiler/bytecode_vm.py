@@ -33,6 +33,17 @@ class BytecodeVM:
             Opcode.AND: self._op_AND,
             Opcode.OR: self._op_OR,
             Opcode.NOT: self._op_NOT,
+            Opcode.CLR: self._op_CLR,
+            Opcode.CMP_IMM: self._op_CMP_IMM,
+            Opcode.JNZ: self._op_JNZ,
+            Opcode.JMP_REL: self._op_JMP_REL,
+            Opcode.PUSH: self._op_PUSH,
+            Opcode.POP: self._op_POP,
+            Opcode.ARR_COPY: self._op_ARR_COPY,
+            Opcode.IS_OBJ: self._op_IS_OBJ,
+            Opcode.IS_ARR: self._op_IS_ARR,
+            Opcode.IS_NULL: self._op_IS_NULL,
+            Opcode.COALESCE: self._op_COALESCE,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -153,6 +164,21 @@ class BytecodeVM:
     def _op_NOT(self, args):
         self.registers[args[0]] = int(not bool(self.val(args[1])))
 
+    def _op_CLR(self, args):
+        self.registers[args[0]] = 0
+
+    def _op_CMP_IMM(self, args):
+        dst, src, imm = args
+        left = self.val(src)
+        imm_val = self.val(imm) if isinstance(imm, str) and not imm.lstrip("-+").isdigit() else int(imm)
+        if left < imm_val:
+            result = -1
+        elif left > imm_val:
+            result = 1
+        else:
+            result = 0
+        self.registers[dst] = result
+
     # 位运算
     def _op_AND_BIT(self, args):
         self.registers[args[0]] = self.val(args[1]) & self.val(args[2])
@@ -184,6 +210,16 @@ class BytecodeVM:
         if not bool(self.val(args[0])):
             self.pc = self.labels[args[1]]
             return "jump"
+
+    def _op_JNZ(self, args):
+        if bool(self.val(args[0])):
+            self.pc = self.labels[args[1]]
+            return "jump"
+
+    def _op_JMP_REL(self, args):
+        offset = int(self.val(args[0]))
+        self.pc += offset
+        return "jump"
 
     def _op_LABEL(self, args):
         pass
@@ -236,6 +272,40 @@ class BytecodeVM:
     def _op_LEN(self, args):
         array = self.arrays.get(args[1], [])
         self.registers[args[0]] = len(array)
+
+    def _op_PUSH(self, args):
+        self.stack.append(self.val(args[0]))
+
+    def _op_POP(self, args):
+        if not self.stack:
+            self.registers[args[0]] = None
+        else:
+            self.registers[args[0]] = self.stack.pop()
+
+    def _op_ARR_COPY(self, args):
+        dst_name, src_name, start_arg, length_arg = args
+        start = int(self.val(start_arg))
+        length = int(self.val(length_arg))
+        src = self.arrays.get(src_name, [])
+        copy_slice = list(src[start:start + length]) if length >= 0 else []
+        self.arrays[dst_name] = copy_slice
+
+    def _op_IS_OBJ(self, args):
+        self.registers[args[0]] = int(isinstance(self.val(args[1]), dict))
+
+    def _op_IS_ARR(self, args):
+        self.registers[args[0]] = int(isinstance(self.val(args[1]), list))
+
+    def _op_IS_NULL(self, args):
+        self.registers[args[0]] = int(self.val(args[1]) is None)
+
+    def _op_COALESCE(self, args):
+        dst, lhs, rhs = args
+        left_val = self.val(lhs)
+        if left_val is None:
+            self.registers[dst] = self.val(rhs)
+        else:
+            self.registers[dst] = left_val
 
     # 输出/终止
     def _op_PRINT(self, args):

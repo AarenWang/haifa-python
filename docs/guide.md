@@ -161,6 +161,11 @@ vm = BytecodeVM(bytecode)
 VMVisualizer(vm).run()
 ```
 
+### 6.3 可视化器快捷键
+- GUI 版：`P` 运行/暂停、`SPACE` 单步、`/` 进入指令搜索（回车确认、ESC 取消）、`L` 导出执行轨迹（JSONL）、`R` 重置、`Q` 退出。
+- GUI 会高亮最近变更的寄存器，并在搜索期间标记匹配指令。
+- 导出轨迹文件位于当前目录，命名为 `vm_trace_YYYYMMDD_HHMMSS.jsonl`。
+
 ## 7. 可视化执行流程
 使用 `--visualize` 结合内建 VM 可视化器，查看字节码执行：
 ```bash
@@ -180,18 +185,19 @@ Headless 模式基于 `curses` 渲染，常用按键：
 - `n` / 右方向键：单步执行
 - `r`：重置并回到初始状态
 - `q`：退出
+- Headless 默认逐步打印寄存器/输出变化；如需导出轨迹，可在 GUI 模式运行后使用 `L` 键生成文件。
 
 ## 8. 常见问题
 
-### 7.1 运行时报 “Failed to parse JSON input”
+### 8.1 运行时报 “Failed to parse JSON input”
 确认输入文件/stdin 是合法 JSON；如需处理文本，请加 `-R`。
 
-### 7.2 运行时抛出 “jq execution failed”
+### 8.2 运行时抛出 “jq execution failed”
 说明过滤器在某个输入上出错。建议：
 1. 使用 `--debug` 获取堆栈和输入编号；
 2. 检查该输入数据结构，确认字段存在且类型符合预期。
 
-### 7.3 大量数据内存占用高
+### 8.3 大量数据内存占用高
 `pyjq` 默认流式输出，不会整体缓存。若仍担心内存，可串联 `head`、`> file` 等命令行工具控制输出。
 
 ## 9. 后续阅读
