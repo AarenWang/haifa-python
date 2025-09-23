@@ -68,6 +68,18 @@ class Opcode(Enum):
     STRUCT_ENDWHILE = auto()
     STRUCT_BREAK = auto()
 
+    # jq core filters (Milestone 3)
+    KEYS = auto()         # KEYS dst, src
+    HAS = auto()          # HAS dst, container, needle
+    CONTAINS = auto()     # CONTAINS dst, container, needle
+    JOIN = auto()         # JOIN dst, array, sep
+    REVERSE = auto()      # REVERSE dst, value
+    FIRST = auto()        # FIRST dst, value
+    LAST = auto()         # LAST dst, value
+    ANY = auto()          # ANY dst, value
+    ALL = auto()          # ALL dst, value
+    AGG_ADD = auto()      # AGG_ADD dst, value (array aggregation)
+
 
 @dataclass
 class Instruction:

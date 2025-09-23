@@ -260,6 +260,120 @@ class BytecodeVM:
                 array = self.arrays.get(args[1], [])
                 self.registers[args[0]] = len(array)
 
+            # jq core filters
+            elif op == Opcode.KEYS:
+                src = self.val(args[1])
+                keys = []
+                if isinstance(src, dict):
+                    try:
+                        keys = sorted(list(src.keys()))
+                    except Exception:
+                        keys = list(src.keys())
+                elif isinstance(src, (list, tuple)):
+                    keys = list(range(len(src)))
+                self.registers[args[0]] = keys
+            elif op == Opcode.HAS:
+                container = self.val(args[1])
+                needle = self.val(args[2])
+                result = False
+                if isinstance(container, dict) and isinstance(needle, str):
+                    result = needle in container
+                elif isinstance(container, (list, tuple)):
+                    try:
+                        idx = int(needle)
+                        if -len(container) <= idx < len(container):
+                            result = True
+                        else:
+                            result = False
+                    except Exception:
+                        result = False
+                self.registers[args[0]] = int(result)
+            elif op == Opcode.CONTAINS:
+                container = self.val(args[1])
+                needle = self.val(args[2])
+                result = False
+                if isinstance(container, str) and isinstance(needle, str):
+                    result = needle in container
+                elif isinstance(container, list):
+                    try:
+                        result = any(item == needle for item in container)
+                    except Exception:
+                        result = False
+                elif isinstance(container, dict):
+                    if isinstance(needle, str):
+                        result = needle in container
+                    elif isinstance(needle, dict):
+                        result = all(k in container and container[k] == v for k, v in needle.items())
+                self.registers[args[0]] = int(result)
+            elif op == Opcode.JOIN:
+                arr = self.val(args[1])
+                sep = str(self.val(args[2]))
+                if isinstance(arr, list):
+                    try:
+                        s = sep.join(str(x) if x is not None else "null" for x in arr)
+                    except Exception:
+                        s = sep.join(map(str, arr))
+                    self.registers[args[0]] = s
+                else:
+                    self.registers[args[0]] = ""
+            elif op == Opcode.REVERSE:
+                val = self.val(args[1])
+                if isinstance(val, list):
+                    self.registers[args[0]] = list(reversed(val))
+                elif isinstance(val, str):
+                    self.registers[args[0]] = val[::-1]
+                else:
+                    self.registers[args[0]] = val
+            elif op == Opcode.FIRST:
+                val = self.val(args[1])
+                out = None
+                if isinstance(val, list):
+                    out = val[0] if val else None
+                elif isinstance(val, str):
+                    out = val[0] if val else None
+                self.registers[args[0]] = out
+            elif op == Opcode.LAST:
+                val = self.val(args[1])
+                out = None
+                if isinstance(val, list):
+                    out = val[-1] if val else None
+                elif isinstance(val, str):
+                    out = val[-1] if val else None
+                self.registers[args[0]] = out
+            elif op == Opcode.ANY:
+                val = self.val(args[1])
+                if isinstance(val, list):
+                    self.registers[args[0]] = int(any(bool(x) for x in val))
+                else:
+                    self.registers[args[0]] = int(bool(val))
+            elif op == Opcode.ALL:
+                val = self.val(args[1])
+                if isinstance(val, list):
+                    self.registers[args[0]] = int(all(bool(x) for x in val))
+                else:
+                    self.registers[args[0]] = int(bool(val))
+            elif op == Opcode.AGG_ADD:
+                val = self.val(args[1])
+                out = None
+                if isinstance(val, list):
+                    # Try numeric sum
+                    if all(isinstance(x, (int, float, bool)) for x in val):
+                        s = 0
+                        for x in val:
+                            if x is not None:
+                                s += x
+                        out = s
+                    # Join strings
+                    elif all(isinstance(x, str) for x in val):
+                        out = "".join(val)
+                    # Concatenate arrays
+                    elif all(isinstance(x, list) for x in val):
+                        res = []
+                        for x in val:
+                            res.extend(x)
+                        out = res
+                self.registers[args[0]] = out
+
             # 输出
             elif op == Opcode.PRINT:
                 self.output.append(self.val(args[0]))
