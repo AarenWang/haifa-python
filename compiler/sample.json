@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"name": "Alice", "scores": [80, 90], "active": true},
+    {"name": "Bob",   "scores": [70, 65], "active": false},
+    {"name": "Cia",   "scores": [88, 92], "active": true}
+  ]
+}
