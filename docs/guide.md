@@ -101,8 +101,67 @@ python -m compiler.jq_cli '.message | tostring' --input payload.json
 pyjq '.items | join(", ")' --input list.json
 ```
 
-## 6. 可视化执行流程
+## 6. 类汇编脚本与可视化
 
+### 6.1 基础类汇编执行
+```python
+from compiler import parser, compiler, bytecode_vm
+
+program = """\nMOV a, 5\nADD b, a, 3\nPRINT b\nHALT\n"""
+nodes = parser.parse(program)
+bytecode = compiler.ASTCompiler().compile(nodes)
+vm = bytecode_vm.BytecodeVM(bytecode)
+vm.run()
+print(vm.output)  # [8]
+```
+
+### 6.2 查看调用栈的汇编示例
+```python
+from compiler.parser import parse
+from compiler.compiler import ASTCompiler
+from compiler.bytecode_vm import BytecodeVM
+from compiler.vm_visualizer import VMVisualizer
+
+script = [
+    "FUNC max2",
+    "ARG a",
+    "ARG b",
+    "GT cond a b",
+    "IF cond",
+    "RETURN a",
+    "ELSE",
+    "RETURN b",
+    "ENDIF",
+    "ENDFUNC",
+    "ARR_INIT arr 5",
+    "ARR_SET arr 0 5",
+    "ARR_SET arr 1 12",
+    "ARR_SET arr 2 7",
+    "ARR_SET arr 3 3",
+    "ARR_SET arr 4 9",
+    "MOV i 0",
+    "MOV len 5",
+    "ARR_GET max arr 0",
+    "LABEL loop",
+    "LT cond i len",
+    "JZ cond end",
+    "ARR_GET val arr i",
+    "PARAM max",
+    "PARAM val",
+    "CALL max2",
+    "RESULT max",
+    "ADD i i 1",
+    "JMP loop",
+    "LABEL end",
+    "PRINT max"
+]
+
+bytecode = ASTCompiler().compile(parse(script))
+vm = BytecodeVM(bytecode)
+VMVisualizer(vm).run()
+```
+
+## 7. 可视化执行流程
 使用 `--visualize` 结合内建 VM 可视化器，查看字节码执行：
 ```bash
 python -m compiler.jq_cli '.items[] | .name' --input data.json --visualize
@@ -122,7 +181,7 @@ Headless 模式基于 `curses` 渲染，常用按键：
 - `r`：重置并回到初始状态
 - `q`：退出
 
-## 7. 常见问题
+## 8. 常见问题
 
 ### 7.1 运行时报 “Failed to parse JSON input”
 确认输入文件/stdin 是合法 JSON；如需处理文本，请加 `-R`。
@@ -135,6 +194,6 @@ Headless 模式基于 `curses` 渲染，常用按键：
 ### 7.3 大量数据内存占用高
 `pyjq` 默认流式输出，不会整体缓存。若仍担心内存，可串联 `head`、`> file` 等命令行工具控制输出。
 
-## 8. 后续阅读
+## 9. 后续阅读
 - `docs/reference.md`：详尽的指令/过滤器手册。
 - `docs/jq_design.md`：架构背景、里程碑记录与未来计划。

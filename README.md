@@ -61,6 +61,55 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
   print(vm.output)  # [8]
   ```
 
+- 查看包含函数调用的汇编脚本并在可视化器中观察调用栈：
+  ```python
+  from compiler.parser import parse
+  from compiler.compiler import ASTCompiler
+  from compiler.vm_visualizer import VMVisualizer
+  from compiler.bytecode_vm import BytecodeVM
+
+  script = [
+      "FUNC max2",
+      "ARG a",
+      "ARG b",
+      "GT cond a b",
+      "IF cond",
+      "RETURN a",
+      "ELSE",
+      "RETURN b",
+      "ENDIF",
+      "ENDFUNC",
+
+      "ARR_INIT arr 5",
+      "ARR_SET arr 0 5",
+      "ARR_SET arr 1 12",
+      "ARR_SET arr 2 7",
+      "ARR_SET arr 3 3",
+      "ARR_SET arr 4 9",
+      "MOV i 0",
+      "MOV len 5",
+      "ARR_GET max arr 0",
+
+      "LABEL loop",
+      "LT cond i len",
+      "JZ cond end",
+      "ARR_GET val arr i",
+      "PARAM max",
+      "PARAM val",
+      "CALL max2",
+      "RESULT max",
+      "ADD i i 1",
+      "JMP loop",
+      "LABEL end",
+      "PRINT max"
+  ]
+
+  bytecode = ASTCompiler().compile(parse(script))
+  vm = BytecodeVM(bytecode)
+  VMVisualizer(vm).run()
+  ```
+  在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。
+
 ### jq 命令行示例
 ```bash
 # 从 stdin 读取 JSON，输出对象的键
