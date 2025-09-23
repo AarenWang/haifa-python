@@ -225,3 +225,24 @@ class TestVMFeatures(unittest.TestCase):
             {'k': 42},
             2,
         ]
+
+    def test_closure_opcodes(self):
+        instructions = [
+            Instruction(Opcode.LOAD_IMM, ['val', 1]),
+            Instruction(Opcode.MAKE_CELL, ['cell', 'val']),
+            Instruction(Opcode.CLOSURE, ['clos', 'adder', 'cell']),
+            Instruction(Opcode.CALL_VALUE, ['clos']),
+            Instruction(Opcode.RESULT, ['result']),
+            Instruction(Opcode.PRINT, ['result']),
+            Instruction(Opcode.HALT, []),
+            Instruction(Opcode.LABEL, ['adder']),
+            Instruction(Opcode.BIND_UPVALUE, ['up', '0']),
+            Instruction(Opcode.CELL_GET, ['tmp', 'up']),
+            Instruction(Opcode.ADD, ['tmp2', 'tmp', '1']),
+            Instruction(Opcode.CELL_SET, ['up', 'tmp2']),
+            Instruction(Opcode.RETURN, ['tmp2']),
+            Instruction(Opcode.RETURN, ['0']),
+        ]
+        vm = BytecodeVM(instructions)
+        output = vm.run()
+        assert output == [2]

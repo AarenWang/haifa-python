@@ -12,8 +12,7 @@ from .parser import LuaParser
 
 def compile_source(source: str) -> List[Instruction]:
     chunk = LuaParser.parse(source)
-    compiler = LuaCompiler()
-    return compiler.compile(chunk)
+    return LuaCompiler.compile_chunk(chunk)
 
 
 def run_source(source: str, globals: Optional[dict] = None) -> List[object]:

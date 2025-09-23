@@ -99,6 +99,12 @@
 | `IS_ARR dst src` | 判断 `src` 是否为数组 (`list`) |
 | `IS_NULL dst src` | 判断 `src` 是否为 `None` |
 | `COALESCE dst lhs rhs` | 若 `lhs` 为 `None` 则取 `rhs`，否则保留 `lhs` |
+| `MAKE_CELL dst src` | 创建闭包 Cell（用于 upvalue 捕获） |
+| `CELL_GET dst cell` | 从 Cell 读取值 |
+| `CELL_SET cell src` | 向 Cell 写入值 |
+| `CLOSURE dst label cell1 cell2 ...` | 构建闭包对象并捕获 upvalue 列表 |
+| `BIND_UPVALUE dst index` | 在函数体内绑定上层传入的 upvalue |
+| `CALL_VALUE reg` | 调用存储在寄存器中的闭包/函数值 |
 
 ### 3.2 `reduce` 语义
 

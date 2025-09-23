@@ -26,10 +26,23 @@
 为降低风险，拆分为三个迭代：
 
 **Milestone 2A：闭包与 Upvalue 基础**
-- [ ] VM 扩展：闭包模型与 upvalue 指令（`MAKE_CELL`, `CELL_GET`, `CELL_SET`, `CLOSURE`, `CALL_VALUE`, `BIND_UPVALUE`）。
-- [ ] 语义分析：识别自由变量、构建闭包捕获列表。
-- [ ] 编译器：局部变量转 Cell 模型，支持函数返回闭包、闭包调用。
-- [ ] 单元/集成测试：累加器、共享 upvalue、多层嵌套调用。
+- [x] VM 扩展：闭包模型与 upvalue 指令（`MAKE_CELL`, `CELL_GET`, `CELL_SET`, `CLOSURE`, `CALL_VALUE`, `BIND_UPVALUE`）。
+- [x] 语义分析：识别自由变量、构建闭包捕获列表。
+- [x] 编译器：局部变量 cell 化，支持函数返回闭包、闭包调用与 upvalue 绑定。
+- [x] 单元/集成测试：累加器、共享 upvalue、多层嵌套调用；核心 VM 指令覆盖。
+
+**Milestone 2A-1：VM 层改造** 
+- [ ] 新增 opcode：MAKE_CELL/CELL_GET/CELL_SET（捕获变量用）、CLOSURE、CALL_VALUE、BIND_UPVALUE。
+- [ ] BytecodeVM 维护 upvalue 列表，CALL_VALUE 需保存/恢复 current_upvalues，闭包对象结构确定。
+- [ ] 更新可视化器显示（寄存器高亮继续适配）。
+
+**Milestone 2A-2：编译期自由变量分析** 
+- [ ] 在 haifa_lua 内新增分析模块，对 AST 做作用域递归，标记被内层函数引用的局部变量。
+- [ ] 编译器根据分析结果生成 cell 初始化、CELL_SET/GET、闭包 upvalue 列表。
+
+**Milestone 2A-3：闭包编译与调用** 
+- [ ] 函数定义：生成 MAKE_CELL、CLOSURE，内层函数 prolog 插入 BIND_UPVALUE。
+- [ ] 函数调用：对变量储存在 register 的闭包使用 CALL_VALUE。
 
 **Milestone 2B：多返回值与可变参数**
 - [ ] 支持 Lua 函数多返回值、尾调用、`...` 可变参数。

@@ -11,6 +11,7 @@ from .ast import (
     Chunk,
     Expr,
     ExprStmt,
+    FunctionExpr,
     FunctionStmt,
     Identifier,
     IfStmt,
@@ -50,6 +51,12 @@ class LuaParser:
             self.pos += 1
         return token
 
+    def _peek_kind(self, offset: int = 1) -> str:
+        idx = self.pos + offset
+        if idx >= len(self.tokens):
+            return "EOF"
+        return self.tokens[idx].kind
+
     def _match(self, *kinds: str) -> Optional[Token]:
         if self._current().kind in kinds:
             return self._advance()
@@ -85,6 +92,8 @@ class LuaParser:
         if token.kind == "function":
             return self._parse_function()
         if token.kind == "local":
+            if self._peek_kind(1) == "function":
+                return self._parse_local_function()
             return self._parse_local_assignment()
         return self._parse_assignment_or_expression()
 
@@ -128,8 +137,14 @@ class LuaParser:
     def _parse_function(self) -> FunctionStmt:
         tok = self._expect("function")
         name_tok = self._expect("IDENT")
-        self._expect("(")
+        params = self._parse_param_list()
+        body = self._parse_block(["end"])
+        self._expect("end")
+        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body)
+
+    def _parse_param_list(self) -> List[str]:
         params: List[str] = []
+        self._expect("(")
         if self._current().kind != ")":
             while True:
                 ident = self._expect("IDENT")
@@ -137,9 +152,18 @@ class LuaParser:
                 if not self._match(","):
                     break
         self._expect(")")
+        return params
+
+    def _parse_local_function(self) -> Assignment:
+        local_tok = self._expect("local")
+        self._expect("function")
+        name_tok = self._expect("IDENT")
+        params = self._parse_param_list()
         body = self._parse_block(["end"])
         self._expect("end")
-        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body)
+        func_expr = FunctionExpr(local_tok.line, local_tok.column, params, body)
+        ident = Identifier(name_tok.line, name_tok.column, name_tok.value)
+        return Assignment(local_tok.line, local_tok.column, ident, func_expr, True)
 
     def _parse_local_assignment(self) -> Assignment:
         tok = self._expect("local")
@@ -246,6 +270,8 @@ class LuaParser:
                 self._expect(")")
                 expr = CallExpr(ident.line, ident.column, expr, args)
             return expr
+        if token.kind == "function":
+            return self._parse_function_expr()
         if token.kind == "(" :
             self._advance()
             expr = self._parse_expression()
@@ -263,5 +289,12 @@ class LuaParser:
             tok = self._advance()
             return BooleanLiteral(tok.line, tok.column, False)
         raise ParserError(f"Unexpected token {token.kind} at {token.line}:{token.column}")
+
+    def _parse_function_expr(self) -> FunctionExpr:
+        tok = self._expect("function")
+        params = self._parse_param_list()
+        body = self._parse_block(["end"])
+        self._expect("end")
+        return FunctionExpr(tok.line, tok.column, params, body)
 
 __all__ = ["LuaParser", "ParserError"]

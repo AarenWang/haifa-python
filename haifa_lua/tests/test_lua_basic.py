@@ -65,3 +65,41 @@ def test_print_function_as_global():
     return value
     """
     assert run_source(src) == [42]
+
+
+def test_closure_captures_local():
+    src = """
+    function make_counter()
+        local x = 0
+        return function()
+            x = x + 1
+            return x
+        end
+    end
+
+    local c = make_counter()
+    local a = c()
+    local b = c()
+    return b
+    """
+    assert run_source(src) == [2]
+
+
+def test_closure_independent_instances():
+    src = """
+    function make_counter()
+        local x = 0
+        return function()
+            x = x + 1
+            return x
+        end
+    end
+
+    local c1 = make_counter()
+    local c2 = make_counter()
+    local a = c1()
+    local b = c1()
+    local c = c2()
+    return a + b * 10 + c * 100
+    """
+    assert run_source(src) == [121]
