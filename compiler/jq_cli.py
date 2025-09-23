@@ -13,9 +13,12 @@ if _RUNNING_AS_SCRIPT:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
-    from compiler.jq_runtime import run_filter_many  # type: ignore
+    from compiler.jq_runtime import (  # type: ignore
+        JQRuntimeError,
+        run_filter_stream,
+    )
 else:
-    from .jq_runtime import run_filter_many
+    from .jq_runtime import JQRuntimeError, run_filter_stream
 
 
 def _load_json_from_source(path: Optional[str]) -> str:
@@ -47,6 +50,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--arg", action="append", nargs=2, metavar=("name", "value"), help="Set variable $name to string value")
     parser.add_argument("--argjson", action="append", nargs=2, metavar=("name", "json"), help="Set variable $name to JSON value")
     parser.add_argument("--visualize", action="store_true", help="Visualize VM execution")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print stack traces when jq compilation or execution fails",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -136,8 +144,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             visualizer.run()
             return 0
 
-        results = run_filter_many(filter_expr, inputs, env=env)
-        for item in results:
+        results_iter = run_filter_stream(filter_expr, inputs, env=env)
+        for item in results_iter:
             if args.raw_output and isinstance(item, str):
                 print(item)
             else:
@@ -152,8 +160,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     except json.JSONDecodeError as exc:
         print(f"Failed to parse JSON input: {exc}", file=sys.stderr)
         return 1
+    except JQRuntimeError as exc:
+        if args.debug:
+            import traceback
+
+            traceback.print_exc()
+        else:
+            print(str(exc), file=sys.stderr)
+        return 1
     except Exception as exc:  # pragma: no cover - defensive
-        print(f"jq execution failed: {exc}", file=sys.stderr)
+        if args.debug:
+            import traceback
+
+            traceback.print_exc()
+        else:
+            print(f"jq execution failed: {exc}", file=sys.stderr)
         return 1
 
 
