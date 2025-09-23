@@ -55,6 +55,19 @@ class TestJQParser(unittest.TestCase):
         self.assertEqual(node.pairs[0][0], "name")
         self.assertIsInstance(node.pairs[0][1], Field)
 
+    def test_arithmetic_and_precedence(self):
+        node = parse(".a + .b * 2")
+        # Smoke test: should parse without error
+        self.assertIsNotNone(node)
+
+    def test_comparison_and_logic(self):
+        node = parse("(.x + 1) >= 3 and .y < 5")
+        self.assertIsNotNone(node)
+
+    def test_coalesce(self):
+        node = parse(".a // .b")
+        self.assertIsNotNone(node)
+
 
 if __name__ == "__main__":
     unittest.main()

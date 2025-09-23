@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 class JQNode:
@@ -51,6 +51,19 @@ class ObjectLiteral(JQNode):
     pairs: List[Tuple[str, JQNode]]
 
 
+@dataclass(frozen=True)
+class UnaryOp(JQNode):
+    op: str  # "-" or "not"
+    operand: JQNode
+
+
+@dataclass(frozen=True)
+class BinaryOp(JQNode):
+    op: str  # "+", "-", "*", "/", "%", "==", "!=", ">", ">=", "<", "<=", "and", "or", "//"
+    left: JQNode
+    right: JQNode
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -68,5 +81,7 @@ __all__ = [
     "Pipe",
     "Sequence",
     "ObjectLiteral",
+    "UnaryOp",
+    "BinaryOp",
     "flatten_pipe",
 ]
