@@ -1,5 +1,5 @@
-from ast_nodes import *
-from value_utils import resolve_value
+from .ast_nodes import *
+from .value_utils import resolve_value
 
 class ExecutionContext:
     def __init__(self):

@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from unittest import mock
 
-from jq_cli import main
+from .jq_cli import main
 
 
 class TestJQCLI(unittest.TestCase):

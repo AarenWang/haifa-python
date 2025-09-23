@@ -1,5 +1,9 @@
-from bytecode import Instruction, Opcode
-from ast_nodes import *
+try:
+    from bytecode import Instruction, Opcode  # type: ignore
+    from ast_nodes import *  # type: ignore
+except ModuleNotFoundError:
+    from .bytecode import Instruction, Opcode  # type: ignore
+    from .ast_nodes import *  # type: ignore
 
 
 class ASTCompiler:

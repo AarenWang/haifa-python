@@ -1,14 +1,14 @@
 import unittest
 
-from jq_compiler import CURRENT_REGISTER, INPUT_REGISTER, JQCompiler
-from jq_parser import parse
-from bytecode import Opcode
+from .jq_compiler import CURRENT_REGISTER, INPUT_REGISTER, JQCompiler
+from .jq_parser import parse_jq_program
+from .bytecode import Opcode
 
 
 class TestJQCompiler(unittest.TestCase):
     def compile(self, expression):
         compiler = JQCompiler()
-        return compiler.compile(parse(expression))
+        return compiler.compile(parse_jq_program(expression))
 
     def test_literal_expression_generates_load_const(self):
         instructions = self.compile('"hello"')

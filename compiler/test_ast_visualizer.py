@@ -1,9 +1,9 @@
 import unittest
 from unittest import mock
 
-from parser import parse
-import ast_visualizer
-from ast_visualizer import ASTVisualizer
+from .parser import parse
+from . import ast_visualizer
+from .ast_visualizer import ASTVisualizer
 
 
 class DummyGraph:

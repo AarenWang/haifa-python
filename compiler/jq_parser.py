@@ -6,20 +6,36 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-from jq_ast import (
-    Field,
-    FunctionCall,
-    Identity,
-    IndexAll,
-    JQNode,
-    Literal,
-    ObjectLiteral,
-    Pipe,
-    UnaryOp,
-    BinaryOp,
-    Index,
-    Slice,
-)
+try:
+    from jq_ast import (
+        Field,
+        FunctionCall,
+        Identity,
+        IndexAll,
+        JQNode,
+        Literal,
+        ObjectLiteral,
+        Pipe,
+        UnaryOp,
+        BinaryOp,
+        Index,
+        Slice,
+    )
+except ModuleNotFoundError:  # package import fallback
+    from .jq_ast import (
+        Field,
+        FunctionCall,
+        Identity,
+        IndexAll,
+        JQNode,
+        Literal,
+        ObjectLiteral,
+        Pipe,
+        UnaryOp,
+        BinaryOp,
+        Index,
+        Slice,
+    )
 
 # Order matters: multi-char operators first
 _TOKEN_REGEX = re.compile(
@@ -359,9 +375,9 @@ class JQParser:
         return ObjectLiteral(pairs)
 
 
-def parse(source: str) -> JQNode:
+def parse_jq_program(source: str) -> JQNode:
     """Parse a jq expression into an AST."""
     return JQParser.parse(source)
 
 
-__all__ = ["parse", "JQParser", "JQSyntaxError"]
+__all__ = ["parse_jq_program", "JQParser", "JQSyntaxError"]
