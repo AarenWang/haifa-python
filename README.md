@@ -80,6 +80,32 @@ printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
 - `-r/--raw-output`、`-c/--compact-output` 控制输出格式。
 - `-f/--filter-file` 从文件加载过滤器。
 
+## 安装与分发
+
+### 通过 pip 安装 `pyjq`
+项目提供了标准的 `pyproject.toml`，安装后会自动注册 `pyjq` 命令：
+
+```bash
+pip install .
+pyjq '.foo' --input sample.json
+```
+
+安装时会拉取 `compiler` 包，`pyjq` 实际调用 `compiler.jq_cli:main`。
+
+### 构建独立可执行文件
+若希望在无 Python 环境的机器上运行，可使用 PyInstaller 打包：
+
+```bash
+python -m pip install pyinstaller
+pyinstaller --onefile --name pyjq compiler/jq_cli.py
+# 生成的二进制位于 dist/pyjq（Windows 下为 dist/pyjq.exe）
+```
+
+## CI/CD：PyInstaller 构建流水线
+- `.github/workflows/pyjq-build.yml` 定义了跨平台流水线，在推送 `v*` 标签或手动触发时运行。
+- 流水线会在 Ubuntu / macOS / Windows 上运行 PyInstaller，产出 `pyjq-linux`、`pyjq-macos`、`pyjq-windows.exe` 三个制品并自动上传为构建产物。
+- 可结合 GitHub Releases，将这些制品发布给终端用户。
+
 ## 测试与开发
 - 单元与集成测试：`pytest`（覆盖 Core 指令、jq 编译/运行、CLI 等场景）。
 - 新增指令时请同步更新：

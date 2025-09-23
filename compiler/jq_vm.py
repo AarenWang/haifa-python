@@ -4,7 +4,7 @@ import json
 import re
 
 from .bytecode_vm import BytecodeVM
-from .bytecode import Opcode
+from .jq_bytecode import JQOpcode
 
 
 class JQVM(BytecodeVM):
@@ -19,38 +19,38 @@ class JQVM(BytecodeVM):
         # Override/extend handlers for jq-only opcodes
         self._handlers.update(
             {
-                Opcode.OBJ_GET: self._op_OBJ_GET,
-                Opcode.OBJ_SET: self._op_OBJ_SET,
-                Opcode.GET_INDEX: self._op_GET_INDEX,
-                Opcode.LEN_VALUE: self._op_LEN_VALUE,
-                Opcode.PUSH_EMIT: self._op_PUSH_EMIT,
-                Opcode.POP_EMIT: self._op_POP_EMIT,
-                Opcode.EMIT: self._op_EMIT,
-                Opcode.FLATTEN: self._op_FLATTEN,
-                Opcode.REDUCE: self._op_REDUCE,
-                Opcode.KEYS: self._op_KEYS,
-                Opcode.HAS: self._op_HAS,
-                Opcode.CONTAINS: self._op_CONTAINS,
-                Opcode.JOIN: self._op_JOIN,
-                Opcode.REVERSE: self._op_REVERSE,
-                Opcode.FIRST: self._op_FIRST,
-                Opcode.LAST: self._op_LAST,
-                Opcode.ANY: self._op_ANY,
-                Opcode.ALL: self._op_ALL,
-                Opcode.AGG_ADD: self._op_AGG_ADD,
-                Opcode.SORT: self._op_SORT,
-                Opcode.SORT_BY: self._op_SORT_BY,
-                Opcode.UNIQUE: self._op_UNIQUE,
-                Opcode.UNIQUE_BY: self._op_UNIQUE_BY,
-                Opcode.MIN: self._op_MIN,
-                Opcode.MAX: self._op_MAX,
-                Opcode.MIN_BY: self._op_MIN_BY,
-                Opcode.MAX_BY: self._op_MAX_BY,
-                Opcode.GROUP_BY: self._op_GROUP_BY,
-                Opcode.TOSTRING: self._op_TOSTRING,
-                Opcode.TONUMBER: self._op_TONUMBER,
-                Opcode.SPLIT: self._op_SPLIT,
-                Opcode.GSUB: self._op_GSUB,
+                JQOpcode.OBJ_GET: self._op_OBJ_GET,
+                JQOpcode.OBJ_SET: self._op_OBJ_SET,
+                JQOpcode.GET_INDEX: self._op_GET_INDEX,
+                JQOpcode.LEN_VALUE: self._op_LEN_VALUE,
+                JQOpcode.PUSH_EMIT: self._op_PUSH_EMIT,
+                JQOpcode.POP_EMIT: self._op_POP_EMIT,
+                JQOpcode.EMIT: self._op_EMIT,
+                JQOpcode.FLATTEN: self._op_FLATTEN,
+                JQOpcode.REDUCE: self._op_REDUCE,
+                JQOpcode.KEYS: self._op_KEYS,
+                JQOpcode.HAS: self._op_HAS,
+                JQOpcode.CONTAINS: self._op_CONTAINS,
+                JQOpcode.JOIN: self._op_JOIN,
+                JQOpcode.REVERSE: self._op_REVERSE,
+                JQOpcode.FIRST: self._op_FIRST,
+                JQOpcode.LAST: self._op_LAST,
+                JQOpcode.ANY: self._op_ANY,
+                JQOpcode.ALL: self._op_ALL,
+                JQOpcode.AGG_ADD: self._op_AGG_ADD,
+                JQOpcode.SORT: self._op_SORT,
+                JQOpcode.SORT_BY: self._op_SORT_BY,
+                JQOpcode.UNIQUE: self._op_UNIQUE,
+                JQOpcode.UNIQUE_BY: self._op_UNIQUE_BY,
+                JQOpcode.MIN: self._op_MIN,
+                JQOpcode.MAX: self._op_MAX,
+                JQOpcode.MIN_BY: self._op_MIN_BY,
+                JQOpcode.MAX_BY: self._op_MAX_BY,
+                JQOpcode.GROUP_BY: self._op_GROUP_BY,
+                JQOpcode.TOSTRING: self._op_TOSTRING,
+                JQOpcode.TONUMBER: self._op_TONUMBER,
+                JQOpcode.SPLIT: self._op_SPLIT,
+                JQOpcode.GSUB: self._op_GSUB,
             }
         )
 
