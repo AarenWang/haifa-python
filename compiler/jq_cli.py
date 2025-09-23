@@ -76,7 +76,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Prefer package-relative imports for core pieces
             from .jq_parser import parse_jq_program
             from .jq_compiler import compile_to_bytecode, INPUT_REGISTER
-            from .bytecode_vm import BytecodeVM
+            from .jq_vm import JQVM
             # Try GUI visualizer first; fallback to headless if pygame not available
             VMVisualizer = None
             gui_exc = None
@@ -107,7 +107,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ast = parse_jq_program(args.filter)
             bytecode = compile_to_bytecode(ast)
             
-            vm = BytecodeVM(bytecode)
+            vm = JQVM(bytecode)
             vm.registers[INPUT_REGISTER] = first_input
             
             visualizer = VMVisualizer(vm)
