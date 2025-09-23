@@ -203,3 +203,10 @@ Headless 模式基于 `curses` 渲染，常用按键：
 ## 9. 后续阅读
 - `docs/reference.md`：详尽的指令/过滤器手册。
 - `docs/jq_design.md`：架构背景、里程碑记录与未来计划。
+- `docs/lua_sprint.md`：Lua 解释器规划与迭代任务。
+
+## 10. Lua 子集快速体验（Milestone 1）
+- CLI：`pylua your_script.lua` 或 `pylua --execute 'return 1+2'`。
+- 当前支持：赋值、算术表达式、`if/else`、`while`、函数定义与调用、`return`。
+- 示例脚本：`examples/hello.lua`。
+- 后续里程碑将逐步加入闭包、标准库、协程等特性。

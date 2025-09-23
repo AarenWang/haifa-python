@@ -11,6 +11,7 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
 - **CLI 体验**：`python -m compiler.jq_cli` 提供 jq 风格命令行，覆盖变量、输入模式、输出格式等选项。
 - **流式运行**：jq 运行时缓存编译结果并按需流式输出，适合处理大规模输入。
 - **测试齐备**：`pytest` 覆盖核心指令、jq 解析与运行时、端到端 CLI 等 100+ 用例。
+- **Lua 模块化**：新增 `pylua` 解释器（Milestone 1），在 Core VM 上执行 Lua 子集脚本。
 
 ## 目录结构速览
 | 路径 | 说明 |
@@ -150,6 +151,18 @@ printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
 - `-f/--filter-file` 从文件加载过滤器。
 - `--debug` 输出完整堆栈，便于定位编译/执行错误。
 - `--visualize [gui|curses]` 选择可视化模式（默认 `gui`，可回退到 `curses`）。
+
+### Lua 命令行示例
+```bash
+# 直接执行代码
+pylua --execute 'x = 1; y = 2; return x + y'
+
+# 运行脚本文件
+pylua examples/hello.lua
+
+# 查看 VM 输出
+pylua --execute 'function add(a,b) return a+b end return add(3,4)' --print-output
+```
 
 ## 安装与分发
 

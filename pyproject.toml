@@ -24,6 +24,7 @@ Homepage = "https://example.com/haifa-python"
 
 [project.scripts]
 pyjq = "compiler.jq_cli:main"
+pylua = "haifa_lua.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["compiler", "vm"]
+include = ["compiler", "vm", "haifa_lua"]
