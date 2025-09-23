@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 
 from bytecode import Instruction, Opcode
-from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, UnaryOp, BinaryOp, flatten_pipe
+from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, UnaryOp, BinaryOp, Index, Slice, flatten_pipe
 
 INPUT_REGISTER = "__jq_input"
 CURRENT_REGISTER = "__jq_curr"
@@ -56,8 +56,8 @@ class JQCompiler:
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
-        # Generic expression stage limited to operator expressions
-        if isinstance(stage, (UnaryOp, BinaryOp)):
+        # Generic expression stage limited to expression nodes
+        if isinstance(stage, (UnaryOp, BinaryOp, Index, Slice)):
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
@@ -317,6 +317,90 @@ class JQCompiler:
                 value_reg = self._eval_expression(value_expr, base_reg)
                 self.instructions.append(Instruction(Opcode.OBJ_SET, [obj_reg, key, value_reg]))
             return obj_reg
+        if isinstance(node, Index):
+            container = self._eval_expression(node.source, base_reg)
+            idx = self._eval_expression(node.index, base_reg)
+            dest = self._new_temp()
+            self.instructions.append(Instruction(Opcode.GET_INDEX, [dest, container, idx]))
+            return dest
+        if isinstance(node, Slice):
+            src = self._eval_expression(node.source, base_reg)
+            result = self._new_temp()
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [result, []]))
+
+            length = self._new_temp()
+            self.instructions.append(Instruction(Opcode.LEN_VALUE, [length, src]))
+
+            start_reg = self._new_temp()
+            if node.start is None:
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [start_reg, 0]))
+            else:
+                start_val = self._eval_expression(node.start, base_reg)
+                self.instructions.append(Instruction(Opcode.MOV, [start_reg, start_val]))
+
+            end_reg = self._new_temp()
+            if node.end is None:
+                self.instructions.append(Instruction(Opcode.MOV, [end_reg, length]))
+            else:
+                end_val = self._eval_expression(node.end, base_reg)
+                self.instructions.append(Instruction(Opcode.MOV, [end_reg, end_val]))
+
+            # Normalize start: if start < 0 => start += length; clamp to [0, length]
+            zero = "0"
+            cond = self._new_temp()
+            neg_label = self._new_label("jq_slice_start_neg")
+            cont1 = self._new_label("jq_slice_start_cont1")
+            self.instructions.append(Instruction(Opcode.LT, [cond, start_reg, zero]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont1]))
+            self.instructions.append(Instruction(Opcode.ADD, [start_reg, start_reg, length]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont1]))
+            # start < 0 => start = 0
+            cont2 = self._new_label("jq_slice_start_cont2")
+            self.instructions.append(Instruction(Opcode.LT, [cond, start_reg, zero]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont2]))
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [start_reg, 0]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont2]))
+            # start > length => start = length
+            cont3 = self._new_label("jq_slice_start_cont3")
+            self.instructions.append(Instruction(Opcode.GT, [cond, start_reg, length]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont3]))
+            self.instructions.append(Instruction(Opcode.MOV, [start_reg, length]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont3]))
+
+            # Normalize end: if end < 0 => end += length; clamp to [0, length]
+            cont4 = self._new_label("jq_slice_end_cont1")
+            self.instructions.append(Instruction(Opcode.LT, [cond, end_reg, zero]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont4]))
+            self.instructions.append(Instruction(Opcode.ADD, [end_reg, end_reg, length]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont4]))
+            cont5 = self._new_label("jq_slice_end_cont2")
+            self.instructions.append(Instruction(Opcode.LT, [cond, end_reg, zero]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont5]))
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [end_reg, 0]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont5]))
+            cont6 = self._new_label("jq_slice_end_cont3")
+            self.instructions.append(Instruction(Opcode.GT, [cond, end_reg, length]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, cont6]))
+            self.instructions.append(Instruction(Opcode.MOV, [end_reg, length]))
+            self.instructions.append(Instruction(Opcode.LABEL, [cont6]))
+
+            # Loop i from start to end-1
+            i = self._new_temp()
+            self.instructions.append(Instruction(Opcode.MOV, [i, start_reg]))
+            self.instructions.append(Instruction(Opcode.PUSH_EMIT, [result]))
+            loop = self._new_label("jq_slice_loop")
+            done = self._new_label("jq_slice_done")
+            self.instructions.append(Instruction(Opcode.LABEL, [loop]))
+            self.instructions.append(Instruction(Opcode.LT, [cond, i, end_reg]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond, done]))
+            item = self._new_temp()
+            self.instructions.append(Instruction(Opcode.GET_INDEX, [item, src, i]))
+            self.instructions.append(Instruction(Opcode.EMIT, [item]))
+            self.instructions.append(Instruction(Opcode.ADD, [i, i, "1"]))
+            self.instructions.append(Instruction(Opcode.JMP, [loop]))
+            self.instructions.append(Instruction(Opcode.LABEL, [done]))
+            self.instructions.append(Instruction(Opcode.POP_EMIT, []))
+            return result
         return self._compile_expression(node, base_reg)
 
     def _compile_expression(self, expr: JQNode, base_reg: str) -> str:

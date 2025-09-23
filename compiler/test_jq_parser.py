@@ -2,6 +2,7 @@ import unittest
 
 from jq_ast import Field, Identity, IndexAll, Literal, ObjectLiteral, Pipe, flatten_pipe
 from jq_parser import JQSyntaxError, parse
+from jq_ast import Index, Slice
 
 
 class TestJQParser(unittest.TestCase):
@@ -67,6 +68,22 @@ class TestJQParser(unittest.TestCase):
     def test_coalesce(self):
         node = parse(".a // .b")
         self.assertIsNotNone(node)
+
+    def test_index_literal(self):
+        node = parse(".items[0]")
+        self.assertIsInstance(node, Index)
+        self.assertIsInstance(node.source, Field)
+        self.assertEqual(node.source.name, "items")
+
+    def test_slice_basic(self):
+        node = parse(".items[1:3]")
+        self.assertIsInstance(node, Slice)
+        self.assertIsInstance(node.source, Field)
+        self.assertEqual(node.source.name, "items")
+
+    def test_slice_open_ended(self):
+        self.assertIsInstance(parse(".items[:2]"), Slice)
+        self.assertIsInstance(parse(".items[1:]"), Slice)
 
 
 if __name__ == "__main__":

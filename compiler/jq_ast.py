@@ -64,6 +64,19 @@ class BinaryOp(JQNode):
     right: JQNode
 
 
+@dataclass(frozen=True)
+class Index(JQNode):
+    source: JQNode
+    index: JQNode
+
+
+@dataclass(frozen=True)
+class Slice(JQNode):
+    source: JQNode
+    start: Optional[JQNode]
+    end: Optional[JQNode]
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -83,5 +96,7 @@ __all__ = [
     "ObjectLiteral",
     "UnaryOp",
     "BinaryOp",
+    "Index",
+    "Slice",
     "flatten_pipe",
 ]
