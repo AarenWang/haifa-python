@@ -17,6 +17,8 @@ from jq_ast import (
     Pipe,
     UnaryOp,
     BinaryOp,
+    Index,
+    Slice,
 )
 
 # Order matters: multi-char operators first
@@ -252,8 +254,33 @@ class JQParser:
                 node = Field(ident.value, node)
                 continue
             if self._match("LBRACKET"):
+                # Empty [] means IndexAll
+                if self._current().type == "RBRACKET":
+                    self._advance()
+                    node = IndexAll(node)
+                    continue
+                # Slice form with leading ':' => [:end]
+                if self._current().type == "COLON":
+                    self._advance()
+                    end_expr = None
+                    if self._current().type != "RBRACKET":
+                        end_expr = self._parse_expression()
+                    self._expect("RBRACKET")
+                    node = Slice(node, None, end_expr)
+                    continue
+                # First expression
+                first_expr = self._parse_expression()
+                # Single index: expr]
+                if self._match("RBRACKET"):
+                    node = Index(node, first_expr)
+                    continue
+                # Otherwise must be a slice: expr : expr? ]
+                self._expect("COLON")
+                end_expr = None
+                if self._current().type != "RBRACKET":
+                    end_expr = self._parse_expression()
                 self._expect("RBRACKET")
-                node = IndexAll(node)
+                node = Slice(node, first_expr, end_expr)
                 continue
             break
         return node
