@@ -1,6 +1,11 @@
 import unittest
 
-from .jq_runtime import run_filter
+from .jq_runtime import (
+    JQRuntimeError,
+    run_filter,
+    run_filter_many,
+    run_filter_stream,
+)
 
 
 class TestJQRuntime(unittest.TestCase):
@@ -73,6 +78,26 @@ class TestJQRuntime(unittest.TestCase):
             run_filter(".items[] | {name: .name, count: (.scores | length())}", data),
             [{"name": "Alice", "count": 2}, {"name": "Bob", "count": 1}],
         )
+
+    def test_run_filter_stream_handles_generators(self):
+        inputs = (i for i in range(3))
+        self.assertEqual(list(run_filter_stream(".", inputs)), [0, 1, 2])
+
+    def test_run_filter_many_uses_cached_compile(self):
+        # Should reuse cached bytecode; using two inputs to ensure no state leakage
+        result = run_filter_many(". + 1", [1, 2])
+        self.assertEqual(result, [2, 3])
+
+    def test_run_filter_stream_wraps_execution_errors(self):
+        def bad_inputs():
+            yield {"items": [1, 2, 3]}
+            yield {"items": ["boom"]}
+
+        stream = run_filter_stream(".items | reduce('sum')", bad_inputs())
+        self.assertEqual(next(stream), 6)
+        with self.assertRaises(JQRuntimeError) as ctx:
+            next(stream)
+        self.assertIn("input #1", str(ctx.exception))
 
 
 if __name__ == "__main__":

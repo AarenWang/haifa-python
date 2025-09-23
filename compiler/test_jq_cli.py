@@ -44,6 +44,41 @@ class TestJQCLI(unittest.TestCase):
         self.assertNotEqual(exit_code, 0)
         self.assertIn("Failed to parse JSON", stderr_buffer.getvalue())
 
+    def test_cli_reports_runtime_error_without_debug(self):
+        payload = {"items": [1, 2]}
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+            json.dump(payload, tmp)
+            tmp_path = tmp.name
+        stderr_buffer = io.StringIO()
+        try:
+            with redirect_stderr(stderr_buffer):
+                exit_code = main(["reduce(.items, 'noop')", "--input", tmp_path])
+        finally:
+            os.remove(tmp_path)
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn("jq execution failed", stderr_buffer.getvalue())
+
+    def test_cli_reports_runtime_error_with_debug(self):
+        payload = {"items": [1, 2]}
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+            json.dump(payload, tmp)
+            tmp_path = tmp.name
+        stderr_buffer = io.StringIO()
+        try:
+            with redirect_stderr(stderr_buffer):
+                exit_code = main([
+                    "reduce(.items, 'noop')",
+                    "--input",
+                    tmp_path,
+                    "--debug",
+                ])
+        finally:
+            os.remove(tmp_path)
+        self.assertNotEqual(exit_code, 0)
+        err = stderr_buffer.getvalue()
+        self.assertIn("Traceback", err)
+        self.assertIn("JQRuntimeError", err)
+
 
 if __name__ == "__main__":
     unittest.main()
