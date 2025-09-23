@@ -1,8 +1,8 @@
 import copy
 import json
 
-from bytecode import Opcode, Instruction
-from value_utils import resolve_value
+from .bytecode import Opcode, Instruction
+from .value_utils import resolve_value
 
 class BytecodeVM:
     def __init__(self, instructions):
@@ -93,27 +93,39 @@ class BytecodeVM:
             if inst.opcode == Opcode.LABEL:
                 self.labels[inst.args[0]] = i
 
+    def step(self):
+        """Executes a single instruction."""
+        if self.pc >= len(self.instructions):
+            return "halt"
+
+        inst = self.instructions[self.pc]
+        op = inst.opcode
+        args = inst.args
+
+        handler = self._handlers.get(op)
+        if handler is None:
+            raise RuntimeError(f"No handler for opcode: {op}")
+
+        control = handler(args)
+        if control == "jump":
+            return None  # PC is already updated
+        if control == "halt":
+            return "halt"
+
+        self.pc += 1
+        return None
+
     def run(self, debug=False):
         self.index_labels()
         while self.pc < len(self.instructions):
-            inst = self.instructions[self.pc]
-            op = inst.opcode
-            args = inst.args
-
             if debug:
+                inst = self.instructions[self.pc]
                 print(f"[PC={self.pc}] EXEC: {inst}")
                 print(f"  REGISTERS: {self.registers}")
                 print(f"  OUTPUT: {self.output}\n")
 
-            handler = self._handlers.get(op)
-            if handler is None:
-                raise RuntimeError(f"No handler for opcode: {op}")
-            control = handler(args)
-            if control == "jump":
-                continue
-            if control == "halt":
+            if self.step() == "halt":
                 break
-            self.pc += 1
 
         return self.output
 

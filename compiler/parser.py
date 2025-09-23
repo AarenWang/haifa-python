@@ -1,4 +1,7 @@
-from ast_nodes import *
+try:
+    from ast_nodes import *  # type: ignore
+except ModuleNotFoundError:
+    from .ast_nodes import *  # type: ignore
 import itertools
 
 def parse(script_lines):

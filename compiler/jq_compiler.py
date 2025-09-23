@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from typing import List
 
-from bytecode import Instruction, Opcode
-from jq_ast import Field, Identity, IndexAll, JQNode, Literal, FunctionCall, ObjectLiteral, UnaryOp, BinaryOp, Index, Slice, flatten_pipe
+from .bytecode import Instruction, Opcode
+from .jq_ast import (
+    Field,
+    Identity,
+    IndexAll,
+    JQNode,
+    Literal,
+    FunctionCall,
+    ObjectLiteral,
+    UnaryOp,
+    BinaryOp,
+    Index,
+    Slice,
+    flatten_pipe,
+)
 
 INPUT_REGISTER = "__jq_input"
 CURRENT_REGISTER = "__jq_curr"
