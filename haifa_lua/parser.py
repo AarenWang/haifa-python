@@ -20,6 +20,7 @@ from .ast import (
     ReturnStmt,
     StringLiteral,
     UnaryOp,
+    VarargExpr,
     WhileStmt,
 )
 from .lexer import LuaLexer, Token
@@ -129,39 +130,47 @@ class LuaParser:
 
     def _parse_return(self) -> ReturnStmt:
         tok = self._expect("return")
-        if self._current().kind in {"end", "else", "EOF"}:
-            return ReturnStmt(tok.line, tok.column, None)
-        value = self._parse_expression()
-        return ReturnStmt(tok.line, tok.column, value)
+        values: List[Expr] = []
+        terminators = {"end", "else", "EOF"}
+        if self._current().kind not in terminators:
+            values.append(self._parse_expression())
+            while self._match(","):
+                values.append(self._parse_expression())
+        return ReturnStmt(tok.line, tok.column, values)
 
     def _parse_function(self) -> FunctionStmt:
         tok = self._expect("function")
         name_tok = self._expect("IDENT")
-        params = self._parse_param_list()
+        params, vararg = self._parse_param_list()
         body = self._parse_block(["end"])
         self._expect("end")
-        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body)
+        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body, vararg)
 
-    def _parse_param_list(self) -> List[str]:
+    def _parse_param_list(self) -> Tuple[List[str], bool]:
         params: List[str] = []
+        vararg = False
         self._expect("(")
         if self._current().kind != ")":
             while True:
+                if self._current().kind == "VARARG":
+                    self._advance()
+                    vararg = True
+                    break
                 ident = self._expect("IDENT")
                 params.append(ident.value)
                 if not self._match(","):
                     break
         self._expect(")")
-        return params
+        return params, vararg
 
     def _parse_local_function(self) -> Assignment:
         local_tok = self._expect("local")
         self._expect("function")
         name_tok = self._expect("IDENT")
-        params = self._parse_param_list()
+        params, vararg = self._parse_param_list()
         body = self._parse_block(["end"])
         self._expect("end")
-        func_expr = FunctionExpr(local_tok.line, local_tok.column, params, body)
+        func_expr = FunctionExpr(local_tok.line, local_tok.column, params, vararg, body)
         ident = Identifier(name_tok.line, name_tok.column, name_tok.value)
         return Assignment(local_tok.line, local_tok.column, ident, func_expr, True)
 
@@ -270,6 +279,9 @@ class LuaParser:
                 self._expect(")")
                 expr = CallExpr(ident.line, ident.column, expr, args)
             return expr
+        if token.kind in {"VARARG", "..."} or (token.kind == "OP" and token.value == "..."):
+            tok = self._advance()
+            return VarargExpr(tok.line, tok.column)
         if token.kind == "function":
             return self._parse_function_expr()
         if token.kind == "(" :
@@ -292,9 +304,9 @@ class LuaParser:
 
     def _parse_function_expr(self) -> FunctionExpr:
         tok = self._expect("function")
-        params = self._parse_param_list()
+        params, vararg = self._parse_param_list()
         body = self._parse_block(["end"])
         self._expect("end")
-        return FunctionExpr(tok.line, tok.column, params, body)
+        return FunctionExpr(tok.line, tok.column, params, vararg, body)
 
 __all__ = ["LuaParser", "ParserError"]

@@ -229,3 +229,17 @@ local c = c2()
 return a, b, c -- 输出 1, 2, 1
 ```
 运行：`pylua --execute '<上述代码>' --print-output`
+
+### 多返回值 / 可变参数
+```lua
+function pair()
+    return 1, 2
+end
+
+function pass_through(...)
+    return ...
+end
+
+return pair(), pass_through("a", "b")
+-- 输出 [1, 2, "a", "b"]
+```

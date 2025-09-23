@@ -26,6 +26,7 @@ from .ast import (
     StringLiteral,
     UnaryOp,
     WhileStmt,
+    VarargExpr,
 )
 
 
@@ -33,6 +34,7 @@ from .ast import (
 class VarBinding:
     storage: str
     is_cell: bool = False
+    is_vararg: bool = False
 
 
 class CompileError(RuntimeError):
@@ -55,6 +57,7 @@ class LuaCompiler:
         self.func_counter = 0
         self.exit_label = "__lua_exit"
         self.is_top_level = False
+        self.vararg_flag = function_info.vararg
 
     # ------------------------------------------------------------------
     @classmethod
@@ -114,6 +117,27 @@ class LuaCompiler:
             cell_reg = self._alloc_cell_reg(name)
             scope[name] = VarBinding(storage=cell_reg, is_cell=True)
             self.instructions.append(Instruction(Opcode.BIND_UPVALUE, [cell_reg, str(idx)]))
+
+    def _setup_parameters(self, params: List[str], info: FunctionInfo, is_vararg: bool):
+        scope = self.scope_stack[-1]
+        for param in params:
+            captured = param in info.captured_locals
+            reg = self._alloc_local_reg(param)
+            scope[param] = VarBinding(reg, False)
+            self.instructions.append(Instruction(Opcode.ARG, [reg]))
+            if captured:
+                cell_reg = self._alloc_cell_reg(param)
+                scope[param] = VarBinding(cell_reg, True)
+                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+        if is_vararg:
+            var_reg = self._alloc_local_reg("__vararg")
+            captured = "..." in info.captured_locals
+            scope["..."] = VarBinding(var_reg, False, True)
+            self.instructions.append(Instruction(Opcode.VARARG, [var_reg]))
+            if captured:
+                cell_reg = self._alloc_cell_reg("vararg")
+                scope["..."] = VarBinding(cell_reg, True, True)
+                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, var_reg]))
 
     # ------------------------------------------------------------------ Statements
     def _compile_block(self, block: Block, top_level: bool = False):
@@ -187,11 +211,24 @@ class LuaCompiler:
         self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
 
     def _compile_return(self, stmt: ReturnStmt):
-        if stmt.value is None:
+        if not stmt.values:
             self.instructions.append(Instruction(Opcode.RETURN, ["0"]))
         else:
-            value_reg = self._compile_expr(stmt.value)
-            self.instructions.append(Instruction(Opcode.RETURN, [value_reg]))
+            regs: List[str] = []
+            total = len(stmt.values)
+            for idx, expr in enumerate(stmt.values):
+                last = idx == total - 1
+                if isinstance(expr, CallExpr) and last:
+                    reg = self._compile_call(expr, want_list=True)
+                elif isinstance(expr, VarargExpr):
+                    reg = self._compile_vararg_expr(multi=last)
+                else:
+                    reg = self._compile_expr(expr)
+                regs.append(reg)
+            if len(regs) == 1 and not isinstance(stmt.values[0], (CallExpr, VarargExpr)):
+                self.instructions.append(Instruction(Opcode.RETURN, [regs[0]]))
+            else:
+                self.instructions.append(Instruction(Opcode.RETURN_MULTI, regs))
         if self.is_top_level:
             self.instructions.append(Instruction(Opcode.JMP, [self.exit_label]))
 
@@ -204,16 +241,7 @@ class LuaCompiler:
         compiler.instructions.append(Instruction(Opcode.LABEL, [func_label]))
         compiler.scope_stack = [{}]
         compiler._bind_upvalues()
-        # parameters
-        for param in stmt.params:
-            captured = param in info.captured_locals
-            reg = compiler._alloc_local_reg(param)
-            compiler.scope_stack[-1][param] = VarBinding(reg, False)
-            compiler.instructions.append(Instruction(Opcode.ARG, [reg]))
-            if captured:
-                cell_reg = compiler._alloc_cell_reg(param)
-                compiler.scope_stack[-1][param] = VarBinding(cell_reg, True)
-                compiler.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+        compiler._setup_parameters(stmt.params, info, stmt.vararg)
         compiler._compile_block(stmt.body)
         compiler.instructions.append(Instruction(Opcode.RETURN, ["0"]))
         self.function_blocks.extend(compiler.instructions)
@@ -247,6 +275,8 @@ class LuaCompiler:
             return self._compile_call(expr)
         if isinstance(expr, FunctionExpr):
             return self._compile_function_expr(expr)
+        if isinstance(expr, VarargExpr):
+            return self._compile_vararg_expr(multi=False)
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -299,20 +329,40 @@ class LuaCompiler:
             return dst
         raise CompileError(f"Unsupported binary operator {op}")
 
-    def _compile_call(self, expr: CallExpr) -> str:
+    def _compile_call(self, expr: CallExpr, want_list: bool = False) -> str:
         direct_label = None
         if isinstance(expr.callee, Identifier) and self._lookup_binding(expr.callee.name) is None:
             direct_label = expr.callee.name
         callee_reg = None
         if direct_label is None:
             callee_reg = self._compile_expr(expr.callee)
-        for arg in expr.args:
-            arg_reg = self._compile_expr(arg)
-            self.instructions.append(Instruction(Opcode.PARAM, [arg_reg]))
+        total_args = len(expr.args)
+        prepared_args = []
+        for idx, arg in enumerate(expr.args):
+            last = idx == total_args - 1
+            if last and isinstance(arg, CallExpr):
+                arg_reg = self._compile_call(arg, want_list=True)
+                prepared_args.append((arg_reg, True))
+            elif last and isinstance(arg, VarargExpr):
+                arg_reg = self._compile_vararg_expr(multi=True)
+                prepared_args.append((arg_reg, True))
+            else:
+                if isinstance(arg, VarargExpr):
+                    arg_reg = self._compile_vararg_expr(multi=False)
+                else:
+                    arg_reg = self._compile_expr(arg)
+                prepared_args.append((arg_reg, False))
+        for reg, expand in prepared_args:
+            opcode = Opcode.PARAM_EXPAND if expand else Opcode.PARAM
+            self.instructions.append(Instruction(opcode, [reg]))
         if direct_label is not None:
             self.instructions.append(Instruction(Opcode.CALL, [direct_label]))
         else:
             self.instructions.append(Instruction(Opcode.CALL_VALUE, [callee_reg]))
+        if want_list:
+            dst = self._new_temp()
+            self.instructions.append(Instruction(Opcode.RESULT_LIST, [dst]))
+            return dst
         dst = self._new_temp()
         self.instructions.append(Instruction(Opcode.RESULT, [dst]))
         return dst
@@ -324,15 +374,7 @@ class LuaCompiler:
         child.instructions.append(Instruction(Opcode.LABEL, [label]))
         child.scope_stack = [{}]
         child._bind_upvalues()
-        for param in expr.params:
-            captured = param in info.captured_locals
-            reg = child._alloc_local_reg(param)
-            child.scope_stack[-1][param] = VarBinding(reg, False)
-            child.instructions.append(Instruction(Opcode.ARG, [reg]))
-            if captured:
-                cell_reg = child._alloc_cell_reg(param)
-                child.scope_stack[-1][param] = VarBinding(cell_reg, True)
-                child.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+        child._setup_parameters(expr.params, info, expr.vararg)
         child._compile_block(expr.body)
         child.instructions.append(Instruction(Opcode.RETURN, ["0"]))
         self.function_blocks.extend(child.instructions)
@@ -343,6 +385,21 @@ class LuaCompiler:
         args = [dst, label] + upvalue_cells
         self.instructions.append(Instruction(Opcode.CLOSURE, args))
         return dst
+
+    def _compile_vararg_expr(self, multi: bool) -> str:
+        binding = self._lookup_binding("...")
+        if not binding or not binding.is_vararg:
+            raise CompileError("`...` used outside a vararg function")
+        dst = self._new_temp()
+        if binding.is_cell:
+            self.instructions.append(Instruction(Opcode.CELL_GET, [dst, binding.storage]))
+        else:
+            self.instructions.append(Instruction(Opcode.MOV, [dst, binding.storage]))
+        if multi:
+            return dst
+        head = self._new_temp()
+        self.instructions.append(Instruction(Opcode.VARARG_FIRST, [head, dst]))
+        return head
 
     # ------------------------------------------------------------------ Helpers
     def _binding_cell(self, name: str) -> str:

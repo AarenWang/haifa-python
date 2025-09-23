@@ -16,12 +16,14 @@ from .ast import (
     WhileStmt,
     ReturnStmt,
     Chunk,
+    VarargExpr,
 )
 
 @dataclass
 class FunctionInfo:
     captured_locals: Set[str] = field(default_factory=set)
     upvalues: List[str] = field(default_factory=list)
+    vararg: bool = False
 
 class Scope:
     def __init__(self, parent: 'Scope | None', info: FunctionInfo):
@@ -48,6 +50,23 @@ class Scope:
                 self.captured.add(name)
             else:
                 self.use(name)
+
+
+def _resolved_in_parents(scope: Scope, name: str) -> bool:
+    current = scope.parent
+    while current:
+        if name in current.locals or name in current.captured:
+            return True
+        current = current.parent
+    return False
+
+
+def _filter_upvalues(child_scope: Scope) -> List[str]:
+    resolved: List[str] = []
+    for name in child_scope.free_order:
+        if _resolved_in_parents(child_scope, name):
+            resolved.append(name)
+    return resolved
 
 
 def analyze(chunk: Chunk) -> Tuple[Dict[int, FunctionInfo], FunctionInfo]:
@@ -77,17 +96,20 @@ def _analyze_block(block: Block, scope: Scope, mapping: Dict[int, FunctionInfo])
             _analyze_expr(stmt.condition, scope, mapping)
             _analyze_block(stmt.body, scope, mapping)
         elif isinstance(stmt, ReturnStmt):
-            if stmt.value:
-                _analyze_expr(stmt.value, scope, mapping)
+            for value in stmt.values:
+                _analyze_expr(value, scope, mapping)
         elif isinstance(stmt, FunctionStmt):
             # function name is treated as global assignment
             func_info = FunctionInfo()
+            func_info.vararg = stmt.vararg
             child_scope = Scope(scope, func_info)
             for param in stmt.params:
                 child_scope.declare(param)
+            if stmt.vararg:
+                child_scope.declare("...")
             _analyze_block(stmt.body, child_scope, mapping)
             func_info.captured_locals |= child_scope.captured
-            func_info.upvalues = child_scope.free_order
+            func_info.upvalues = _filter_upvalues(child_scope)
             mapping[id(stmt)] = func_info
             scope.propagate_child_upvalues(func_info.upvalues)
         else:
@@ -120,14 +142,19 @@ def _analyze_expr(expr: Expr, scope: Scope, mapping: Dict[int, FunctionInfo]):
             _analyze_expr(arg, scope, mapping)
     elif isinstance(expr, FunctionExpr):
         func_info = FunctionInfo()
+        func_info.vararg = expr.vararg
         child_scope = Scope(scope, func_info)
         for param in expr.params:
             child_scope.declare(param)
+        if expr.vararg:
+            child_scope.declare("...")
         _analyze_block(expr.body, child_scope, mapping)
         func_info.captured_locals |= child_scope.captured
-        func_info.upvalues = child_scope.free_order
+        func_info.upvalues = _filter_upvalues(child_scope)
         mapping[id(expr)] = func_info
         scope.propagate_child_upvalues(func_info.upvalues)
+    elif isinstance(expr, VarargExpr):
+        scope.use("...")
     elif isinstance(expr, (NumberLiteral, StringLiteral, BooleanLiteral, NilLiteral)):
         return
     else:
