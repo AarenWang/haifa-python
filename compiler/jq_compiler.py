@@ -86,6 +86,64 @@ class JQCompiler:
             return
 
         if isinstance(stage, FunctionCall):
+            # Milestone 3 core filters
+            if stage.name == "keys" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.KEYS, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "has" and len(stage.args) == 1:
+                needle = self._eval_expression(stage.args[0], current_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.HAS, [dest, current_reg, needle]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "contains" and len(stage.args) == 1:
+                needle = self._eval_expression(stage.args[0], current_reg)
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.CONTAINS, [dest, current_reg, needle]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "add" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.AGG_ADD, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "join" and len(stage.args) in (0, 1):
+                if stage.args:
+                    sep = self._eval_expression(stage.args[0], current_reg)
+                else:
+                    sep = self._new_temp()
+                    self.instructions.append(Instruction(Opcode.LOAD_CONST, [sep, ""]))
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.JOIN, [dest, current_reg, sep]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "reverse" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.REVERSE, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "first" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.FIRST, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "last" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.LAST, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "any" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.ANY, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "all" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(Opcode.ALL, [dest, current_reg]))
+                self._compile_pipeline(rest, dest)
+                return
             if stage.name == "length" and not stage.args:
                 dest = self._new_temp()
                 self.instructions.append(Instruction(Opcode.LEN_VALUE, [dest, current_reg]))
