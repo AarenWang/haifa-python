@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .ast import (
     Assignment,
+    BreakStmt,
     BinaryOp,
     Block,
     BooleanLiteral,
     CallExpr,
     Chunk,
+    DoStmt,
     Expr,
     ExprStmt,
+    ElseIfClause,
     FieldAccess,
     FunctionExpr,
     FunctionStmt,
@@ -20,6 +23,7 @@ from .ast import (
     MethodCallExpr,
     NilLiteral,
     NumberLiteral,
+    RepeatStmt,
     ReturnStmt,
     StringLiteral,
     TableConstructor,
@@ -93,6 +97,12 @@ class LuaParser:
             return self._parse_if()
         if token.kind == "while":
             return self._parse_while()
+        if token.kind == "repeat":
+            return self._parse_repeat()
+        if token.kind == "do":
+            return self._parse_do()
+        if token.kind == "break":
+            return self._parse_break()
         if token.kind == "return":
             return self._parse_return()
         if token.kind == "function":
@@ -118,12 +128,23 @@ class LuaParser:
         if_tok = self._expect("if")
         condition = self._parse_expression()
         self._expect("then")
-        then_block = self._parse_block(["else", "end"])
+        then_block = self._parse_block(["elseif", "else", "end"])
+        elseif_branches: List[ElseIfClause] = []
+        while True:
+            elseif_tok = self._match("elseif")
+            if not elseif_tok:
+                break
+            clause_condition = self._parse_expression()
+            self._expect("then")
+            clause_block = self._parse_block(["elseif", "else", "end"])
+            elseif_branches.append(
+                ElseIfClause(elseif_tok.line, elseif_tok.column, clause_condition, clause_block)
+            )
         else_block = None
         if self._match("else"):
             else_block = self._parse_block(["end"])
         self._expect("end")
-        return IfStmt(condition.line, condition.column, condition, then_block, else_block)
+        return IfStmt(condition.line, condition.column, condition, then_block, elseif_branches, else_block)
 
     def _parse_while(self) -> WhileStmt:
         tok = self._expect("while")
@@ -133,10 +154,27 @@ class LuaParser:
         self._expect("end")
         return WhileStmt(tok.line, tok.column, condition, body)
 
+    def _parse_repeat(self) -> RepeatStmt:
+        tok = self._expect("repeat")
+        body = self._parse_block(["until"])
+        self._expect("until")
+        condition = self._parse_expression()
+        return RepeatStmt(tok.line, tok.column, body, condition)
+
+    def _parse_do(self) -> DoStmt:
+        tok = self._expect("do")
+        body = self._parse_block(["end"])
+        self._expect("end")
+        return DoStmt(tok.line, tok.column, body)
+
+    def _parse_break(self) -> BreakStmt:
+        tok = self._expect("break")
+        return BreakStmt(tok.line, tok.column)
+
     def _parse_return(self) -> ReturnStmt:
         tok = self._expect("return")
         values: List[Expr] = []
-        terminators = {"end", "else", "EOF"}
+        terminators = {"end", "else", "elseif", "until", "EOF"}
         if self._current().kind not in terminators:
             values.append(self._parse_expression())
             while self._match(","):

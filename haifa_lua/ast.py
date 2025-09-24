@@ -96,16 +96,41 @@ class Assignment(Stmt):
     values: List[Expr]
     is_local: bool = False
 
+
+@dataclass
+class ElseIfClause:
+    line: int
+    column: int
+    condition: Expr
+    body: "Block"
+
+
 @dataclass
 class IfStmt(Stmt):
     condition: Expr
     then_branch: "Block"
+    elseif_branches: List[ElseIfClause] = field(default_factory=list)
     else_branch: Optional["Block"] = None
 
 @dataclass
 class WhileStmt(Stmt):
     condition: Expr
     body: "Block"
+
+@dataclass
+class RepeatStmt(Stmt):
+    body: "Block"
+    condition: Expr
+
+
+@dataclass
+class DoStmt(Stmt):
+    body: "Block"
+
+
+@dataclass
+class BreakStmt(Stmt):
+    pass
 
 @dataclass
 class VarargExpr(Expr):
@@ -153,8 +178,12 @@ __all__ = [
     "VarargExpr",
     "Stmt",
     "Assignment",
+    "ElseIfClause",
     "IfStmt",
     "WhileStmt",
+    "RepeatStmt",
+    "DoStmt",
+    "BreakStmt",
     "ReturnStmt",
     "FunctionStmt",
     "ExprStmt",
