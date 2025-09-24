@@ -4,7 +4,7 @@ import curses
 import datetime
 import json
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 try:
     from .bytecode_vm import BytecodeVM, Instruction
@@ -24,6 +24,13 @@ except Exception:  # pragma: no cover - fallback when run as script bundle
         CoroutineResumed,
         CoroutineYielded,
     )
+
+try:
+    from haifa_lua.environment import LuaEnvironment  # type: ignore
+    from haifa_lua.stdlib import create_default_environment  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    LuaEnvironment = None  # type: ignore
+    create_default_environment = None  # type: ignore
 
 
 @dataclass
@@ -50,6 +57,10 @@ class VMVisualizer:
         self._vm_cls = type(vm)
         self._program: List[Instruction] = list(vm.instructions)
         self.state = _VMState(vm=vm)
+        (
+            self._initial_env_snapshot,
+            self._initial_global_registers,
+        ) = self._ensure_vm_environment(self.state.vm)
         self.max_steps = max_steps
         self.auto_run = False
         self.message = "Press SPACE to run/pause, n to step, q to quit."
@@ -150,11 +161,87 @@ class VMVisualizer:
 
     def _reset(self) -> None:
         self.state = _VMState(vm=self._vm_cls(self._program))
+        self._apply_initial_environment(self.state.vm)
         self.state.vm.index_labels()
         self.auto_run = False
         self.message = "Reset. Press SPACE to run or n to step."
         self.event_log.clear()
         self._event_entries.clear()
+
+    def _ensure_vm_environment(
+        self, vm: BytecodeVM
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        def has_globals(registers: Mapping[str, Any]) -> bool:
+            return any(name.startswith("G_") for name in registers)
+
+        env = getattr(vm, "lua_env", None)
+
+        if env is not None and LuaEnvironment is not None:
+            try:
+                env.sync_from_vm(vm.registers)
+            except AttributeError:
+                pass
+            if not has_globals(vm.registers):
+                try:
+                    vm.registers.update(env.to_vm_registers())
+                except AttributeError:
+                    pass
+            snapshot = env.snapshot() if hasattr(env, "snapshot") else None
+            globals_map = (
+                env.to_vm_registers() if hasattr(env, "to_vm_registers") else {}
+            )
+            return (snapshot if snapshot else None, dict(globals_map))
+
+        if env is None and has_globals(vm.registers) and LuaEnvironment is not None:
+            try:
+                env = LuaEnvironment()
+                env.sync_from_vm(vm.registers)
+                vm.lua_env = env
+                snapshot = env.snapshot()
+                globals_map = env.to_vm_registers()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        if env is None and not has_globals(vm.registers) and create_default_environment:
+            try:
+                env = create_default_environment()
+                vm.lua_env = env
+                globals_map = env.to_vm_registers()
+                vm.registers.update(globals_map)
+                snapshot = env.snapshot()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        globals_map = {
+            name: value for name, value in vm.registers.items() if name.startswith("G_")
+        }
+        if env is None and not globals_map and create_default_environment:
+            try:
+                env = create_default_environment()
+                globals_map = env.to_vm_registers()
+                vm.registers.update(globals_map)
+                vm.lua_env = env
+                snapshot = env.snapshot()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        return (None, dict(globals_map))
+
+    def _apply_initial_environment(self, vm: BytecodeVM) -> None:
+        if self._initial_env_snapshot and LuaEnvironment is not None:
+            try:
+                env = LuaEnvironment(self._initial_env_snapshot)
+                vm.lua_env = env
+                vm.registers.update(env.to_vm_registers())
+                return
+            except Exception:
+                pass
+        if self._initial_global_registers:
+            vm.registers.update(self._initial_global_registers)
+
 
     def _draw(self, stdscr: "curses._CursesWindow") -> None:
         stdscr.erase()
