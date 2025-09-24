@@ -91,13 +91,20 @@ class LuaCoroutine:
         return self.vm
 
     def _apply_globals(self, vm: BytecodeVM) -> None:
-        if self.env is None:
+        merged_globals: dict[str, object] = {}
+        if self.env is not None:
+            merged_globals.update(self.env.to_vm_registers())
+        for key, value in self.base_vm.registers.items():
+            if key.startswith("G_"):
+                merged_globals[key] = value
+
+        if not merged_globals:
             return
-        globals_snapshot = self.env.to_vm_registers()
+
         for key in list(vm.registers.keys()):
             if key.startswith("G_"):
                 del vm.registers[key]
-        vm.registers.update(globals_snapshot)
+        vm.registers.update(merged_globals)
 
     def _sync_globals(self, vm: BytecodeVM) -> None:
         if self.env is None:
