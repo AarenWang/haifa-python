@@ -92,8 +92,8 @@ class Stmt:
 
 @dataclass
 class Assignment(Stmt):
-    target: Identifier
-    value: Expr
+    targets: List[Expr]
+    values: List[Expr]
     is_local: bool = False
 
 @dataclass
