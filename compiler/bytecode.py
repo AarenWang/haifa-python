@@ -1,5 +1,22 @@
-from enum import Enum, auto
+from __future__ import annotations
+
 from dataclasses import dataclass
+from enum import Enum, auto
+
+
+@dataclass(frozen=True)
+class SourceLocation:
+    file: str
+    line: int
+    column: int
+
+
+@dataclass(frozen=True)
+class InstructionDebug:
+    """Metadata describing the provenance of an instruction."""
+
+    location: SourceLocation
+    function_name: str
 
 class Opcode(Enum):
     LOAD_IMM = auto()     # LOAD_IMM reg, value
@@ -88,6 +105,7 @@ class Opcode(Enum):
 class Instruction:
     opcode: Opcode
     args: list  # e.g., ['a', 'b'] or ['x', 5]
+    debug: InstructionDebug | None = None
 
     def __str__(self):
         return f"{self.opcode.name} {' '.join(map(str, self.args))}"
