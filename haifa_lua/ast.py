@@ -46,6 +46,37 @@ class CallExpr(Expr):
     callee: Expr
     args: List[Expr]
 
+
+@dataclass
+class MethodCallExpr(Expr):
+    receiver: Expr
+    method: str
+    args: List[Expr]
+
+
+@dataclass
+class FieldAccess(Expr):
+    table: Expr
+    field: str
+
+
+@dataclass
+class IndexExpr(Expr):
+    table: Expr
+    index: Expr
+
+
+@dataclass
+class TableField:
+    value: Expr
+    key: Optional[Expr] = None
+    name: Optional[str] = None
+
+
+@dataclass
+class TableConstructor(Expr):
+    fields: List[TableField]
+
 @dataclass
 class FunctionExpr(Expr):
     params: List[str]
@@ -61,20 +92,45 @@ class Stmt:
 
 @dataclass
 class Assignment(Stmt):
-    target: Identifier
-    value: Expr
+    targets: List[Expr]
+    values: List[Expr]
     is_local: bool = False
+
+
+@dataclass
+class ElseIfClause:
+    line: int
+    column: int
+    condition: Expr
+    body: "Block"
+
 
 @dataclass
 class IfStmt(Stmt):
     condition: Expr
     then_branch: "Block"
+    elseif_branches: List[ElseIfClause] = field(default_factory=list)
     else_branch: Optional["Block"] = None
 
 @dataclass
 class WhileStmt(Stmt):
     condition: Expr
     body: "Block"
+
+@dataclass
+class RepeatStmt(Stmt):
+    body: "Block"
+    condition: Expr
+
+
+@dataclass
+class DoStmt(Stmt):
+    body: "Block"
+
+
+@dataclass
+class BreakStmt(Stmt):
+    pass
 
 @dataclass
 class VarargExpr(Expr):
@@ -113,12 +169,21 @@ __all__ = [
     "BinaryOp",
     "UnaryOp",
     "CallExpr",
+    "MethodCallExpr",
+    "FieldAccess",
+    "IndexExpr",
+    "TableConstructor",
+    "TableField",
     "FunctionExpr",
     "VarargExpr",
     "Stmt",
     "Assignment",
+    "ElseIfClause",
     "IfStmt",
     "WhileStmt",
+    "RepeatStmt",
+    "DoStmt",
+    "BreakStmt",
     "ReturnStmt",
     "FunctionStmt",
     "ExprStmt",

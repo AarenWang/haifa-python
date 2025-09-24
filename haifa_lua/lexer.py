@@ -7,9 +7,13 @@ KEYWORDS = {
     "if",
     "then",
     "else",
+    "elseif",
     "end",
     "while",
     "do",
+    "repeat",
+    "until",
+    "break",
     "function",
     "return",
     "local",
@@ -103,10 +107,10 @@ class LuaLexer:
         if two_char in {"==", "~=", "<=", ">="}:
             self._advance(2)
             return Token("OP", two_char, start_line, start_col)
-        if ch in "+-*/%=#<>":
+        if ch in "+-*/%=#<>.":
             self._advance()
             return Token("OP", ch, start_line, start_col)
-        if ch in "(){}[],;":
+        if ch in "(){}[],;:":
             self._advance()
             return Token(ch, ch, start_line, start_col)
 
