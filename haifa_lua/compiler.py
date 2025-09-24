@@ -16,14 +16,18 @@ from .ast import (
     Chunk,
     Expr,
     ExprStmt,
+    FieldAccess,
     FunctionExpr,
     FunctionStmt,
     Identifier,
     IfStmt,
+    IndexExpr,
+    MethodCallExpr,
     NilLiteral,
     NumberLiteral,
     ReturnStmt,
     StringLiteral,
+    TableConstructor,
     UnaryOp,
     WhileStmt,
     VarargExpr,
@@ -322,6 +326,10 @@ class LuaCompiler:
             return self._compile_function_expr(expr)
         if isinstance(expr, VarargExpr):
             return self._compile_vararg_expr(multi=False, node=expr)
+        if isinstance(expr, FieldAccess):
+            return self._compile_field_access(expr)
+        if isinstance(expr, (MethodCallExpr, IndexExpr, TableConstructor)):
+            raise CompileError("Unsupported expression: tables and method calls are not implemented yet")
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -470,5 +478,27 @@ class LuaCompiler:
                 return dst
             return binding.storage
         return f"G_{name}"
+
+    def _compile_field_access(self, expr: FieldAccess) -> str:
+        chain = self._field_chain(expr)
+        if not chain:
+            raise CompileError("Field access on non-identifier bases is not supported yet")
+        base_name = chain[0]
+        binding = self._lookup_binding(base_name)
+        if binding is not None:
+            raise CompileError("Field access on local tables is not implemented yet")
+        full_name = ".".join(chain)
+        return f"G_{full_name}"
+
+    def _field_chain(self, expr: FieldAccess) -> Optional[List[str]]:
+        parts: List[str] = [expr.field]
+        current: Expr = expr.table
+        while isinstance(current, FieldAccess):
+            parts.insert(0, current.field)
+            current = current.table
+        if isinstance(current, Identifier):
+            parts.insert(0, current.name)
+            return parts
+        return None
 
 __all__ = ["LuaCompiler", "CompileError"]
