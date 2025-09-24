@@ -46,6 +46,37 @@ class CallExpr(Expr):
     callee: Expr
     args: List[Expr]
 
+
+@dataclass
+class MethodCallExpr(Expr):
+    receiver: Expr
+    method: str
+    args: List[Expr]
+
+
+@dataclass
+class FieldAccess(Expr):
+    table: Expr
+    field: str
+
+
+@dataclass
+class IndexExpr(Expr):
+    table: Expr
+    index: Expr
+
+
+@dataclass
+class TableField:
+    value: Expr
+    key: Optional[Expr] = None
+    name: Optional[str] = None
+
+
+@dataclass
+class TableConstructor(Expr):
+    fields: List[TableField]
+
 @dataclass
 class FunctionExpr(Expr):
     params: List[str]
@@ -61,8 +92,8 @@ class Stmt:
 
 @dataclass
 class Assignment(Stmt):
-    target: Identifier
-    value: Expr
+    targets: List[Expr]
+    values: List[Expr]
     is_local: bool = False
 
 @dataclass
@@ -113,6 +144,11 @@ __all__ = [
     "BinaryOp",
     "UnaryOp",
     "CallExpr",
+    "MethodCallExpr",
+    "FieldAccess",
+    "IndexExpr",
+    "TableConstructor",
+    "TableField",
     "FunctionExpr",
     "VarargExpr",
     "Stmt",

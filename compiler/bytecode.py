@@ -59,6 +59,7 @@ class Opcode(Enum):
     RETURN_MULTI = auto()# RETURN_MULTI r1, r2, ...
     RESULT_MULTI = auto()# RESULT_MULTI dst1, dst2, ...
     RESULT_LIST = auto() # RESULT_LIST dst
+    LIST_GET = auto()    # LIST_GET dst, src, index
 
     JMP = auto()          # JMP label
     JZ = auto()           # JZ reg, label
