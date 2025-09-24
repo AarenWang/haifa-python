@@ -30,6 +30,13 @@ except Exception:  # fallback when run as top-level script
         VMStateSnapshot,
     )
 
+try:
+    from haifa_lua.environment import LuaEnvironment  # type: ignore
+    from haifa_lua.stdlib import create_default_environment  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    LuaEnvironment = None  # type: ignore
+    create_default_environment = None  # type: ignore
+
 # Constants
 SCREEN_WIDTH = 1600
 SCREEN_HEIGHT = 900
@@ -74,10 +81,81 @@ class VMVisualizer:
         self._vm_cls = type(vm)
         # Keep a frozen copy of instructions for resetting
         self._instructions = list(vm.instructions)
+        self._initial_env_snapshot, self._initial_global_registers = (
+            self._ensure_vm_environment(self.vm)
+        )
 
     def _draw_text(self, text: str, x: int, y: int, color=FONT_COLOR, background=None):
         surface = self.font.render(text, True, color, background)
         self.screen.blit(surface, (x, y))
+
+    def _ensure_vm_environment(
+        self, vm: BytecodeVM
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """Guarantee that builtins are available and capture env snapshot."""
+
+        def has_globals(registers: Mapping[str, Any]) -> bool:
+            return any(name.startswith("G_") for name in registers)
+
+        env = getattr(vm, "lua_env", None)
+
+        if env is not None and LuaEnvironment is not None:
+            # Sync current VM state back into the environment before snapshotting.
+            try:
+                env.sync_from_vm(vm.registers)
+            except AttributeError:
+                pass
+            if not has_globals(vm.registers):
+                try:
+                    vm.registers.update(env.to_vm_registers())
+                except AttributeError:
+                    pass
+            snapshot = env.snapshot() if hasattr(env, "snapshot") else None
+            globals_map = (
+                env.to_vm_registers() if hasattr(env, "to_vm_registers") else {}
+            )
+            return (snapshot if snapshot else None, dict(globals_map))
+
+        if env is None and has_globals(vm.registers) and LuaEnvironment is not None:
+            # Reconstruct environment from the VM registers so subsequent resets
+            # preserve user-provided globals.
+            try:
+                env = LuaEnvironment()
+                env.sync_from_vm(vm.registers)
+                vm.lua_env = env
+                snapshot = env.snapshot()
+                globals_map = env.to_vm_registers()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        if env is None and not has_globals(vm.registers) and create_default_environment:
+            try:
+                env = create_default_environment()
+                vm.lua_env = env
+                globals_map = env.to_vm_registers()
+                vm.registers.update(globals_map)
+                snapshot = env.snapshot()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        # Fallback: remember any globals already on the VM registers.
+        globals_map = {
+            name: value for name, value in vm.registers.items() if name.startswith("G_")
+        }
+        if env is None and not globals_map and create_default_environment:
+            try:
+                env = create_default_environment()
+                globals_map = env.to_vm_registers()
+                vm.registers.update(globals_map)
+                vm.lua_env = env
+                snapshot = env.snapshot()
+                return (snapshot if snapshot else None, dict(globals_map))
+            except Exception:
+                pass
+
+        return (None, dict(globals_map))
 
     def _draw_section(
         self,
@@ -725,6 +803,7 @@ class VMVisualizer:
 
     def _reset_vm(self) -> None:
         self.vm = self._vm_cls(self._instructions)
+        self._apply_initial_environment(self.vm)
         self.vm.index_labels()
         self.paused = True
         self.auto_run = False
@@ -740,3 +819,15 @@ class VMVisualizer:
         self._coroutine_index_map = {}
         self._latest_snapshot = None
         self.message = "VM reset."
+
+    def _apply_initial_environment(self, vm: BytecodeVM) -> None:
+        if self._initial_env_snapshot and LuaEnvironment is not None:
+            try:
+                env = LuaEnvironment(self._initial_env_snapshot)
+                vm.lua_env = env
+                vm.registers.update(env.to_vm_registers())
+                return
+            except Exception:
+                pass
+        if self._initial_global_registers:
+            vm.registers.update(self._initial_global_registers)
