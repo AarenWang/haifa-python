@@ -11,14 +11,19 @@ from .ast import (
     Chunk,
     Expr,
     ExprStmt,
+    FieldAccess,
     FunctionExpr,
     FunctionStmt,
     Identifier,
     IfStmt,
+    IndexExpr,
+    MethodCallExpr,
     NilLiteral,
     NumberLiteral,
     ReturnStmt,
     StringLiteral,
+    TableConstructor,
+    TableField,
     UnaryOp,
     VarargExpr,
     WhileStmt,
@@ -262,45 +267,38 @@ class LuaParser:
         if token.kind == "NUMBER":
             tok = self._advance()
             value = float(tok.value) if "." in tok.value else int(tok.value)
-            return NumberLiteral(tok.line, tok.column, value)
-        if token.kind == "STRING":
+            expr: Expr = NumberLiteral(tok.line, tok.column, value)
+        elif token.kind == "STRING":
             tok = self._advance()
-            return StringLiteral(tok.line, tok.column, tok.value)
-        if token.kind == "IDENT":
+            expr = StringLiteral(tok.line, tok.column, tok.value)
+        elif token.kind == "IDENT":
             ident = self._advance()
-            expr: Expr = Identifier(ident.line, ident.column, ident.value)
-            if self._match("("):
-                args: List[Expr] = []
-                if self._current().kind != ")":
-                    while True:
-                        args.append(self._parse_expression())
-                        if not self._match(","):
-                            break
-                self._expect(")")
-                expr = CallExpr(ident.line, ident.column, expr, args)
-            return expr
-        if token.kind in {"VARARG", "..."} or (token.kind == "OP" and token.value == "..."):
+            expr = self._make_identifier_expr(ident)
+        elif token.kind in {"VARARG", "..."} or (token.kind == "OP" and token.value == "..."):
             tok = self._advance()
-            return VarargExpr(tok.line, tok.column)
-        if token.kind == "function":
-            return self._parse_function_expr()
-        if token.kind == "(" :
+            expr = VarargExpr(tok.line, tok.column)
+        elif token.kind == "function":
+            expr = self._parse_function_expr()
+        elif token.kind == "(":
             self._advance()
             expr = self._parse_expression()
             self._expect(")")
-            return expr
-        if token.kind == "EOF":
+        elif token.kind == "{":
+            expr = self._parse_table_constructor()
+        elif token.kind == "EOF":
             raise ParserError("Unexpected EOF")
-        if token.kind == "nil":
+        elif token.kind == "nil":
             tok = self._advance()
-            return NilLiteral(tok.line, tok.column)
-        if token.kind == "true":
+            expr = NilLiteral(tok.line, tok.column)
+        elif token.kind == "true":
             tok = self._advance()
-            return BooleanLiteral(tok.line, tok.column, True)
-        if token.kind == "false":
+            expr = BooleanLiteral(tok.line, tok.column, True)
+        elif token.kind == "false":
             tok = self._advance()
-            return BooleanLiteral(tok.line, tok.column, False)
-        raise ParserError(f"Unexpected token {token.kind} at {token.line}:{token.column}")
+            expr = BooleanLiteral(tok.line, tok.column, False)
+        else:
+            raise ParserError(f"Unexpected token {token.kind} at {token.line}:{token.column}")
+        return self._parse_postfix(expr)
 
     def _parse_function_expr(self) -> FunctionExpr:
         tok = self._expect("function")
@@ -308,5 +306,85 @@ class LuaParser:
         body = self._parse_block(["end"])
         self._expect("end")
         return FunctionExpr(tok.line, tok.column, params, vararg, body)
+
+    def _parse_postfix(self, expr: Expr) -> Expr:
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == ".":
+                self._advance()
+                name_tok = self._expect("IDENT")
+                expr = FieldAccess(name_tok.line, name_tok.column, expr, name_tok.value)
+                continue
+            if token.kind == "[":
+                bracket_tok = self._advance()
+                index_expr = self._parse_expression()
+                self._expect("]")
+                expr = IndexExpr(bracket_tok.line, bracket_tok.column, expr, index_expr)
+                continue
+            if token.kind == ":":
+                colon_tok = self._advance()
+                name_tok = self._expect("IDENT")
+                args = self._parse_call_arguments()
+                expr = MethodCallExpr(colon_tok.line, colon_tok.column, expr, name_tok.value, args)
+                continue
+            if token.kind == "(":
+                expr = self._finish_call(expr)
+                continue
+            break
+        return expr
+
+    def _finish_call(self, callee: Expr) -> CallExpr:
+        lparen = self._expect("(")
+        args = self._parse_call_arguments_body()
+        return CallExpr(lparen.line, lparen.column, callee, args)
+
+    def _parse_call_arguments(self) -> List[Expr]:
+        self._expect("(")
+        return self._parse_call_arguments_body()
+
+    def _parse_call_arguments_body(self) -> List[Expr]:
+        args: List[Expr] = []
+        if self._current().kind != ")":
+            while True:
+                args.append(self._parse_expression())
+                if not self._match(","):
+                    break
+        self._expect(")")
+        return args
+
+    def _make_identifier_expr(self, token: Token) -> Expr:
+        parts = token.value.split(".")
+        expr: Expr = Identifier(token.line, token.column, parts[0])
+        for part in parts[1:]:
+            expr = FieldAccess(token.line, token.column, expr, part)
+        return expr
+
+    def _parse_table_constructor(self) -> TableConstructor:
+        start = self._expect("{")
+        fields: List[TableField] = []
+        while self._current().kind != "}":
+            if self._current().kind == "[":
+                self._advance()
+                key_expr = self._parse_expression()
+                self._expect("]")
+                self._expect_op("=")
+                value_expr = self._parse_expression()
+                fields.append(TableField(value_expr, key=key_expr))
+            elif (
+                self._current().kind == "IDENT"
+                and self._peek_kind(1) == "OP"
+                and self.tokens[self.pos + 1].value == "="
+            ):
+                name_tok = self._advance()
+                self._expect_op("=")
+                value_expr = self._parse_expression()
+                fields.append(TableField(value_expr, name=name_tok.value))
+            else:
+                value_expr = self._parse_expression()
+                fields.append(TableField(value_expr))
+            if not self._match(",") and not self._match(";"):
+                break
+        self._expect("}")
+        return TableConstructor(start.line, start.column, fields)
 
 __all__ = ["LuaParser", "ParserError"]
