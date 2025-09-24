@@ -4,7 +4,7 @@ import itertools
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from compiler.bytecode import Instruction, Opcode
+from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
 
 from .analysis import FunctionInfo, analyze
 from .ast import (
@@ -45,7 +45,15 @@ _FUNC_LABEL_COUNTER = itertools.count()
 
 
 class LuaCompiler:
-    def __init__(self, closure_map: Dict[int, FunctionInfo], function_info: FunctionInfo, upvalue_names: Optional[List[str]] = None):
+    def __init__(
+        self,
+        closure_map: Dict[int, FunctionInfo],
+        function_info: FunctionInfo,
+        upvalue_names: Optional[List[str]] = None,
+        *,
+        source_name: str = "<stdin>",
+        function_name: str = "<chunk>",
+    ):
         self.closure_map = closure_map
         self.function_info = function_info
         self.upvalue_names = upvalue_names or []
@@ -58,12 +66,21 @@ class LuaCompiler:
         self.exit_label = "__lua_exit"
         self.is_top_level = False
         self.vararg_flag = function_info.vararg
+        self.source_name = source_name
+        self.function_name = function_name
+        self._last_debug: InstructionDebug | None = None
 
     # ------------------------------------------------------------------
     @classmethod
-    def compile_chunk(cls, chunk: Chunk) -> List[Instruction]:
+    def compile_chunk(cls, chunk: Chunk, *, source_name: str = "<stdin>") -> List[Instruction]:
         closure_map, root_info = analyze(chunk)
-        compiler = cls(closure_map, root_info, root_info.upvalues)
+        compiler = cls(
+            closure_map,
+            root_info,
+            root_info.upvalues,
+            source_name=source_name,
+            function_name="<chunk>",
+        )
         return compiler._compile_chunk(chunk)
 
     def _compile_chunk(self, chunk: Chunk) -> List[Instruction]:
@@ -75,10 +92,10 @@ class LuaCompiler:
         self.is_top_level = True
         self._bind_upvalues()
         self._compile_block(chunk.body, top_level=True)
-        self.instructions.append(Instruction(Opcode.JMP, [self.exit_label]))
+        self._emit(Opcode.JMP, [self.exit_label], node=chunk.body.statements[-1] if chunk.body.statements else None)
         self.instructions.extend(self.function_blocks)
-        self.instructions.append(Instruction(Opcode.LABEL, [self.exit_label]))
-        self.instructions.append(Instruction(Opcode.HALT, []))
+        self._emit(Opcode.LABEL, [self.exit_label])
+        self._emit(Opcode.HALT, [])
         return list(self.instructions)
 
     # ------------------------------------------------------------------
@@ -103,6 +120,28 @@ class LuaCompiler:
         self.temp_counter += 1
         return reg
 
+    def _debug_for(self, node: object | None) -> InstructionDebug | None:
+        if node is None:
+            return None
+        line = int(getattr(node, "line", 0) or 0)
+        column = int(getattr(node, "column", 0) or 0)
+        location = SourceLocation(self.source_name, line, column)
+        return InstructionDebug(location, self.function_name)
+
+    def _emit(self, opcode: Opcode, args, *, node: object | None = None) -> Instruction:
+        if isinstance(args, (list, tuple)):
+            arg_list = list(args)
+        else:
+            arg_list = [args]
+        debug = self._debug_for(node)
+        if debug is not None:
+            self._last_debug = debug
+        elif self._last_debug is not None:
+            debug = self._last_debug
+        inst = Instruction(opcode, arg_list, debug)
+        self.instructions.append(inst)
+        return inst
+
     def _lookup_binding(self, name: str) -> Optional[VarBinding]:
         for scope in reversed(self.scope_stack):
             if name in scope:
@@ -116,28 +155,28 @@ class LuaCompiler:
         for idx, name in enumerate(self.upvalue_names):
             cell_reg = self._alloc_cell_reg(name)
             scope[name] = VarBinding(storage=cell_reg, is_cell=True)
-            self.instructions.append(Instruction(Opcode.BIND_UPVALUE, [cell_reg, str(idx)]))
+            self._emit(Opcode.BIND_UPVALUE, [cell_reg, str(idx)])
 
-    def _setup_parameters(self, params: List[str], info: FunctionInfo, is_vararg: bool):
+    def _setup_parameters(self, params: List[str], info: FunctionInfo, is_vararg: bool, node: object):
         scope = self.scope_stack[-1]
         for param in params:
             captured = param in info.captured_locals
             reg = self._alloc_local_reg(param)
             scope[param] = VarBinding(reg, False)
-            self.instructions.append(Instruction(Opcode.ARG, [reg]))
+            self._emit(Opcode.ARG, [reg], node=node)
             if captured:
                 cell_reg = self._alloc_cell_reg(param)
                 scope[param] = VarBinding(cell_reg, True)
-                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, reg]))
+                self._emit(Opcode.MAKE_CELL, [cell_reg, reg], node=node)
         if is_vararg:
             var_reg = self._alloc_local_reg("__vararg")
             captured = "..." in info.captured_locals
             scope["..."] = VarBinding(var_reg, False, True)
-            self.instructions.append(Instruction(Opcode.VARARG, [var_reg]))
+            self._emit(Opcode.VARARG, [var_reg], node=node)
             if captured:
                 cell_reg = self._alloc_cell_reg("vararg")
                 scope["..."] = VarBinding(cell_reg, True, True)
-                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, var_reg]))
+                self._emit(Opcode.MAKE_CELL, [cell_reg, var_reg], node=node)
 
     # ------------------------------------------------------------------ Statements
     def _compile_block(self, block: Block, top_level: bool = False):
@@ -173,46 +212,46 @@ class LuaCompiler:
             if captured:
                 cell_reg = self._alloc_cell_reg(stmt.target.name)
                 self.scope_stack[-1][stmt.target.name] = VarBinding(cell_reg, True)
-                self.instructions.append(Instruction(Opcode.MAKE_CELL, [cell_reg, value_reg]))
+                self._emit(Opcode.MAKE_CELL, [cell_reg, value_reg], node=stmt)
             else:
                 reg = self._alloc_local_reg(stmt.target.name)
                 self.scope_stack[-1][stmt.target.name] = VarBinding(reg, False)
-                self.instructions.append(Instruction(Opcode.MOV, [reg, value_reg]))
+                self._emit(Opcode.MOV, [reg, value_reg], node=stmt)
             return
 
         if binding:
             if binding.is_cell:
-                self.instructions.append(Instruction(Opcode.CELL_SET, [binding.storage, value_reg]))
+                self._emit(Opcode.CELL_SET, [binding.storage, value_reg], node=stmt)
             else:
-                self.instructions.append(Instruction(Opcode.MOV, [binding.storage, value_reg]))
+                self._emit(Opcode.MOV, [binding.storage, value_reg], node=stmt)
         else:
-            self.instructions.append(Instruction(Opcode.MOV, [f"G_{stmt.target.name}", value_reg]))
+            self._emit(Opcode.MOV, [f"G_{stmt.target.name}", value_reg], node=stmt)
 
     def _compile_if(self, stmt: IfStmt):
         cond_reg = self._compile_expr(stmt.condition)
         else_label = f"__else_{self._new_temp()}"
         end_label = f"__endif_{self._new_temp()}"
-        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, else_label]))
+        self._emit(Opcode.JZ, [cond_reg, else_label], node=stmt)
         self._compile_block(stmt.then_branch)
-        self.instructions.append(Instruction(Opcode.JMP, [end_label]))
-        self.instructions.append(Instruction(Opcode.LABEL, [else_label]))
+        self._emit(Opcode.JMP, [end_label], node=stmt)
+        self._emit(Opcode.LABEL, [else_label], node=stmt)
         if stmt.else_branch:
             self._compile_block(stmt.else_branch)
-        self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
 
     def _compile_while(self, stmt: WhileStmt):
         start_label = f"__while_start_{self._new_temp()}"
         end_label = f"__while_end_{self._new_temp()}"
-        self.instructions.append(Instruction(Opcode.LABEL, [start_label]))
+        self._emit(Opcode.LABEL, [start_label], node=stmt)
         cond_reg = self._compile_expr(stmt.condition)
-        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+        self._emit(Opcode.JZ, [cond_reg, end_label], node=stmt)
         self._compile_block(stmt.body)
-        self.instructions.append(Instruction(Opcode.JMP, [start_label]))
-        self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+        self._emit(Opcode.JMP, [start_label], node=stmt)
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
 
     def _compile_return(self, stmt: ReturnStmt):
         if not stmt.values:
-            self.instructions.append(Instruction(Opcode.RETURN, ["0"]))
+            self._emit(Opcode.RETURN, ["0"], node=stmt)
         else:
             regs: List[str] = []
             total = len(stmt.values)
@@ -221,51 +260,57 @@ class LuaCompiler:
                 if isinstance(expr, CallExpr) and last:
                     reg = self._compile_call(expr, want_list=True)
                 elif isinstance(expr, VarargExpr):
-                    reg = self._compile_vararg_expr(multi=last)
+                    reg = self._compile_vararg_expr(multi=last, node=expr)
                 else:
                     reg = self._compile_expr(expr)
                 regs.append(reg)
             if len(regs) == 1 and not isinstance(stmt.values[0], (CallExpr, VarargExpr)):
-                self.instructions.append(Instruction(Opcode.RETURN, [regs[0]]))
+                self._emit(Opcode.RETURN, [regs[0]], node=stmt)
             else:
-                self.instructions.append(Instruction(Opcode.RETURN_MULTI, regs))
+                self._emit(Opcode.RETURN_MULTI, regs, node=stmt)
         if self.is_top_level:
-            self.instructions.append(Instruction(Opcode.JMP, [self.exit_label]))
+            self._emit(Opcode.JMP, [self.exit_label], node=stmt)
 
     def _compile_function_stmt(self, stmt: FunctionStmt):
         # treat as global function binding
         func_label = stmt.name.name
         info = self.closure_map.get(id(stmt), FunctionInfo())
-        compiler = LuaCompiler(self.closure_map, info, info.upvalues)
-        compiler.instructions.append(Instruction(Opcode.LABEL, [func_label]))
+        compiler = LuaCompiler(
+            self.closure_map,
+            info,
+            info.upvalues,
+            source_name=self.source_name,
+            function_name=func_label,
+        )
+        compiler._emit(Opcode.LABEL, [func_label], node=stmt)
         compiler.scope_stack = [{}]
         compiler._bind_upvalues()
-        compiler._setup_parameters(stmt.params, info, stmt.vararg)
+        compiler._setup_parameters(stmt.params, info, stmt.vararg, stmt)
         compiler._compile_block(stmt.body)
-        compiler.instructions.append(Instruction(Opcode.RETURN, ["0"]))
+        compiler._emit(Opcode.RETURN, ["0"], node=stmt)
         self.function_blocks.extend(compiler.instructions)
         self.function_blocks.extend(compiler.function_blocks)
-        self.instructions.append(Instruction(Opcode.CLOSURE, [f"G_{func_label}", func_label]))
+        self._emit(Opcode.CLOSURE, [f"G_{func_label}", func_label], node=stmt)
 
     # ------------------------------------------------------------------ Expressions
     def _compile_expr(self, expr: Expr) -> str:
         if isinstance(expr, NumberLiteral):
-            return self._emit_literal(expr.value)
+            return self._emit_literal(expr.value, expr)
         if isinstance(expr, StringLiteral):
-            return self._emit_literal(expr.value)
+            return self._emit_literal(expr.value, expr)
         if isinstance(expr, BooleanLiteral):
-            return self._emit_literal(int(expr.value))
+            return self._emit_literal(int(expr.value), expr)
         if isinstance(expr, NilLiteral):
-            return self._emit_literal(None)
+            return self._emit_literal(None, expr)
         if isinstance(expr, Identifier):
-            return self._read_identifier(expr.name)
+            return self._read_identifier(expr)
         if isinstance(expr, UnaryOp):
             operand = self._compile_expr(expr.operand)
             dst = self._new_temp()
             if expr.op == "-":
-                self.instructions.append(Instruction(Opcode.NEG, [dst, operand]))
+                self._emit(Opcode.NEG, [dst, operand], node=expr)
             elif expr.op == "not":
-                self.instructions.append(Instruction(Opcode.NOT, [dst, operand]))
+                self._emit(Opcode.NOT, [dst, operand], node=expr)
             else:
                 raise CompileError(f"Unsupported unary operator {expr.op}")
             return dst
@@ -276,7 +321,7 @@ class LuaCompiler:
         if isinstance(expr, FunctionExpr):
             return self._compile_function_expr(expr)
         if isinstance(expr, VarargExpr):
-            return self._compile_vararg_expr(multi=False)
+            return self._compile_vararg_expr(multi=False, node=expr)
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -292,7 +337,7 @@ class LuaCompiler:
             "%": Opcode.MOD,
         }
         if op in table:
-            self.instructions.append(Instruction(table[op], [dst, left, right]))
+            self._emit(table[op], [dst, left, right], node=expr)
             return dst
         comp_table = {
             "==": Opcode.EQ,
@@ -300,32 +345,32 @@ class LuaCompiler:
             ">": Opcode.GT,
         }
         if op in comp_table:
-            self.instructions.append(Instruction(comp_table[op], [dst, left, right]))
+            self._emit(comp_table[op], [dst, left, right], node=expr)
             return dst
         if op == "~=":
             tmp = self._new_temp()
-            self.instructions.append(Instruction(Opcode.EQ, [tmp, left, right]))
-            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            self._emit(Opcode.EQ, [tmp, left, right], node=expr)
+            self._emit(Opcode.NOT, [dst, tmp], node=expr)
             return dst
         if op == "<=":
             tmp = self._new_temp()
-            self.instructions.append(Instruction(Opcode.GT, [tmp, left, right]))
-            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            self._emit(Opcode.GT, [tmp, left, right], node=expr)
+            self._emit(Opcode.NOT, [dst, tmp], node=expr)
             return dst
         if op == ">=":
             tmp = self._new_temp()
-            self.instructions.append(Instruction(Opcode.LT, [tmp, left, right]))
-            self.instructions.append(Instruction(Opcode.NOT, [dst, tmp]))
+            self._emit(Opcode.LT, [tmp, left, right], node=expr)
+            self._emit(Opcode.NOT, [dst, tmp], node=expr)
             return dst
         if op == "and":
             tmp = self._new_temp()
-            self.instructions.append(Instruction(Opcode.AND, [tmp, left, right]))
-            self.instructions.append(Instruction(Opcode.MOV, [dst, tmp]))
+            self._emit(Opcode.AND, [tmp, left, right], node=expr)
+            self._emit(Opcode.MOV, [dst, tmp], node=expr)
             return dst
         if op == "or":
             tmp = self._new_temp()
-            self.instructions.append(Instruction(Opcode.OR, [tmp, left, right]))
-            self.instructions.append(Instruction(Opcode.MOV, [dst, tmp]))
+            self._emit(Opcode.OR, [tmp, left, right], node=expr)
+            self._emit(Opcode.MOV, [dst, tmp], node=expr)
             return dst
         raise CompileError(f"Unsupported binary operator {op}")
 
@@ -339,58 +384,65 @@ class LuaCompiler:
                 arg_reg = self._compile_call(arg, want_list=True)
                 prepared_args.append((arg_reg, True))
             elif last and isinstance(arg, VarargExpr):
-                arg_reg = self._compile_vararg_expr(multi=True)
+                arg_reg = self._compile_vararg_expr(multi=True, node=arg)
                 prepared_args.append((arg_reg, True))
             else:
                 if isinstance(arg, VarargExpr):
-                    arg_reg = self._compile_vararg_expr(multi=False)
+                    arg_reg = self._compile_vararg_expr(multi=False, node=arg)
                 else:
                     arg_reg = self._compile_expr(arg)
                 prepared_args.append((arg_reg, False))
         for reg, expand in prepared_args:
             opcode = Opcode.PARAM_EXPAND if expand else Opcode.PARAM
-            self.instructions.append(Instruction(opcode, [reg]))
-        self.instructions.append(Instruction(Opcode.CALL_VALUE, [callee_reg]))
+            self._emit(opcode, [reg], node=expr)
+        self._emit(Opcode.CALL_VALUE, [callee_reg], node=expr)
         if want_list:
             dst = self._new_temp()
-            self.instructions.append(Instruction(Opcode.RESULT_LIST, [dst]))
+            self._emit(Opcode.RESULT_LIST, [dst], node=expr)
             return dst
         dst = self._new_temp()
-        self.instructions.append(Instruction(Opcode.RESULT, [dst]))
+        self._emit(Opcode.RESULT, [dst], node=expr)
         return dst
 
     def _compile_function_expr(self, expr: FunctionExpr) -> str:
         label = f"__func_{next(_FUNC_LABEL_COUNTER)}"
         info = self.closure_map.get(id(expr), FunctionInfo())
-        child = LuaCompiler(self.closure_map, info, info.upvalues)
-        child.instructions.append(Instruction(Opcode.LABEL, [label]))
+        func_name = f"<anonymous:{expr.line}>"
+        child = LuaCompiler(
+            self.closure_map,
+            info,
+            info.upvalues,
+            source_name=self.source_name,
+            function_name=func_name,
+        )
+        child._emit(Opcode.LABEL, [label], node=expr)
         child.scope_stack = [{}]
         child._bind_upvalues()
-        child._setup_parameters(expr.params, info, expr.vararg)
+        child._setup_parameters(expr.params, info, expr.vararg, expr)
         child._compile_block(expr.body)
-        child.instructions.append(Instruction(Opcode.RETURN, ["0"]))
+        child._emit(Opcode.RETURN, ["0"], node=expr)
         self.function_blocks.extend(child.instructions)
         self.function_blocks.extend(child.function_blocks)
 
         dst = self._new_temp()
         upvalue_cells = [self._binding_cell(name) for name in info.upvalues]
         args = [dst, label] + upvalue_cells
-        self.instructions.append(Instruction(Opcode.CLOSURE, args))
+        self._emit(Opcode.CLOSURE, args, node=expr)
         return dst
 
-    def _compile_vararg_expr(self, multi: bool) -> str:
+    def _compile_vararg_expr(self, multi: bool, node: VarargExpr) -> str:
         binding = self._lookup_binding("...")
         if not binding or not binding.is_vararg:
             raise CompileError("`...` used outside a vararg function")
         dst = self._new_temp()
         if binding.is_cell:
-            self.instructions.append(Instruction(Opcode.CELL_GET, [dst, binding.storage]))
+            self._emit(Opcode.CELL_GET, [dst, binding.storage], node=node)
         else:
-            self.instructions.append(Instruction(Opcode.MOV, [dst, binding.storage]))
+            self._emit(Opcode.MOV, [dst, binding.storage], node=node)
         if multi:
             return dst
         head = self._new_temp()
-        self.instructions.append(Instruction(Opcode.VARARG_FIRST, [head, dst]))
+        self._emit(Opcode.VARARG_FIRST, [head, dst], node=node)
         return head
 
     # ------------------------------------------------------------------ Helpers
@@ -400,20 +452,21 @@ class LuaCompiler:
             raise CompileError(f"Expected captured variable '{name}' to be a cell")
         return binding.storage
 
-    def _emit_literal(self, value, hint: Optional[str] = None) -> str:
+    def _emit_literal(self, value, node: Expr, hint: Optional[str] = None) -> str:
         dst = hint or self._new_temp()
         if isinstance(value, int):
-            self.instructions.append(Instruction(Opcode.LOAD_IMM, [dst, value]))
+            self._emit(Opcode.LOAD_IMM, [dst, value], node=node)
         else:
-            self.instructions.append(Instruction(Opcode.LOAD_CONST, [dst, value]))
+            self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
         return dst
 
-    def _read_identifier(self, name: str) -> str:
+    def _read_identifier(self, expr: Identifier) -> str:
+        name = expr.name
         binding = self._lookup_binding(name)
         if binding:
             if binding.is_cell:
                 dst = self._new_temp()
-                self.instructions.append(Instruction(Opcode.CELL_GET, [dst, binding.storage]))
+                self._emit(Opcode.CELL_GET, [dst, binding.storage], node=expr)
                 return dst
             return binding.storage
         return f"G_{name}"
