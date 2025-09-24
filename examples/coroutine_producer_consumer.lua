@@ -3,48 +3,57 @@
 
 print("=== 协程生产者-消费者示例 ===")
 
+function get_item(index)
+    if index == 1 then
+        return "苹果"
+    end
+    if index == 2 then
+        return "香蕉"
+    end
+    if index == 3 then
+        return "橙子"
+    end
+    if index == 4 then
+        return "葡萄"
+    end
+    if index == 5 then
+        return "草莓"
+    end
+    return nil
+end
+
 -- 生产者协程
 function producer()
-    local items = {"苹果", "香蕉", "橙子", "葡萄", "草莓"}
-    
-    for i = 1, #items do
-        print("生产者: 正在生产", items[i])
-        coroutine.yield(items[i])  -- 产出物品
-        print("生产者: 继续生产下一个物品")
+    local index = 0
+
+    while index < 5 do
+        index = index + 1
+        local item = get_item(index)
+        coroutine.yield("物品", item)
     end
-    
-    print("生产者: 所有物品生产完毕")
-    return nil  -- 生产结束
+
+    return "完成"
 end
 
 -- 消费者函数（主程序扮演消费者）
 function consumer()
     local co = coroutine.create(producer)
     local item_count = 0
-    
-    while true do
-        local success, item = coroutine.resume(co)
-        
-        if not success then
-            print("消费者: 协程执行出错")
-            break
-        end
-        
-        if item == nil then
-            print("消费者: 没有更多物品了")
-            break
-        end
-        
+
+    while item_count < 5 do
         item_count = item_count + 1
-        print("消费者: 接收到第" .. item_count .. "个物品:", item)
+        print("消费者: 请求第", item_count, "个物品")
+        print("返回值:", coroutine.resume(co))
+        local item = get_item(item_count)
         print("消费者: 正在消费", item)
         print("消费者: 请求下一个物品...")
         print("---")
     end
-    
+
+    print("协程最终返回:", coroutine.resume(co))
     print("消费者: 总共消费了", item_count, "个物品")
-    print("协程最终状态:", coroutine.status(co))
 end
 
 -- 开始消费流程
 consumer()
+
