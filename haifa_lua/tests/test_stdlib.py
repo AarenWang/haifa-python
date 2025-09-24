@@ -15,7 +15,7 @@ from compiler.vm_events import (
     CoroutineYielded,
 )
 
-from haifa_lua import BuiltinFunction, create_default_environment, run_source
+from haifa_lua import BuiltinFunction, LuaTable, create_default_environment, run_source
 from haifa_lua.debug import LuaRuntimeError
 from haifa_lua.runtime import compile_source
 
@@ -33,7 +33,7 @@ def test_math_and_string_builtins():
 
 def test_table_insert_and_remove_roundtrip():
     env = create_default_environment()
-    env.register("arr", [])
+    env.register("arr", LuaTable())
     script = """
     table.insert(arr, 1)
     table.insert(arr, 2)
@@ -42,7 +42,10 @@ def test_table_insert_and_remove_roundtrip():
     """
     result = run_source(script, env)
     assert result == [2]
-    assert env["arr"] == [1]
+    arr = env["arr"]
+    assert isinstance(arr, LuaTable)
+    assert arr.lua_len() == 1
+    assert arr.raw_get(1) == 1
 
 
 def test_environment_hot_update():
