@@ -3,7 +3,10 @@ from __future__ import annotations
 import math
 from typing import Any, Sequence
 
-from .environment import BuiltinFunction, LuaEnvironment
+from compiler.bytecode_vm import LuaYield
+
+from .coroutines import CoroutineError, LuaCoroutine
+from .environment import BuiltinFunction, LuaEnvironment, LuaMultiReturn
 
 
 def _lua_tostring(value: Any) -> str:
@@ -75,6 +78,12 @@ def _string_len(args: Sequence[Any], vm: Any) -> int:  # noqa: ANN401
     return len(_ensure_string(args[0]))
 
 
+def _ensure_coroutine(value: Any) -> LuaCoroutine:
+    if isinstance(value, LuaCoroutine):
+        return value
+    raise RuntimeError("expected coroutine")
+
+
 def _table_insert(args: Sequence[Any], vm: Any) -> None:  # noqa: ANN401
     _ensure_args(args, 2, 3)
     target = _ensure_list(args[0])
@@ -105,6 +114,30 @@ def _table_remove(args: Sequence[Any], vm: Any) -> Any:  # noqa: ANN401
     return target.pop(index - 1)
 
 
+
+def _coroutine_create(args: Sequence[Any], vm: Any) -> LuaCoroutine:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    try:
+        return LuaCoroutine(args[0], vm)
+    except CoroutineError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _coroutine_resume(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 1)
+    coroutine = _ensure_coroutine(args[0])
+    resume_args = args[1:]
+    result = coroutine.resume(resume_args)
+    values = [result.success]
+    values.extend(result.values)
+    return LuaMultiReturn(values)
+
+
+def _coroutine_yield(args: Sequence[Any], vm: Any) -> LuaYield:  # noqa: ANN401
+    return LuaYield(args)
+
+
+
 def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     env.register("print", BuiltinFunction("print", _lua_print, "Write values to the VM output buffer."))
 
@@ -129,6 +162,13 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "len": BuiltinFunction("string.len", _string_len),
     }
     env.register_library("string", string_members)
+
+    coroutine_members = {
+        "create": BuiltinFunction("coroutine.create", _coroutine_create),
+        "resume": BuiltinFunction("coroutine.resume", _coroutine_resume),
+        "yield": BuiltinFunction("coroutine.yield", _coroutine_yield),
+    }
+    env.register_library("coroutine", coroutine_members)
 
     return env
 

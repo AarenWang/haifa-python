@@ -1,3 +1,4 @@
+from .coroutines import CoroutineError, LuaCoroutine
 from .environment import BuiltinFunction, LuaEnvironment, LuaMultiReturn
 from .runtime import run_script, run_source
 from .stdlib import create_default_environment, install_core_stdlib
@@ -8,6 +9,8 @@ __all__ = [
     "LuaEnvironment",
     "BuiltinFunction",
     "LuaMultiReturn",
+    "LuaCoroutine",
+    "CoroutineError",
     "create_default_environment",
     "install_core_stdlib",
 ]

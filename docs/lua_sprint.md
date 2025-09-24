@@ -41,13 +41,13 @@
 - [ ] 编译器根据分析结果生成 cell 初始化、CELL_SET/GET、闭包 upvalue 列表。
 
 **Milestone 2A-3：闭包编译与调用** 
-- [ ] 函数定义：生成 MAKE_CELL、CLOSURE，内层函数 prolog 插入 BIND_UPVALUE。
-- [ ] 函数调用：对变量储存在 register 的闭包使用 CALL_VALUE。
+- [x] 函数定义：生成 MAKE_CELL、CLOSURE，内层函数 prolog 插入 BIND_UPVALUE。
+- [x] 函数调用：对变量储存在 register 的闭包使用 CALL_VALUE。
 
 **Milestone 2B：多返回值与可变参数**
-- [ ] 支持 Lua 函数多返回值、尾调用、`...` 可变参数。
-- [ ] VM 指令：`RETURN_MULTI`, `CALL_VARARG`、栈帧扩展。
-- [ ] 增加测试：多返回值解构、链式调用、vararg 处理。
+- [x] 支持 Lua 函数多返回值、尾调用、`...` 可变参数。
+- [x] VM 指令：`RETURN_MULTI`, `CALL_VARARG`、栈帧扩展。
+- [x] 增加测试：多返回值解构、链式调用、vararg 处理。
 
 **Milestone 2C：标准库核心**
 - [x] 内建库：`print`, `math` 基础函数、`table.insert/remove`, `string.len` 等常用函数。
@@ -56,7 +56,7 @@
 - [x] 集成测试：综合脚本验证库与闭包、多返回值的互操作。
 
 ### Milestone 3：协程与调试增强
-- [ ] 协程语义：`coroutine.create/resume/yield`，VM 上实现多执行上下文。
+- [x] 协程语义：`coroutine.create/resume/yield`，VM 上实现多执行上下文。
 - [ ] 可视化器显示 Lua 调用栈、Upvalue、协程状态，支持断点/单步。
 - [ ] 错误处理与诊断：Lua 风格的栈回溯、行列信息。
 - [ ] 扩展 CLI，提供调试模式、trace 导出。

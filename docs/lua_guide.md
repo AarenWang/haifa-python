@@ -100,3 +100,25 @@ return a, b
 ```
 
 以上示例展示了标准库函数与闭包、多返回值之间的互操作，亦验证了环境在执行结束后的可见更新。
+
+
+## 7. 协程基础
+
+标准库新增 `coroutine.create/resume/yield`，可在 Lua 脚本中以同步方式描述异步流程：
+
+```lua
+function worker(a)
+    local delta = coroutine.yield(a + 1)
+    return a + delta
+end
+
+local co = coroutine.create(worker)
+local ok1, first = coroutine.resume(co, 10)  -- ok1 = true, first = 11
+local ok2, result = coroutine.resume(co, 5)  -- ok2 = true, result = 15
+```
+
+注意：
+- 初次 `resume` 的参数作为协程函数的入参；之后的 `resume` 参数会作为 `coroutine.yield` 的返回值。
+- 协程运行过程中可修改全局环境；结束或挂起时，最新全局值会写回 `LuaEnvironment`。
+- 若直接在主线程调用 `coroutine.yield` 会触发运行时错误。
+
