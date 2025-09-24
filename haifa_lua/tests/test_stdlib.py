@@ -130,6 +130,24 @@ def test_coroutine_yield_outside_context_raises():
         run_source("return coroutine.yield(1)")
 
 
+def test_coroutine_resume_reports_lua_style_error_message():
+    script = """
+    function boom()
+        local x = coroutine.yield(1)
+        return x + nil
+    end
+
+    local co = coroutine.create(boom)
+    coroutine.resume(co, 1)
+    return coroutine.resume(co, 2)
+    """
+
+    result = run_source(script)
+    assert result[0] is False
+    assert isinstance(result[1], str)
+    assert result[1].startswith("<string>:4:")
+
+
 def test_coroutine_event_sequence():
     source = """
     function worker(a)
