@@ -1,8 +1,20 @@
 import copy
+import time
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Optional, Sequence
 
-from .bytecode import Opcode, Instruction
+from .bytecode import Instruction, InstructionDebug, Opcode
+from .vm_errors import VMRuntimeError
+from .vm_events import (
+    CoroutineCompleted,
+    CoroutineCreated,
+    CoroutineEvent,
+    CoroutineResumed,
+    CoroutineSnapshot,
+    CoroutineYielded,
+    TraceFrame,
+    VMStateSnapshot,
+)
 
 
 class LuaYield:
@@ -19,6 +31,16 @@ from .value_utils import resolve_value
 class Cell:
     value: object
 
+
+@dataclass
+class CallFrame:
+    return_pc: int
+    param_stack: List[object]
+    registers: Dict[str, object]
+    upvalues: List[object]
+    pending_params: List[object]
+    caller_debug: InstructionDebug | None
+
 class BytecodeVM:
     def __init__(self, instructions):
         self.instructions = instructions
@@ -26,7 +48,7 @@ class BytecodeVM:
         self.registers = {}
         self.stack = []
         self.arrays = {}
-        self.call_stack = []
+        self.call_stack: List[CallFrame] = []
         self.param_stack = []
         self.pending_params = []
         self.return_value = None
@@ -39,6 +61,12 @@ class BytecodeVM:
         self.yield_values: List[object] = []
         self.awaiting_resume = False
         self.current_coroutine = None
+        self._event_buffer: List[CoroutineEvent] = []
+        self._coroutine_snapshots: Dict[int, CoroutineSnapshot] = {}
+        self._next_coroutine_id = 1
+        self._function_names: Dict[str, str] = {}
+        self._last_traceback: Optional[List[TraceFrame]] = None
+        self.root_vm = self
         # Opcode dispatch table for cleaner control flow
         self._handlers = {
             Opcode.LOAD_IMM: self._op_LOAD_IMM,
@@ -110,6 +138,126 @@ class BytecodeVM:
         for i, inst in enumerate(self.instructions):
             if inst.opcode == Opcode.LABEL:
                 self.labels[inst.args[0]] = i
+        self._index_function_names()
+
+    def _index_function_names(self) -> None:
+        pending_label: Optional[str] = None
+        current_name: Optional[str] = None
+        for inst in self.instructions:
+            if inst.opcode == Opcode.LABEL:
+                pending_label = inst.args[0]
+                continue
+            debug = inst.debug
+            if debug is not None:
+                current_name = debug.function_name
+                if pending_label is not None:
+                    self._function_names[pending_label] = current_name
+                    pending_label = None
+        if pending_label is not None and current_name is not None:
+            self._function_names[pending_label] = current_name
+        self._function_names.setdefault("<chunk>", "<chunk>")
+
+    # -------------------- Debug/event helpers --------------------
+    def allocate_coroutine_id(self) -> int:
+        cid = self._next_coroutine_id
+        self._next_coroutine_id += 1
+        return cid
+
+    def emit_event(self, event: CoroutineEvent) -> None:
+        self._event_buffer.append(event)
+
+    def drain_events(self) -> List[CoroutineEvent]:
+        events = list(self._event_buffer)
+        self._event_buffer.clear()
+        return events
+
+    def set_coroutine_snapshot(
+        self,
+        coroutine_id: int,
+        *,
+        status: str,
+        last_yield: Sequence[object],
+        last_error: Optional[str],
+        last_resume: Sequence[object],
+        call_stack: Sequence[TraceFrame] | None = None,
+    ) -> None:
+        self._coroutine_snapshots[coroutine_id] = CoroutineSnapshot(
+            coroutine_id=coroutine_id,
+            status=status,
+            last_yield=list(last_yield),
+            last_error=last_error,
+            last_resume=list(last_resume),
+            call_stack=list(call_stack or ()),
+        )
+
+    def remove_coroutine_snapshot(self, coroutine_id: int) -> None:
+        self._coroutine_snapshots.pop(coroutine_id, None)
+
+    def snapshot_state(self) -> VMStateSnapshot:
+        return VMStateSnapshot(
+            pc=self.pc,
+            current_coroutine=getattr(self.current_coroutine, "coroutine_id", None),
+            registers=dict(self.registers),
+            stack=list(self.stack),
+            call_stack=self._capture_traceback(),
+            coroutines=list(self._coroutine_snapshots.values()),
+        )
+
+    def capture_traceback(self, *, coroutine_id: int | None = None) -> List[TraceFrame]:
+        return self._capture_traceback(coroutine_id)
+
+    def _capture_traceback(self, override_coroutine_id: int | None = None) -> List[TraceFrame]:
+        frames: List[TraceFrame] = []
+        coroutine_id = (
+            override_coroutine_id
+            if override_coroutine_id is not None
+            else getattr(self.current_coroutine, "coroutine_id", None)
+        )
+        frames.append(self._frame_from_debug(self._instruction_debug(self.pc), self.pc, coroutine_id))
+        for frame in reversed(self.call_stack):
+            pc = frame.return_pc - 1 if frame.return_pc > 0 else frame.return_pc
+            frames.append(self._frame_from_debug(frame.caller_debug, pc, coroutine_id))
+        self._last_traceback = frames
+        return frames
+
+    def _instruction_debug(self, pc: int) -> InstructionDebug | None:
+        if 0 <= pc < len(self.instructions):
+            return self.instructions[pc].debug
+        return None
+
+    def _frame_from_debug(
+        self,
+        debug: InstructionDebug | None,
+        pc: int,
+        coroutine_id: int | None,
+    ) -> TraceFrame:
+        if debug is None:
+            return TraceFrame(
+                function_name=self._function_names.get("<chunk>", "<chunk>"),
+                file="<unknown>",
+                line=0,
+                column=0,
+                pc=pc,
+                coroutine_id=coroutine_id,
+            )
+        location = debug.location
+        return TraceFrame(
+            function_name=debug.function_name,
+            file=location.file,
+            line=location.line,
+            column=location.column,
+            pc=pc,
+            coroutine_id=coroutine_id,
+        )
+
+    def _wrap_runtime_error(self, exc: Exception) -> VMRuntimeError:
+        message = str(exc) or exc.__class__.__name__
+        frames = self._capture_traceback()
+        return VMRuntimeError(message, frames)
+
+    @property
+    def last_traceback(self) -> Optional[List[TraceFrame]]:
+        return self._last_traceback
 
     def step(self):
         """Executes a single instruction."""
@@ -122,9 +270,14 @@ class BytecodeVM:
 
         handler = self._handlers.get(op)
         if handler is None:
-            raise RuntimeError(f"No handler for opcode: {op}")
+            raise VMRuntimeError(f"No handler for opcode: {op}", self._capture_traceback())
 
-        control = handler(args)
+        try:
+            control = handler(args)
+        except VMRuntimeError:
+            raise
+        except Exception as exc:
+            raise self._wrap_runtime_error(exc) from exc
         if control == "jump":
             return None  # PC is already updated
         if control == "halt":
@@ -152,7 +305,9 @@ class BytecodeVM:
                 break
             if status == "yield":
                 if not stop_on_yield:
-                    raise RuntimeError("coroutine.yield called outside coroutine")
+                    raise self._wrap_runtime_error(
+                        RuntimeError("coroutine.yield called outside coroutine")
+                    )
                 self.last_event = "yield"
                 break
 
@@ -235,28 +390,29 @@ class BytecodeVM:
         dst, cell_reg = args
         cell = self.registers.get(cell_reg)
         if not isinstance(cell, Cell):
-            raise RuntimeError(f"CELL_GET expects cell in {cell_reg}")
+            raise self._wrap_runtime_error(RuntimeError(f"CELL_GET expects cell in {cell_reg}"))
         self.registers[dst] = cell.value
 
     def _op_CELL_SET(self, args):
         cell_reg, src = args
         cell = self.registers.get(cell_reg)
         if not isinstance(cell, Cell):
-            raise RuntimeError(f"CELL_SET expects cell in {cell_reg}")
+            raise self._wrap_runtime_error(RuntimeError(f"CELL_SET expects cell in {cell_reg}"))
         cell.value = self.val(src)
 
     def _op_CLOSURE(self, args):
         if len(args) < 2:
-            raise RuntimeError("CLOSURE requires destination and label")
+            raise self._wrap_runtime_error(RuntimeError("CLOSURE requires destination and label"))
         dst = args[0]
         label = args[1]
         upvalues = []
         for cell_reg in args[2:]:
             cell = self.registers.get(cell_reg)
             if not isinstance(cell, Cell):
-                raise RuntimeError(f"CLOSURE expects cell register, got {cell_reg}")
+                raise self._wrap_runtime_error(RuntimeError(f"CLOSURE expects cell register, got {cell_reg}"))
             upvalues.append(cell)
-        self.registers[dst] = {"label": label, "upvalues": upvalues}
+        debug_name = self._function_names.get(label, label)
+        self.registers[dst] = {"label": label, "upvalues": upvalues, "debug_name": debug_name}
 
     def _op_CALL_VALUE(self, args):
         callee_reg = args[0]
@@ -267,7 +423,15 @@ class BytecodeVM:
         if isinstance(callee, dict) and "label" in callee:
             saved_param_stack = self.param_stack
             saved_pending = pending
-            self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
+            frame = CallFrame(
+                return_pc=self.pc + 1,
+                param_stack=saved_param_stack,
+                registers=self.registers,
+                upvalues=self.current_upvalues,
+                pending_params=saved_pending,
+                caller_debug=self._instruction_debug(self.pc),
+            )
+            self.call_stack.append(frame)
             self.registers = dict(self.registers)
             self.param_stack = args_to_pass
             self.pending_params = []
@@ -279,10 +443,12 @@ class BytecodeVM:
         elif callable(callee):
             result = callee(*args_to_pass)
         else:
-            raise RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
+            raise self._wrap_runtime_error(
+                RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
+            )
         if isinstance(result, LuaYield):
             if self.current_coroutine is None:
-                raise RuntimeError("coroutine.yield called outside coroutine")
+                raise self._wrap_runtime_error(RuntimeError("coroutine.yield called outside coroutine"))
             self.yield_values = list(result.values)
             self.awaiting_resume = True
             self.last_return = []
@@ -303,7 +469,7 @@ class BytecodeVM:
         else:
             index = int(index_arg)
         if index < 0 or index >= len(self.current_upvalues):
-            raise RuntimeError("BIND_UPVALUE index out of range")
+            raise self._wrap_runtime_error(RuntimeError("BIND_UPVALUE index out of range"))
         self.registers[dst] = self.current_upvalues[index]
 
     def _op_VARARG(self, args):
@@ -341,13 +507,26 @@ class BytecodeVM:
         self.last_return = list(values)
         self.return_value = self.last_return[0] if self.last_return else None
         if self.call_stack:
-            self.pc, self.param_stack, self.registers, self.current_upvalues, self.pending_params = self.call_stack.pop()
+            frame = self.call_stack.pop()
+            self.pc = frame.return_pc
+            self.param_stack = frame.param_stack
+            self.registers = frame.registers
+            self.current_upvalues = frame.upvalues
+            self.pending_params = frame.pending_params
             return "jump"
-        if self.current_coroutine is not None and hasattr(self.current_coroutine, "_set_result"):
+        in_coroutine = self.current_coroutine is not None
+        if in_coroutine and hasattr(self.current_coroutine, "_set_result"):
             self.current_coroutine._set_result(self.last_return)
+
+        debug = self._instruction_debug(self.pc)
+
         self.current_upvalues = []
         self.pending_params = []
         self.awaiting_resume = False
+
+        if not in_coroutine and debug is None:
+            self.pc += 1
+            return "jump"
         return "halt"
 
     def prepare_resume(self, values):
@@ -433,7 +612,15 @@ class BytecodeVM:
         saved_pending = self.pending_params
         args_to_pass = list(saved_pending)
         saved_pending.clear()
-        self.call_stack.append((self.pc + 1, saved_param_stack, self.registers, self.current_upvalues, saved_pending))
+        frame = CallFrame(
+            return_pc=self.pc + 1,
+            param_stack=saved_param_stack,
+            registers=self.registers,
+            upvalues=self.current_upvalues,
+            pending_params=saved_pending,
+            caller_debug=self._instruction_debug(self.pc),
+        )
+        self.call_stack.append(frame)
         self.registers = dict(self.registers)
         self.param_stack = args_to_pass
         self.pending_params = []

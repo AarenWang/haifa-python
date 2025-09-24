@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence, Tuple, TYPE_CHECKING
+from typing import Iterable, List, Sequence, TYPE_CHECKING
 
 from compiler.bytecode_vm import BytecodeVM
+from compiler.vm_errors import VMRuntimeError
+from compiler.vm_events import (
+    CoroutineCompleted,
+    CoroutineCreated,
+    CoroutineResumed,
+    CoroutineYielded,
+    TraceFrame,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid
     from .environment import LuaEnvironment
@@ -22,6 +31,8 @@ class ResumeResult:
 class LuaCoroutine:
     __slots__ = (
         "closure",
+        "base_vm",
+        "root_vm",
         "instructions",
         "env",
         "vm",
@@ -30,12 +41,17 @@ class LuaCoroutine:
         "awaiting_resume",
         "last_yield",
         "last_error",
+        "coroutine_id",
+        "debug_name",
+        "last_resume_args",
     )
 
     def __init__(self, closure: dict, base_vm: BytecodeVM) -> None:
         if not isinstance(closure, dict) or "label" not in closure:
             raise CoroutineError("coroutine.create expects a function or closure")
         self.closure = closure
+        self.base_vm = base_vm
+        self.root_vm: BytecodeVM = getattr(base_vm, "root_vm", base_vm)
         self.instructions = base_vm.instructions
         self.env: LuaEnvironment | None = getattr(base_vm, "lua_env", None)
         self.vm: BytecodeVM | None = None
@@ -44,6 +60,32 @@ class LuaCoroutine:
         self.awaiting_resume = False
         self.last_yield: List[object] = []
         self.last_error: str | None = None
+        self.coroutine_id = self.root_vm.allocate_coroutine_id()
+        self.debug_name = closure.get("debug_name") or closure.get("label")
+        self.last_resume_args: List[object] = []
+        self.root_vm.set_coroutine_snapshot(
+            self.coroutine_id,
+            status=self.status,
+            last_yield=self.last_yield,
+            last_error=self.last_error,
+            last_resume=self.last_resume_args,
+            call_stack=(),
+        )
+        scheduler_stack = tuple(base_vm.capture_traceback())
+        parent_id = getattr(base_vm.current_coroutine, "coroutine_id", None)
+        upvalues = tuple(self.closure.get("upvalues", ()))
+        self.root_vm.emit_event(
+            CoroutineCreated(
+                coroutine_id=self.coroutine_id,
+                parent_id=parent_id,
+                function_name=self.debug_name,
+                args=(),
+                upvalues=upvalues,
+                pc=base_vm.pc,
+                stack=scheduler_stack,
+                timestamp=time.time(),
+            )
+        )
 
     # ------------------------------------------------------------------ helpers
     def _ensure_vm(self) -> BytecodeVM:
@@ -55,32 +97,61 @@ class LuaCoroutine:
             vm.current_upvalues = list(self.closure.get("upvalues", []))
             vm.lua_env = self.env
             vm.current_coroutine = self
+            vm.root_vm = self.root_vm
             self.vm = vm
         return self.vm
 
     def _apply_globals(self, vm: BytecodeVM) -> None:
-        if self.env is None:
+        merged_globals: dict[str, object] = {}
+        if self.env is not None:
+            merged_globals.update(self.env.to_vm_registers())
+        for key, value in self.root_vm.registers.items():
+            if key.startswith("G_") and key not in merged_globals:
+                merged_globals[key] = value
+
+        if not merged_globals:
             return
-        globals_snapshot = self.env.to_vm_registers()
+
         for key in list(vm.registers.keys()):
             if key.startswith("G_"):
                 del vm.registers[key]
-        vm.registers.update(globals_snapshot)
+        vm.registers.update(merged_globals)
 
     def _sync_globals(self, vm: BytecodeVM) -> None:
         if self.env is None:
             return
         self.env.sync_from_vm(vm.registers)
+        if self.root_vm is not vm:
+            for key, value in vm.registers.items():
+                if key.startswith("G_"):
+                    self.root_vm.registers[key] = value
 
     def _set_yield(self, values: Iterable[object]) -> None:
         self.last_yield = list(values)
         self.awaiting_resume = True
+        stack: Sequence[TraceFrame] | None = None
+        if self.vm is not None:
+            stack = tuple(self.vm.capture_traceback(coroutine_id=self.coroutine_id))
+        self._update_snapshot(stack=stack)
 
     def _set_result(self, values: Iterable[object]) -> None:
         self.last_yield = list(values)
         self.awaiting_resume = False
+        stack: Sequence[TraceFrame] | None = None
         if self.vm:
+            stack = tuple(self.vm.capture_traceback(coroutine_id=self.coroutine_id))
             self.vm.current_coroutine = None
+        self._update_snapshot(stack=stack)
+
+    def _update_snapshot(self, *, stack: Sequence[TraceFrame] | None = None) -> None:
+        self.root_vm.set_coroutine_snapshot(
+            self.coroutine_id,
+            status=self.status,
+            last_yield=self.last_yield,
+            last_error=self.last_error,
+            last_resume=self.last_resume_args,
+            call_stack=stack,
+        )
 
     # ------------------------------------------------------------------ public API
     def resume(self, args: Sequence[object]) -> ResumeResult:
@@ -89,12 +160,34 @@ class LuaCoroutine:
         if self.status == "running":
             return ResumeResult(False, ["coroutine is already running"])
 
+        scheduler_pc = self.root_vm.pc
+        scheduler_stack = tuple(self.root_vm.capture_traceback())
         vm = self._ensure_vm()
+        target_pc = vm.pc
+        target_stack: Sequence[TraceFrame] = ()
+        if self.started:
+            target_stack = tuple(vm.capture_traceback(coroutine_id=self.coroutine_id))
         self._apply_globals(vm)
 
+        previous_coroutine = getattr(self.root_vm, "current_coroutine", None)
         try:
             self.status = "running"
+            self.last_error = None
+            self.last_resume_args = list(args)
+            self.root_vm.current_coroutine = self
             vm.current_coroutine = self
+            self._update_snapshot(stack=target_stack)
+            self.root_vm.emit_event(
+                CoroutineResumed(
+                    coroutine_id=self.coroutine_id,
+                    args=tuple(self.last_resume_args),
+                    pc=scheduler_pc,
+                    stack=scheduler_stack,
+                    coroutine_pc=target_pc,
+                    coroutine_stack=target_stack,
+                    timestamp=time.time(),
+                )
+            )
             if not self.started:
                 vm.param_stack = list(args)
                 vm.pending_params = []
@@ -106,18 +199,61 @@ class LuaCoroutine:
             vm.awaiting_resume = False
             vm.run(stop_on_yield=True)
             self._sync_globals(vm)
-        except RuntimeError as exc:
+        except VMRuntimeError as exc:
             self.status = "dead"
             self.last_error = str(exc)
+            coroutine_stack = tuple(vm.capture_traceback(coroutine_id=self.coroutine_id))
             if vm.current_coroutine is self:
                 vm.current_coroutine = None
+            self.root_vm.current_coroutine = previous_coroutine
+            self._update_snapshot(stack=coroutine_stack)
+            self.root_vm.emit_event(
+                CoroutineCompleted(
+                    coroutine_id=self.coroutine_id,
+                    values=(),
+                    error=self.last_error,
+                    pc=vm.pc,
+                    stack=coroutine_stack,
+                    timestamp=time.time(),
+                )
+            )
             return ResumeResult(False, [self.last_error])
 
+        self.root_vm.current_coroutine = previous_coroutine
         if vm.last_event == "yield":
             self.status = "suspended"
+            coroutine_stack = tuple(vm.capture_traceback(coroutine_id=self.coroutine_id))
+            yield_pc = vm.pc - 1 if vm.pc > 0 else vm.pc
+            self._update_snapshot(stack=coroutine_stack)
+            self.root_vm.emit_event(
+                CoroutineYielded(
+                    coroutine_id=self.coroutine_id,
+                    values=tuple(self.last_yield),
+                    pc=yield_pc,
+                    stack=coroutine_stack,
+                    timestamp=time.time(),
+                )
+            )
+            if vm.current_coroutine is self:
+                vm.current_coroutine = None
             return ResumeResult(True, list(self.last_yield))
 
         self.status = "dead"
+        coroutine_stack = tuple(vm.capture_traceback(coroutine_id=self.coroutine_id))
+        complete_pc = vm.pc - 1 if vm.pc > 0 else vm.pc
+        self._update_snapshot(stack=coroutine_stack)
+        self.root_vm.emit_event(
+            CoroutineCompleted(
+                coroutine_id=self.coroutine_id,
+                values=tuple(vm.last_return),
+                error=None,
+                pc=complete_pc,
+                stack=coroutine_stack,
+                timestamp=time.time(),
+            )
+        )
+        if vm.current_coroutine is self:
+            vm.current_coroutine = None
         return ResumeResult(True, list(vm.last_return))
 
     def status_string(self) -> str:
