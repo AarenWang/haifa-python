@@ -16,6 +16,7 @@ from compiler.vm_events import (
 if TYPE_CHECKING:  # pragma: no cover - typing aid
     from .environment import LuaEnvironment
 
+from .debug import as_lua_error
 
 class CoroutineError(RuntimeError):
     pass
@@ -190,8 +191,9 @@ class LuaCoroutine:
             vm.run(stop_on_yield=True)
             self._sync_globals(vm)
         except VMRuntimeError as exc:
+            lua_error = as_lua_error(exc)
             self.status = "dead"
-            self.last_error = str(exc)
+            self.last_error = str(lua_error)
             if vm.current_coroutine is self:
                 vm.current_coroutine = None
             self._update_snapshot()

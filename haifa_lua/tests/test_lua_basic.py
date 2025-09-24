@@ -1,10 +1,13 @@
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from haifa_lua.debug import LuaRuntimeError
 from haifa_lua.runtime import run_source
 
 
@@ -189,3 +192,16 @@ def test_vararg_assignment_first_value():
     return first(10, 11)
     """
     assert run_source(src) == [10]
+
+
+def test_runtime_error_reports_lua_style_location():
+    src = """
+    local x = 1
+    return x + nil
+    """
+
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source(src)
+
+    message = str(excinfo.value)
+    assert message.startswith("<string>:3:")

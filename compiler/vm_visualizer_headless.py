@@ -242,6 +242,7 @@ class VMVisualizer:
         if self._initial_global_registers:
             vm.registers.update(self._initial_global_registers)
 
+
     def _draw(self, stdscr: "curses._CursesWindow") -> None:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
