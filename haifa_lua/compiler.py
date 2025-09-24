@@ -23,6 +23,8 @@ from .ast import (
     FunctionStmt,
     Identifier,
     IfStmt,
+    ForNumericStmt,
+    ForGenericStmt,
     IndexExpr,
     MethodCallExpr,
     NilLiteral,
@@ -200,6 +202,10 @@ class LuaCompiler:
                 self._compile_if(stmt)
             elif isinstance(stmt, WhileStmt):
                 self._compile_while(stmt)
+            elif isinstance(stmt, ForNumericStmt):
+                self._compile_numeric_for(stmt)
+            elif isinstance(stmt, ForGenericStmt):
+                self._compile_generic_for(stmt)
             elif isinstance(stmt, RepeatStmt):
                 raise CompileError("repeat-until is not supported yet")
             elif isinstance(stmt, DoStmt):
@@ -346,6 +352,147 @@ class LuaCompiler:
         self._compile_block(stmt.body)
         self._emit(Opcode.JMP, [start_label], node=stmt)
         self._emit(Opcode.LABEL, [end_label], node=stmt)
+
+    def _compile_numeric_for(self, stmt: ForNumericStmt):
+        start_value = self._compile_expr(stmt.start)
+        start_reg = self._new_temp()
+        self._emit(Opcode.MOV, [start_reg, start_value], node=stmt.start)
+
+        limit_value = self._compile_expr(stmt.limit)
+        limit_reg = self._new_temp()
+        self._emit(Opcode.MOV, [limit_reg, limit_value], node=stmt.limit)
+
+        if stmt.step is not None:
+            step_value = self._compile_expr(stmt.step)
+            step_reg = self._new_temp()
+            self._emit(Opcode.MOV, [step_reg, step_value], node=stmt.step)
+        else:
+            step_reg = self._emit_literal(1, stmt, hint=self._new_temp())
+
+        zero_reg = self._emit_literal(0, stmt, hint=self._new_temp())
+        positive_reg = self._new_temp()
+        self._emit(Opcode.GT, [positive_reg, step_reg, zero_reg], node=stmt)
+
+        self._push_scope()
+        loop_scope = self.scope_stack[-1]
+        captured = stmt.var in self.function_info.captured_locals
+        if captured:
+            cell_reg = self._alloc_cell_reg(stmt.var)
+            loop_scope[stmt.var] = VarBinding(cell_reg, True)
+            self._emit(Opcode.MAKE_CELL, [cell_reg, start_reg], node=stmt)
+        else:
+            var_reg = self._alloc_local_reg(stmt.var)
+            loop_scope[stmt.var] = VarBinding(var_reg, False)
+            self._emit(Opcode.MOV, [var_reg, start_reg], node=stmt)
+
+        var_binding = loop_scope[stmt.var]
+        end_label = f"__for_end_{self._new_temp()}"
+        loop_label = f"__for_loop_{self._new_temp()}"
+        negative_label = f"__for_neg_{self._new_temp()}"
+        after_check = f"__for_after_{self._new_temp()}"
+        cond_reg = self._new_temp()
+
+        self._emit(Opcode.JZ, [positive_reg, negative_label], node=stmt)
+        initial_val = self._binding_read(var_binding, stmt)
+        tmp_gt = self._new_temp()
+        self._emit(Opcode.GT, [tmp_gt, initial_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg, tmp_gt], node=stmt)
+        self._emit(Opcode.JMP, [after_check], node=stmt)
+
+        self._emit(Opcode.LABEL, [negative_label], node=stmt)
+        initial_val_neg = self._binding_read(var_binding, stmt)
+        tmp_lt = self._new_temp()
+        self._emit(Opcode.LT, [tmp_lt, initial_val_neg, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg, tmp_lt], node=stmt)
+        self._emit(Opcode.LABEL, [after_check], node=stmt)
+        self._emit(Opcode.JZ, [cond_reg, end_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [loop_label], node=stmt)
+        self._compile_block(stmt.body)
+        current_val = self._binding_read(var_binding, stmt)
+        next_val = self._new_temp()
+        self._emit(Opcode.ADD, [next_val, current_val, step_reg], node=stmt)
+        self._binding_write(var_binding, next_val, stmt)
+
+        negative_label2 = f"__for_neg_{self._new_temp()}"
+        after_check2 = f"__for_after_{self._new_temp()}"
+        cond_reg2 = self._new_temp()
+
+        self._emit(Opcode.JZ, [positive_reg, negative_label2], node=stmt)
+        pos_val = self._binding_read(var_binding, stmt)
+        tmp_gt2 = self._new_temp()
+        self._emit(Opcode.GT, [tmp_gt2, pos_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg2, tmp_gt2], node=stmt)
+        self._emit(Opcode.JMP, [after_check2], node=stmt)
+
+        self._emit(Opcode.LABEL, [negative_label2], node=stmt)
+        neg_val = self._binding_read(var_binding, stmt)
+        tmp_lt2 = self._new_temp()
+        self._emit(Opcode.LT, [tmp_lt2, neg_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg2, tmp_lt2], node=stmt)
+        self._emit(Opcode.LABEL, [after_check2], node=stmt)
+        self._emit(Opcode.JNZ, [cond_reg2, loop_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
+        self._pop_scope()
+
+    def _compile_generic_for(self, stmt: ForGenericStmt):
+        values = self._collect_assignment_values(stmt.iter_exprs, 3, stmt)
+        while len(values) < 3:
+            values.append(self._emit_literal(None, stmt))
+
+        iter_func_reg = self._new_temp()
+        self._emit(Opcode.MOV, [iter_func_reg, values[0]], node=stmt)
+        state_reg = self._new_temp()
+        self._emit(Opcode.MOV, [state_reg, values[1]], node=stmt)
+        control_reg = self._new_temp()
+        self._emit(Opcode.MOV, [control_reg, values[2]], node=stmt)
+
+        self._push_scope()
+        loop_scope = self.scope_stack[-1]
+        bindings: List[VarBinding] = []
+        nil_reg = self._emit_literal(None, stmt, hint=self._new_temp())
+        for name in stmt.names:
+            captured = name in self.function_info.captured_locals
+            if captured:
+                cell_reg = self._alloc_cell_reg(name)
+                loop_scope[name] = VarBinding(cell_reg, True)
+                self._emit(Opcode.MAKE_CELL, [cell_reg, nil_reg], node=stmt)
+            else:
+                reg = self._alloc_local_reg(name)
+                loop_scope[name] = VarBinding(reg, False)
+                self._emit(Opcode.MOV, [reg, nil_reg], node=stmt)
+            bindings.append(loop_scope[name])
+
+        loop_label = f"__forgen_loop_{self._new_temp()}"
+        end_label = f"__forgen_end_{self._new_temp()}"
+
+        self._emit(Opcode.LABEL, [loop_label], node=stmt)
+        self._emit(Opcode.PARAM, [state_reg], node=stmt)
+        self._emit(Opcode.PARAM, [control_reg], node=stmt)
+        self._emit(Opcode.CALL_VALUE, [iter_func_reg], node=stmt)
+        result_list = self._new_temp()
+        self._emit(Opcode.RESULT_LIST, [result_list], node=stmt)
+        first_value = self._new_temp()
+        self._emit(Opcode.LIST_GET, [first_value, result_list, 0], node=stmt)
+        self._emit(Opcode.MOV, [control_reg, first_value], node=stmt)
+        nil_check = self._new_temp()
+        self._emit(Opcode.IS_NULL, [nil_check, first_value], node=stmt)
+        self._emit(Opcode.JNZ, [nil_check, end_label], node=stmt)
+
+        for idx, binding in enumerate(bindings):
+            if idx == 0:
+                value_reg = first_value
+            else:
+                value_reg = self._new_temp()
+                self._emit(Opcode.LIST_GET, [value_reg, result_list, idx], node=stmt)
+            self._binding_write(binding, value_reg, stmt)
+
+        self._compile_block(stmt.body)
+        self._emit(Opcode.JMP, [loop_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
+        self._pop_scope()
 
     def _compile_return(self, stmt: ReturnStmt):
         if not stmt.values:
@@ -548,6 +695,19 @@ class LuaCompiler:
         return head
 
     # ------------------------------------------------------------------ Helpers
+    def _binding_read(self, binding: VarBinding, node: object) -> str:
+        if binding.is_cell:
+            dst = self._new_temp()
+            self._emit(Opcode.CELL_GET, [dst, binding.storage], node=node)
+            return dst
+        return binding.storage
+
+    def _binding_write(self, binding: VarBinding, value_reg: str, node: object) -> None:
+        if binding.is_cell:
+            self._emit(Opcode.CELL_SET, [binding.storage, value_reg], node=node)
+        else:
+            self._emit(Opcode.MOV, [binding.storage, value_reg], node=node)
+
     def _binding_cell(self, name: str) -> str:
         binding = self._lookup_binding(name)
         if not binding or not binding.is_cell:
