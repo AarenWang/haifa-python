@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Sequence
 
 from compiler.vm_errors import VMRuntimeError

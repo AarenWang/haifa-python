@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -17,6 +15,7 @@ class InstructionDebug:
 
     location: SourceLocation
     function_name: str
+
 
 class Opcode(Enum):
     LOAD_IMM = auto()     # LOAD_IMM reg, value
@@ -83,7 +82,7 @@ class Opcode(Enum):
     SHL = auto()
     SHR = auto()
     SAR = auto()
-    
+
         # 数组支持
     ARR_INIT = auto()
     ARR_SET = auto()
