@@ -105,6 +105,7 @@ class BytecodeVM:
             Opcode.RETURN_MULTI: self._op_RETURN_MULTI,
             Opcode.RESULT_MULTI: self._op_RESULT_MULTI,
             Opcode.RESULT_LIST: self._op_RESULT_LIST,
+            Opcode.LIST_GET: self._op_LIST_GET,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -505,6 +506,15 @@ class BytecodeVM:
     def _op_RESULT_LIST(self, args):
         dst = args[0]
         self.registers[dst] = list(self.last_return)
+
+    def _op_LIST_GET(self, args):
+        dst, src, index_arg = args
+        values = self.val(src)
+        index = int(self.val(index_arg))
+        if isinstance(values, list) and 0 <= index < len(values):
+            self.registers[dst] = values[index]
+        else:
+            self.registers[dst] = None
 
     def _return_with(self, values: List[object]):
         self.last_return = list(values)

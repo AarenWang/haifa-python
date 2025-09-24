@@ -194,6 +194,46 @@ def test_vararg_assignment_first_value():
     assert run_source(src) == [10]
 
 
+def test_local_multi_declaration_defaults_nil():
+    src = """
+    local a, b
+    return a, b
+    """
+    assert run_source(src) == [None, None]
+
+
+def test_multi_assignment_basic():
+    src = """
+    local a, b = 1, 2, 3
+    return a, b
+    """
+    assert run_source(src) == [1, 2]
+
+
+def test_multi_assignment_expands_call_results():
+    src = """
+    function trio()
+        return 1, 2, 3
+    end
+
+    local x, y, z, w = trio()
+    return x, y, z, w
+    """
+    assert run_source(src) == [1, 2, 3, None]
+
+
+def test_multi_assignment_expands_vararg():
+    src = """
+    function take(...)
+        local a, b, c = ...
+        return a, b, c
+    end
+
+    return take(7, 8)
+    """
+    assert run_source(src) == [7, 8, None]
+
+
 def test_runtime_error_reports_lua_style_location():
     src = """
     local x = 1
