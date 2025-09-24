@@ -115,10 +115,12 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
       "PRINT max"
   ]
 
-  bytecode = ASTCompiler().compile(parse(script))
-  vm = BytecodeVM(bytecode)
-  VMVisualizer(vm).run()
-  ```
+bytecode = ASTCompiler().compile(parse(script))
+vm = BytecodeVM(bytecode)
+VMVisualizer(vm).run()
+```
+
+> 提示：GUI 可视化器会展示协程列表、事件时间线与参数详情；示例脚本可参考 `examples/coroutines.lua`，更多说明见 `docs/guide.md` 第 6 节。
   在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。支持 `/` 搜索指令、寄存器变更高亮，以及 `L` 导出执行轨迹（JSONL）。
 
 ### jq 命令行示例
