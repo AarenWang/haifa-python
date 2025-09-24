@@ -7,7 +7,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from compiler.bytecode_vm import BytecodeVM
+from compiler.vm_events import (
+    CoroutineCompleted,
+    CoroutineCreated,
+    CoroutineResumed,
+    CoroutineYielded,
+)
+
 from haifa_lua import BuiltinFunction, create_default_environment, run_source
+from haifa_lua.debug import LuaRuntimeError
+from haifa_lua.runtime import compile_source
 
 
 def test_print_builtin_appends_output():
@@ -116,5 +126,92 @@ def test_coroutine_resume_after_completion():
 
 
 def test_coroutine_yield_outside_context_raises():
-    with pytest.raises(RuntimeError):
+    with pytest.raises(LuaRuntimeError):
         run_source("return coroutine.yield(1)")
+
+
+def test_coroutine_event_sequence():
+    source = """
+    function worker(a)
+        local inc = coroutine.yield(a + 1)
+        return inc * 2
+    end
+
+    local co = coroutine.create(worker)
+    coroutine.resume(co, 10)
+    coroutine.resume(co, 5)
+    """
+
+    instructions = list(compile_source(source, source_name="<test>"))
+    env = create_default_environment()
+    vm = BytecodeVM(instructions)
+    vm.lua_env = env
+    vm.registers.update(env.to_vm_registers())
+    vm.run()
+    events = vm.drain_events()
+
+    kinds = [type(event) for event in events]
+    assert kinds == [
+        CoroutineCreated,
+        CoroutineResumed,
+        CoroutineYielded,
+        CoroutineResumed,
+        CoroutineCompleted,
+    ]
+
+    created = events[0]
+    assert isinstance(created, CoroutineCreated)
+    assert created.parent_id is None
+
+    resumed = events[1]
+    assert isinstance(resumed, CoroutineResumed)
+    assert list(resumed.args) == [10]
+
+    yielded = events[2]
+    assert isinstance(yielded, CoroutineYielded)
+    assert list(yielded.values) == [11]
+
+    completed = events[-1]
+    assert isinstance(completed, CoroutineCompleted)
+    assert list(completed.values) == [10]
+
+
+def test_nested_coroutine_events_reported_on_root_vm():
+    source = """
+    function inner()
+        coroutine.yield("inner")
+        return "done"
+    end
+
+    function outer()
+        local inner_co = coroutine.create(inner)
+        coroutine.resume(inner_co)
+        coroutine.resume(inner_co)
+    end
+
+    local outer_co = coroutine.create(outer)
+    coroutine.resume(outer_co)
+    """
+
+    instructions = list(compile_source(source, source_name="<test-nested>"))
+    env = create_default_environment()
+    vm = BytecodeVM(instructions)
+    vm.lua_env = env
+    vm.registers.update(env.to_vm_registers())
+    vm.run()
+    events = vm.drain_events()
+
+    created = [event for event in events if isinstance(event, CoroutineCreated)]
+    assert len(created) == 2
+    outer = next(event for event in created if event.parent_id is None)
+    inner = next(event for event in created if event.parent_id == outer.coroutine_id)
+    assert inner.coroutine_id != outer.coroutine_id
+
+    snapshot = vm.snapshot_state()
+    ids = {coro.coroutine_id for coro in snapshot.coroutines}
+    assert outer.coroutine_id in ids
+    assert inner.coroutine_id in ids
+
+    completed = [event for event in events if isinstance(event, CoroutineCompleted)]
+    completed_ids = {event.coroutine_id for event in completed}
+    assert {outer.coroutine_id, inner.coroutine_id} <= completed_ids
