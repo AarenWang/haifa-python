@@ -7,31 +7,31 @@ print("=== 协程基础示例 ===")
 function simple_coroutine()
     print("协程开始执行")
     coroutine.yield("第一次暂停")
+
     print("协程恢复执行")
-    coroutine.yield("第二次暂停") 
+    coroutine.yield("第二次暂停")
+
     print("协程即将结束")
     return "协程执行完毕"
 end
 
 -- 创建协程
 local co = coroutine.create(simple_coroutine)
+print("协程已创建，等待调度")
 
-print("协程状态:", coroutine.status(co))
+local function resume_and_report(co, ...)
+    print("返回值:", coroutine.resume(co, ...))
+end
 
 -- 第一次恢复协程
 print("--- 第一次调用 resume ---")
-local success, result = coroutine.resume(co)
-print("返回值:", success, result)
-print("协程状态:", coroutine.status(co))
+resume_and_report(co)
 
 -- 第二次恢复协程
 print("--- 第二次调用 resume ---")
-success, result = coroutine.resume(co)
-print("返回值:", success, result)
-print("协程状态:", coroutine.status(co))
+resume_and_report(co)
 
 -- 第三次恢复协程
 print("--- 第三次调用 resume ---")
-success, result = coroutine.resume(co)
-print("返回值:", success, result)
-print("协程状态:", coroutine.status(co))
+resume_and_report(co)
+
