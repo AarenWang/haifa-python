@@ -7,6 +7,7 @@ from compiler.bytecode_vm import LuaYield
 
 from .coroutines import CoroutineError, LuaCoroutine
 from .environment import BuiltinFunction, LuaEnvironment, LuaMultiReturn
+from .table import LuaTable
 
 
 def _lua_tostring(value: Any) -> str:
@@ -35,10 +36,10 @@ def _ensure_number(value: Any) -> float:
     raise RuntimeError("expected number")
 
 
-def _ensure_list(value: Any) -> list:
-    if isinstance(value, list):
+def _ensure_table(value: Any) -> LuaTable:
+    if isinstance(value, LuaTable):
         return value
-    raise RuntimeError("expected table (list)")
+    raise RuntimeError("expected table")
 
 
 def _ensure_string(value: Any) -> str:
@@ -86,32 +87,23 @@ def _ensure_coroutine(value: Any) -> LuaCoroutine:
 
 def _table_insert(args: Sequence[Any], vm: Any) -> None:  # noqa: ANN401
     _ensure_args(args, 2, 3)
-    target = _ensure_list(args[0])
+    target = _ensure_table(args[0])
     if len(args) == 2:
         target.append(args[1])
         return None
     index = int(_ensure_number(args[1]))
     value = args[2]
-    if index < 1:
-        index = 1
-    if index > len(target) + 1:
-        index = len(target) + 1
-    target.insert(index - 1, value)
+    target.insert(index, value)
     return None
 
 
 def _table_remove(args: Sequence[Any], vm: Any) -> Any:  # noqa: ANN401
     _ensure_args(args, 1, 2)
-    target = _ensure_list(args[0])
-    if not target:
-        return None
+    target = _ensure_table(args[0])
     if len(args) == 1:
-        index = len(target)
-    else:
-        index = int(_ensure_number(args[1]))
-    if index < 1 or index > len(target):
-        return None
-    return target.pop(index - 1)
+        return target.remove()
+    index = int(_ensure_number(args[1]))
+    return target.remove(index)
 
 
 

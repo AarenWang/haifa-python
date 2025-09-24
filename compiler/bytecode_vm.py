@@ -16,6 +16,11 @@ from .vm_events import (
     VMStateSnapshot,
 )
 
+try:
+    from haifa_lua.table import LuaTable  # type: ignore
+except ImportError:  # pragma: no cover - Lua frontend may be absent in some contexts
+    LuaTable = None  # type: ignore[misc]
+
 
 class LuaYield:
     __slots__ = ("values",)
@@ -106,6 +111,11 @@ class BytecodeVM:
             Opcode.RESULT_MULTI: self._op_RESULT_MULTI,
             Opcode.RESULT_LIST: self._op_RESULT_LIST,
             Opcode.LIST_GET: self._op_LIST_GET,
+            Opcode.TABLE_NEW: self._op_TABLE_NEW,
+            Opcode.TABLE_SET: self._op_TABLE_SET,
+            Opcode.TABLE_GET: self._op_TABLE_GET,
+            Opcode.TABLE_APPEND: self._op_TABLE_APPEND,
+            Opcode.TABLE_EXTEND: self._op_TABLE_EXTEND,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -516,6 +526,45 @@ class BytecodeVM:
         else:
             self.registers[dst] = None
 
+    def _ensure_table(self, value, reg_name: object):
+        if LuaTable is None or not isinstance(value, LuaTable):
+            raise self._wrap_runtime_error(
+                RuntimeError(f"expected table in {reg_name}")
+            )
+        return value
+
+    def _op_TABLE_NEW(self, args):
+        if LuaTable is None:
+            raise self._wrap_runtime_error(RuntimeError("Lua table support is unavailable"))
+        dst = args[0]
+        self.registers[dst] = LuaTable()
+
+    def _op_TABLE_SET(self, args):
+        table_reg, key_arg, value_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        key = self.val(key_arg)
+        value = self.val(value_arg)
+        table.raw_set(key, value)
+
+    def _op_TABLE_GET(self, args):
+        dst, table_reg, key_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        key = self.val(key_arg)
+        self.registers[dst] = table.raw_get(key)
+
+    def _op_TABLE_APPEND(self, args):
+        table_reg, value_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        value = self.val(value_arg)
+        table.append(value)
+
+    def _op_TABLE_EXTEND(self, args):
+        table_reg, values_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        values = self._coerce_call_result(self.val(values_arg))
+        if values:
+            table.extend(values)
+
     def _return_with(self, values: List[object]):
         self.last_return = list(values)
         self.return_value = self.last_return[0] if self.last_return else None
@@ -668,8 +717,16 @@ class BytecodeVM:
         self.registers[args[0]] = value
 
     def _op_LEN(self, args):
-        array = self.arrays.get(args[1], [])
-        self.registers[args[0]] = len(array)
+        dst, src = args
+        value = self.val(src)
+        if LuaTable is not None and isinstance(value, LuaTable):
+            self.registers[dst] = value.lua_len()
+            return
+        if isinstance(value, (list, tuple, str)):
+            self.registers[dst] = len(value)
+            return
+        array = self.arrays.get(src, [])
+        self.registers[dst] = len(array)
 
     def _op_PUSH(self, args):
         self.stack.append(self.val(args[0]))

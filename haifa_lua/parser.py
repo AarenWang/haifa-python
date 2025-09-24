@@ -356,6 +356,10 @@ class LuaParser:
             op_tok = self._advance()
             operand = self._parse_unary()
             return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
+        if token.kind == "OP" and token.value == "#":
+            op_tok = self._advance()
+            operand = self._parse_unary()
+            return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
         if token.kind == "not":
             op_tok = self._advance()
             operand = self._parse_unary()

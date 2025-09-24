@@ -60,6 +60,11 @@ class Opcode(Enum):
     RESULT_MULTI = auto()# RESULT_MULTI dst1, dst2, ...
     RESULT_LIST = auto() # RESULT_LIST dst
     LIST_GET = auto()    # LIST_GET dst, src, index
+    TABLE_NEW = auto()   # TABLE_NEW dst
+    TABLE_SET = auto()   # TABLE_SET table, key, value
+    TABLE_GET = auto()   # TABLE_GET dst, table, key
+    TABLE_APPEND = auto()# TABLE_APPEND table, value
+    TABLE_EXTEND = auto()# TABLE_EXTEND table, values
 
     JMP = auto()          # JMP label
     JZ = auto()           # JZ reg, label
