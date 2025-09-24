@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Mapping, Sequence
+from typing import Any, List, Mapping, Optional, Sequence
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,12 @@ class CoroutineSnapshot:
     status: str
     last_yield: List[Any]
     last_error: str | None
+    function_name: Optional[str] = None
+    last_resume_args: List[Any] = field(default_factory=list)
+    registers: Optional[Mapping[str, Any]] = None
+    upvalues: Optional[Sequence[Any]] = None
+    call_stack: Sequence[TraceFrame] = field(default_factory=list)
+    current_pc: Optional[int] = None
 
 
 @dataclass
@@ -67,6 +73,9 @@ class VMStateSnapshot:
     stack: Sequence[Any]
     call_stack: Sequence[TraceFrame]
     coroutines: Sequence[CoroutineSnapshot] = field(default_factory=list)
+    upvalues: Sequence[Any] = field(default_factory=list)
+    emit_stack: Sequence[Any] = field(default_factory=list)
+    output: Sequence[Any] = field(default_factory=list)
 
 
 __all__ = [
