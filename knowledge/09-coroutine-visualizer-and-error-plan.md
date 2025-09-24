@@ -1,27 +1,32 @@
 # 方案草案：协程可视化与 Lua 风格错误报告
 
-本方案分为两部分：
-1. 扩展 VM 可视化器以呈现协程状态与 `resume`/`yield` 事件。
-2. 规划 Lua 风格的错误栈回溯，实现字节码 → 源位置映射，为 CLI 调试模式奠定基础。
+本方案分为两条主线：
+1. 扩展 VM 事件钩子与可视化器，使协程生命周期、堆栈和寄存器流动都可追踪。
+2. 规划 Lua 风格错误栈回溯与 CLI 调试开关，形成调试体验的“采集—展示—控制”闭环。
 
 ---
 
 ## 1. 协程可视化增强
 
-### 1.1 数据流改造
+### 1.1 VM 事件钩子设计
 
-- **BytecodeVM 扩展**
-  - 暴露 `current_coroutine`、`last_event`、`yield_values`、`awaiting_resume` 等状态，通过观察接口（如 `vm.snapshot_state()`）统一输出。
-  - 在 `run(step)` 过程中抛出结构化事件：
-    - `CoroutineCreated(id, label, upvalues)`
-    - `CoroutineResumed(id, args)`
-    - `CoroutineYielded(id, values)`
-    - `CoroutineCompleted(id, results|error)`
-  - 事件对象存入 `vm.emit_stack` 并在视觉层消费，确保现有 jq 功能兼容：若非 Lua 模式，可忽略协程事件。
+- **事件结构定义**
+  - 新建 `VmEvent` 数据类型，包含通用字段（`timestamp`、`vm_tick`、`coroutine_id`、`pc`、`payload`）。
+  - 针对协程生命周期定义事件子类或 `kind`：
+    - `coroutine.create`
+    - `coroutine.resume`
+    - `coroutine.yield`
+    - `coroutine.done`（包含成功或错误结果）
+  - 扩展指令执行事件 `instruction.step`，确保在协程上下文切换时携带 `active_coroutine_id`。
 
-- **LuaCoroutine 标识**
-  - 每一协程分配自增 `coroutine_id`，保存在 `LuaCoroutine` 与 `BytecodeVM` 中，便于可视化器区分。
-  - Resume 时附带调用栈快照（labels + PC），为 UI 展示提供数据。
+- **事件钩子 API**
+  - 在 `BytecodeVM` 增加 `subscribe(event_kind, callback)` 与 `emit(event)`，默认可视化器注册为观察者。
+  - 以 `contextmanager`/`with` 模式提供 `vm.capture_events()`，便于测试与 CLI 直接读取。
+  - `LuaCoroutine` 创建与恢复时调用 `vm.emit(...)`，确保 resumable 协程与主线程统一编号。
+
+- **状态快照**
+  - `vm.snapshot_state()` 返回 `{active_coroutine, callstack, registers, event_buffer}`。
+  - Resume 时附带调用栈快照（函数标签、PC、upvalues、pending_yield_values），以供 UI/CLI 可选展开。
 
 ### 1.2 可视化 UI 更新
 
@@ -29,7 +34,9 @@
   - `ID / status (running|suspended|dead)`
   - 当前 resume/yield 参数
   - 函数标签与 upvalue 引用
-- **Timeline (事件流)**：使用现有指令执行时间线，插入协程事件节点；`yield` 节点可高亮指令位置。
+- **Timeline (事件流)**：
+  - 复用指令执行时间线，插入协程事件节点并用颜色区分事件类型。
+  - `yield` 节点支持 hover 时显示发起协程与 resume 端行号，对应 `instruction.step` 事件。
 - **Stack View**：
   - 扩展栈帧展示，对运行中的协程标注来源；
   - 支持在 UI 中切换查看不同协程的寄存器/upvalue。
@@ -37,14 +44,28 @@
   - 允许从协程列表点击切换到对应 VM 状态；
   - 可选自动跟随当前运行协程。
 
-### 1.3 兼容性与实现步骤
+### 1.3 集成与兼容策略
 
-1. 在 `BytecodeVM` 添加事件收集与快照 API，更新 LuaCoroutine 创建/恢复流程以推送事件。
-2. 修改 `vm_visualizer`（GUI/Headless）读取新事件。
-3. 增加测试：
-   - 单元：事件顺序（create → resume → yield → resume → complete）。
-   - 集成：Headless 模式输出包含协程状态。
-4. 文档：更新可视化器指南，说明协程面板与日志格式。
+- **Headless 模式**：事件以 NDJSON 输出，便于 CLI 与测试消费。
+- **向后兼容**：
+  - 未启用协程时 `VmEvent` 退化为 `instruction.step`。
+  - `vm_visualizer` 采用特性开关 `showCoroutines`；旧项目可关闭避免 UI 改动。
+- **性能考量**：提供 `vm.emit_buffer_size` 配置，防止事件过多导致内存上涨。
+
+### 1.4 实施步骤
+
+1. **事件基础设施**
+   - 定义 `VmEvent` 类型与 `emit/subscribe` 机制，编写单元测试验证事件顺序与钩子管理。
+2. **协程事件植入**
+   - 在 `LuaCoroutine.create/resume/yield`、`BytecodeVM.step` 中发射事件，补充调用栈快照。
+3. **可视化器适配**
+   - GUI：新增协程面板、时间线事件卡片、栈帧切换。
+   - Headless：支持 `--format events` 输出所有事件，含 resume/yield 细节。
+4. **文档与示例**
+   - 更新可视化器指南，增加示例脚本和截图。
+5. **验证**
+   - 单元：事件序列（create → resume → yield → resume → done）。
+   - 集成：运行示例脚本，通过快照断言 UI 数据模型。
 
 ---
 
@@ -53,13 +74,13 @@
 ### 2.1 元信息收集
 
 - **编译期**：
-  - 在 `LuaCompiler` 输出 `Instruction` 时附带源位置（行列）。方案：为 `Instruction` 增加可选 `meta` 字段或维护并行 `debug_info` 列表。
-  - 函数定义的 `LABEL` 与 `RETURN` 记录所在 Chunk/Function 名称。
+  - 在 `LuaCompiler` 输出 `Instruction` 时附带源位置（行列）。方案：为 `Instruction` 增加可选 `meta` 字段或维护并行 `debug_info` 列表，落地前先选用并行列表以降低入侵性。
+  - 函数定义的 `LABEL` 与 `RETURN` 记录所在 Chunk/Function 名称，并记录 upvalue 名称，便于回溯时展示。
 - **运行期**：
-  - VM 捕获异常时，根据 `pc` 和 call stack 读取对应源位置和函数名。
+  - VM 捕获异常时，根据 `pc` 和 call stack 读取对应源位置和函数名，结合协程 ID，生成帧结构 `{func_label, file, line, coroutine_id}`。
   - 协程 resume/yield 栈需合并：
     - 出错协程：从其调用栈 + `LuaCoroutine` 入口函数构造栈层级。
-    - Resume 端：`coroutine.resume` 返回 false 和错误消息（Lua 行为：`false, error_string`).
+    - Resume 端：`coroutine.resume` 返回 false 和错误消息；在 CLI `--trace` 打开时，还会附带 resume 方调用点。
 
 ### 2.2 栈回溯格式
 
@@ -80,24 +101,26 @@ stack traceback:
 ### 2.3 CLI 调试模式
 
 待错误映射完成后，CLI 可提供：
-- `--trace`：打印每条指令执行日志（可选过滤协程事件）。
-- `--stack`：错误时自动输出完整栈。
-- `--break-on-error`：遇到异常时暂停在可视化器/调试器。
+- `--trace`：打印每条指令执行日志，可选 `--trace=coroutine` 仅输出协程事件；依赖 1.x 阶段事件钩子。
+- `--stack`：错误时自动输出完整栈，可与 `--trace` 叠加。
+- `--break-on-error`：遇到异常时暂停在可视化器/调试器，利用事件系统通知前端进入暂停态。
+- `--no-color`：为 CI/快照测试提供稳定输出（可选）。
 
-### 2.4 实现步骤
+### 2.4 路线图与阶段划分
 
-1. 扩展 `Instruction` 或维护 `debug_info`，确保代码生成器写入位置信息。
-2. 修改 VM 调度：
-   - `BytecodeVM.run` 捕获 `RuntimeError`，包装为 `LuaRuntimeError`，附带栈帧信息。
-   - `LuaCoroutine.resume` 返回 false + 错误字符串。
-3. 新增格式化工具：`format_traceback(frames)` 生成 Lua 风格文本。
-4. 更新 `run_source`：
-   - 在异常情况下抛出 Python `RuntimeError` 前，利用上述格式化生成易读文本。
-5. 测试：
-   - 编译器：检查 debug 元信息。
-   - VM：模拟错误，验证 traceback 内容。
-   - 协程：确保错误沿 resume 流程返回。
+1. **Phase A：元信息与帧结构**
+   - 扩展 `Instruction` 或维护 `debug_info`，确保代码生成器写入位置信息。
+   - 构建 `StackFrame` 数据结构，补充单元测试覆盖函数/协程嵌套场景。
+2. **Phase B：运行时错误聚合**
+   - 修改 `BytecodeVM.run` 捕获 `RuntimeError`，包装为 `LuaRuntimeError` 并附带帧列表。
+   - 更新 `LuaCoroutine.resume` 返回 `(False, error_string, frames)`，旧 API 兼容只取前两个值。
+3. **Phase C：格式化与 CLI**
+   - 新增 `format_traceback(frames, style="lua")` 生成 Lua 风格文本；在 CLI 和可视化器中共享。
+   - 实装 CLI 选项 `--trace/--stack/--break-on-error/--no-color`，并与事件系统打通。
+4. **Phase D：集成测试与文档**
+   - 为 CLI 增加快照测试，验证错误输出与开关组合。
+   - 文档更新：错误格式说明、CLI 参数表、与可视化器联动示例。
 
 ---
 
-此方案将协程可视化与错误调试串联，完成后即可进入 Milestone 3 余下任务的具体实现阶段。
+此方案强调事件采集（VM 钩子）→ 状态展示（可视化器）→ 错误回溯（Lua 栈与 CLI 开关）的流水线式实现路径。完成上述阶段后，可无缝衔接 Milestone 3 其他调试增强任务。
