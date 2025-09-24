@@ -7,8 +7,22 @@ from typing import Any, List, Optional
 
 try:
     from .bytecode_vm import BytecodeVM, Instruction
+    from .vm_events import (
+        CoroutineCompleted,
+        CoroutineCreated,
+        CoroutineEvent,
+        CoroutineResumed,
+        CoroutineYielded,
+    )
 except Exception:  # pragma: no cover - fallback when run as script bundle
     from compiler.bytecode_vm import BytecodeVM, Instruction  # type: ignore
+    from compiler.vm_events import (  # type: ignore
+        CoroutineCompleted,
+        CoroutineCreated,
+        CoroutineEvent,
+        CoroutineResumed,
+        CoroutineYielded,
+    )
 
 
 @dataclass
@@ -38,6 +52,7 @@ class VMVisualizer:
         self.auto_run = False
         self.message = "Press SPACE to run/pause, n to step, q to quit."
         self.state.vm.index_labels()
+        self.event_log: List[str] = []
 
     # ---------------------------- public API ----------------------------- #
     def run(self) -> None:  # pragma: no cover - interactive utility
@@ -94,11 +109,33 @@ class VMVisualizer:
         elif auto:
             self.message = "Running..."
 
+    def _consume_events(self) -> None:
+        events = self.state.vm.drain_events()
+        for event in events:
+            self.event_log.append(self._format_event(event))
+        if len(self.event_log) > 200:
+            self.event_log = self.event_log[-200:]
+
+    def _format_event(self, event: CoroutineEvent) -> str:
+        if isinstance(event, CoroutineCreated):
+            name = event.function_name or "<function>"
+            return f"created #{event.coroutine_id} ({name})"
+        if isinstance(event, CoroutineResumed):
+            return f"resume #{event.coroutine_id} args={event.args}"
+        if isinstance(event, CoroutineYielded):
+            return f"yield #{event.coroutine_id} values={event.values} pc={event.pc}"
+        if isinstance(event, CoroutineCompleted):
+            if event.error:
+                return f"#{event.coroutine_id} error: {event.error}"
+            return f"#{event.coroutine_id} completed values={event.values}"
+        return str(event)
+
     def _reset(self) -> None:
         self.state = _VMState(vm=self._vm_cls(self._program))
         self.state.vm.index_labels()
         self.auto_run = False
         self.message = "Reset. Press SPACE to run or n to step."
+        self.event_log.clear()
 
     def _draw(self, stdscr: "curses._CursesWindow") -> None:
         stdscr.erase()
@@ -132,13 +169,48 @@ class VMVisualizer:
         row += 1
         self._write(stdscr, row, 0, f"Step: {self.state.step} | PC: {self.state.vm.pc} | Auto: {self.auto_run} | Halted: {self.state.halted}")
 
+        snapshot = self.state.vm.snapshot_state()
+        self._consume_events()
+
         row += 2
         self._write(stdscr, row, 0, "Registers:")
-        for i, (name, value) in enumerate(sorted(self.state.vm.registers.items())):
+        for i, (name, value) in enumerate(sorted(snapshot.registers.items())):
             display = self._fmt(value)
             self._write(stdscr, row + 1 + i, 2, f"{name} = {display}")
 
-        row = min(height - 6, row + 3 + len(self.state.vm.registers))
+        row = min(height - 6, row + 3 + len(snapshot.registers))
+        self._write(stdscr, row, 0, "Call stack:")
+        for i, frame in enumerate(snapshot.call_stack):
+            self._write(
+                stdscr,
+                row + 1 + i,
+                2,
+                f"{frame.function_name} @ {frame.file}:{frame.line} (pc={frame.pc})",
+            )
+
+        row = min(height - 6, row + 3 + len(snapshot.call_stack))
+        self._write(stdscr, row, 0, "Coroutines:")
+        if snapshot.coroutines:
+            for i, coro in enumerate(snapshot.coroutines):
+                prefix = "*" if snapshot.current_coroutine == coro.coroutine_id else "-"
+                line = (
+                    f"{prefix} #{coro.coroutine_id} {coro.status} "
+                    f"resume={self._fmt(coro.last_resume)} "
+                    f"yield={self._fmt(coro.last_yield)}"
+                )
+                if coro.last_error:
+                    line += f" error={coro.last_error}"
+                self._write(stdscr, row + 1 + i, 2, line)
+            row += 1 + len(snapshot.coroutines)
+        else:
+            self._write(stdscr, row + 1, 2, "<none>")
+            row += 2
+
+        self._write(stdscr, row, 40, "Events:")
+        for i, line in enumerate(reversed(self.event_log[-5:])):
+            self._write(stdscr, row + 1 + i, 42, line)
+
+        row = min(height - 6, row + 7)
         self._write(stdscr, row, 0, "Emit stack:")
         emit_repr = ", ".join(self._fmt(e) for e in self.state.vm.emit_stack)
         self._write(stdscr, row + 1, 2, emit_repr or "<empty>")

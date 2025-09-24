@@ -1,15 +1,30 @@
-import pygame
-import sys
-import json
 import datetime
-from typing import List, Dict, Any, Tuple, Set
+import json
+import sys
+from typing import Any, Dict, List, Set, Tuple
+
+import pygame
 
 try:
     from .bytecode import Instruction
     from .bytecode_vm import BytecodeVM
+    from .vm_events import (
+        CoroutineCompleted,
+        CoroutineCreated,
+        CoroutineEvent,
+        CoroutineResumed,
+        CoroutineYielded,
+    )
 except Exception:  # fallback when run as top-level script
     from compiler.bytecode import Instruction  # type: ignore
     from compiler.bytecode_vm import BytecodeVM  # type: ignore
+    from compiler.vm_events import (  # type: ignore
+        CoroutineCompleted,
+        CoroutineCreated,
+        CoroutineEvent,
+        CoroutineResumed,
+        CoroutineYielded,
+    )
 
 # Constants
 SCREEN_WIDTH = 1600
@@ -40,6 +55,7 @@ class VMVisualizer:
         self.search_query = ""
         self.message = "Press P to run, SPACE to step, / to search."
         self.trace_log: List[Dict[str, Any]] = []
+        self.event_log: List[str] = []
         self._vm_cls = type(vm)
         # Keep a frozen copy of instructions for resetting
         self._instructions = list(vm.instructions)
@@ -84,12 +100,56 @@ class VMVisualizer:
         except TypeError:
             return str(value)
 
+    def _consume_events(self) -> None:
+        events = self.vm.drain_events()
+        for event in events:
+            self.event_log.append(self._format_event(event))
+        if len(self.event_log) > 200:
+            self.event_log = self.event_log[-200:]
+
+    def _format_event(self, event: CoroutineEvent) -> str:
+        if isinstance(event, CoroutineCreated):
+            name = event.function_name or "<function>"
+            return f"created coroutine #{event.coroutine_id} ({name})"
+        if isinstance(event, CoroutineResumed):
+            return f"resume coroutine #{event.coroutine_id} args={self._format_value(event.args)}"
+        if isinstance(event, CoroutineYielded):
+            values = self._format_value(event.values)
+            return f"yield from #{event.coroutine_id} values={values} pc={event.pc}"
+        if isinstance(event, CoroutineCompleted):
+            if event.error:
+                return f"coroutine #{event.coroutine_id} error: {event.error}"
+            return f"coroutine #{event.coroutine_id} done values={self._format_value(event.values)}"
+        return str(event)
+
     def _prepare_data(self):
         instructions_data, highlight_idx, match_highlights = self._prepare_instruction_display()
 
         registers_data, changed_indices = self._prepare_register_display()
 
-        stack_data = [f"PC={pc}, Params={params}, Regs=..." for pc, params, _ in self.vm.call_stack]
+        snapshot = self.vm.snapshot_state()
+        stack_data = [
+            f"{frame.function_name} @ {frame.file}:{frame.line} (pc={frame.pc})"
+            for frame in snapshot.call_stack
+        ]
+
+        coroutine_data: List[str] = []
+        current_index = -1
+        for idx, coro in enumerate(snapshot.coroutines):
+            status = coro.status
+            yield_display = self._format_value(coro.last_yield)
+            resume_display = self._format_value(coro.last_resume)
+            line = (
+                f"#{coro.coroutine_id} {status:<10} "
+                f"resume={resume_display} yield={yield_display}"
+            )
+            if coro.last_error:
+                line += f" error={coro.last_error}"
+            coroutine_data.append(line)
+            if snapshot.current_coroutine == coro.coroutine_id:
+                current_index = idx
+
+        self._consume_events()
 
         output_data = [self._format_value(item) for item in self.vm.output]
 
@@ -104,6 +164,9 @@ class VMVisualizer:
             stack_data,
             output_data,
             emit_stack_data,
+            coroutine_data,
+            current_index,
+            list(self.event_log[-30:]),
         )
 
     def _prepare_instruction_display(self) -> Tuple[List[str], int, Set[int]]:
@@ -166,6 +229,9 @@ class VMVisualizer:
             stack_data,
             output_data,
             emit_stack_data,
+            coroutine_data,
+            coroutine_highlight,
+            event_log,
         ) = self._prepare_data()
 
         # Instructions
@@ -197,10 +263,40 @@ class VMVisualizer:
         self._draw_section("Call Stack", stack_data, 640, 440, 450, 200)
 
         # Emit Stack
-        self._draw_section("Emit Stack", emit_stack_data, 640, 660, 450, SCREEN_HEIGHT - 660 - MARGIN)
+        emit_y = 660
+        emit_height = 120
+        self._draw_section("Emit Stack", emit_stack_data, 640, emit_y, 450, emit_height)
 
-        # Output
-        self._draw_section("Output", output_data, 1110, MARGIN, SCREEN_WIDTH - 1110 - MARGIN, SCREEN_HEIGHT - 2 * MARGIN)
+        # Output below emit stack
+        output_y = emit_y + emit_height + 20
+        output_height = SCREEN_HEIGHT - output_y - MARGIN
+        self._draw_section("Output", output_data, 640, output_y, 450, output_height)
+
+        # Coroutines panel on right
+        right_x = 1110
+        right_width = SCREEN_WIDTH - right_x - MARGIN
+        coroutine_height = 240
+        self._draw_section(
+            "Coroutines",
+            coroutine_data or ["<none>"],
+            right_x,
+            MARGIN,
+            right_width,
+            coroutine_height,
+            highlight_index=coroutine_highlight,
+        )
+
+        # Coroutine events below
+        events_y = MARGIN + coroutine_height + 20
+        events_height = SCREEN_HEIGHT - events_y - MARGIN
+        self._draw_section(
+            "Coroutine Events",
+            list(reversed(event_log)) or ["<no events>"],
+            right_x,
+            events_y,
+            right_width,
+            events_height,
+        )
 
         # Status/Help
         status_text = "PAUSED" if self.paused else "RUNNING"
