@@ -31,14 +31,14 @@
 - [x] 编译器：局部变量 cell 化，支持函数返回闭包、闭包调用与 upvalue 绑定。
 - [x] 单元/集成测试：累加器、共享 upvalue、多层嵌套调用；核心 VM 指令覆盖。
 
-**Milestone 2A-1：VM 层改造** 
-- [ ] 新增 opcode：MAKE_CELL/CELL_GET/CELL_SET（捕获变量用）、CLOSURE、CALL_VALUE、BIND_UPVALUE。
-- [ ] BytecodeVM 维护 upvalue 列表，CALL_VALUE 需保存/恢复 current_upvalues，闭包对象结构确定。
-- [ ] 更新可视化器显示（寄存器高亮继续适配）。
+**Milestone 2A-1：VM 层改造**
+- [x] 新增 opcode：MAKE_CELL/CELL_GET/CELL_SET（捕获变量用）、CLOSURE、CALL_VALUE、BIND_UPVALUE。
+- [x] BytecodeVM 维护 upvalue 列表，CALL_VALUE 需保存/恢复 current_upvalues，闭包对象结构确定。
+- [x] 更新可视化器显示（寄存器高亮继续适配）。
 
-**Milestone 2A-2：编译期自由变量分析** 
-- [ ] 在 haifa_lua 内新增分析模块，对 AST 做作用域递归，标记被内层函数引用的局部变量。
-- [ ] 编译器根据分析结果生成 cell 初始化、CELL_SET/GET、闭包 upvalue 列表。
+**Milestone 2A-2：编译期自由变量分析**
+- [x] 在 haifa_lua 内新增分析模块，对 AST 做作用域递归，标记被内层函数引用的局部变量。
+- [x] 编译器根据分析结果生成 cell 初始化、CELL_SET/GET、闭包 upvalue 列表。
 
 **Milestone 2A-3：闭包编译与调用** 
 - [x] 函数定义：生成 MAKE_CELL、CLOSURE，内层函数 prolog 插入 BIND_UPVALUE。
@@ -57,9 +57,9 @@
 
 ### Milestone 3：协程与调试增强
 - [x] 协程语义：`coroutine.create/resume/yield`，VM 上实现多执行上下文。
-- [ ] 可视化器显示 Lua 调用栈、Upvalue、协程状态，支持断点/单步。
-- [ ] 错误处理与诊断：Lua 风格的栈回溯、行列信息。
-- [ ] 扩展 CLI，提供调试模式、trace 导出。
+- [x] 可视化器显示 Lua 调用栈、Upvalue、协程状态，支持断点/单步。
+- [x] 错误处理与诊断：Lua 风格的栈回溯、行列信息。
+- [x] 扩展 CLI，提供调试模式、trace 导出。
 
 ### Milestone 4：性能与文档发布
 - [ ] 性能优化：缓存常用路径、减少表/字符串拷贝、评估 JIT 钩子（规划即可）。
