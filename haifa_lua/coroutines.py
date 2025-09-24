@@ -124,11 +124,36 @@ class LuaCoroutine:
         self._update_snapshot()
 
     def _update_snapshot(self) -> None:
+        registers = None
+        upvalues = None
+        call_stack = None
+        current_pc = None
+        if self.vm is not None:
+            try:
+                vm_snapshot = self.vm.snapshot_state()
+            except Exception:  # pragma: no cover - snapshot best effort
+                registers = dict(self.vm.registers)
+                call_stack = []
+                current_pc = getattr(self.vm, "pc", None)
+            else:
+                registers = vm_snapshot.registers
+                call_stack = vm_snapshot.call_stack
+                current_pc = vm_snapshot.pc
+            upvalues = list(getattr(self.vm, "current_upvalues", []))
+        else:
+            upvalues = list(self.closure.get("upvalues", []))
+
         self.base_vm.set_coroutine_snapshot(
             self.coroutine_id,
             status=self.status,
             last_yield=self.last_yield,
             last_error=self.last_error,
+            function_name=self.debug_name,
+            last_resume_args=self.last_resume_args,
+            registers=registers,
+            upvalues=upvalues,
+            call_stack=call_stack,
+            current_pc=current_pc,
         )
 
     # ------------------------------------------------------------------ public API

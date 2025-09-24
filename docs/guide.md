@@ -161,10 +161,24 @@ vm = BytecodeVM(bytecode)
 VMVisualizer(vm).run()
 ```
 
-### 6.3 可视化器快捷键
-- GUI 版：`P` 运行/暂停、`SPACE` 单步、`/` 进入指令搜索（回车确认、ESC 取消）、`L` 导出执行轨迹（JSONL）、`R` 重置、`Q` 退出。
-- GUI 会高亮最近变更的寄存器，并在搜索期间标记匹配指令。
-- 导出轨迹文件位于当前目录，命名为 `vm_trace_YYYYMMDD_HHMMSS.jsonl`。
+### 6.3 可视化器面板与快捷键
+GUI 版可视化器拆分为三个区域：
+
+- **左侧指令区**：展示指令列表，可通过 `/` 搜索并定位到当前 PC。
+- **中部状态区**：包含全局寄存器、选中协程的寄存器/Upvalue/调用栈，以及 Emit Stack、Output 等调试信息。
+- **右侧协程与时间线区**：上方列出当前协程列表，下方时间线会记录 `create/resume/yield/complete` 事件，并在最底部展示事件详情。
+
+常用快捷键：
+
+- `P` 运行/暂停自动执行。
+- `SPACE` 单步执行。
+- `↑` / `↓` 切换选中的协程，面板随之刷新寄存器与栈信息。
+- `←` / `→` 在时间线中切换事件，右侧详情会显示参数与 PC。
+- `F` 开关“自动跟随当前协程”，开启后 `resume` 会自动选中对应协程。
+- `/` 进入指令搜索（回车确认、ESC 取消）。
+- `L` 导出执行轨迹（JSONL），`R` 重置虚拟机，`Q` 退出。
+
+GUI 会高亮最近变更的寄存器，时间线还会对当前选中的协程事件进行浅色标记。导出的轨迹文件位于当前目录，命名为 `vm_trace_YYYYMMDD_HHMMSS.jsonl`。
 
 ## 7. 可视化执行流程
 使用 `--visualize` 结合内建 VM 可视化器，查看字节码执行：
@@ -184,8 +198,32 @@ Headless 模式基于 `curses` 渲染，常用按键：
 - `SPACE` / `p`：开始/暂停自动执行
 - `n` / 右方向键：单步执行
 - `r`：重置并回到初始状态
+- `e`：切换协程事件列表的显示/隐藏（右栏仍会保留最近一条事件详情）
 - `q`：退出
-- Headless 默认逐步打印寄存器/输出变化；如需导出轨迹，可在 GUI 模式运行后使用 `L` 键生成文件。
+- Headless 会同步展示当前协程寄存器、Upvalue 与最近事件详情；如需导出轨迹，可在 GUI 模式运行后使用 `L` 键生成文件。
+
+### 6.4 协程事件示例
+
+仓库新增示例脚本 `examples/coroutines.lua`，模拟两个协程交替 `yield` 的过程，可直接加载到可视化器中：
+
+```python
+from pathlib import Path
+
+from compiler.bytecode_vm import BytecodeVM
+from compiler.vm_visualizer import VMVisualizer
+from haifa_lua.runtime import compile_source
+
+source = Path("examples/coroutines.lua").read_text(encoding="utf-8")
+instructions = list(compile_source(source, source_name="coroutines.lua"))
+vm = BytecodeVM(instructions)
+VMVisualizer(vm).run()
+```
+
+若处于终端环境，可用 `pylua` 的 `--trace coroutine` 选项打印同样的事件序列：
+
+```bash
+python -m haifa_lua.cli examples/coroutines.lua --trace coroutine
+```
 
 ## 8. 常见问题
 

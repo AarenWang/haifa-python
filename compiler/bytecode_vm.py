@@ -1,7 +1,7 @@
 import copy
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from .bytecode import Instruction, InstructionDebug, Opcode
 from .vm_errors import VMRuntimeError
@@ -177,12 +177,24 @@ class BytecodeVM:
         status: str,
         last_yield: Sequence[object],
         last_error: Optional[str],
+        function_name: str | None = None,
+        last_resume_args: Sequence[object] | None = None,
+        registers: Mapping[str, object] | None = None,
+        upvalues: Sequence[object] | None = None,
+        call_stack: Sequence[TraceFrame] | None = None,
+        current_pc: Optional[int] = None,
     ) -> None:
         self._coroutine_snapshots[coroutine_id] = CoroutineSnapshot(
             coroutine_id=coroutine_id,
             status=status,
             last_yield=list(last_yield),
             last_error=last_error,
+            function_name=function_name,
+            last_resume_args=list(last_resume_args or []),
+            registers=dict(registers) if registers is not None else None,
+            upvalues=list(upvalues) if upvalues is not None else None,
+            call_stack=list(call_stack) if call_stack is not None else [],
+            current_pc=current_pc,
         )
 
     def remove_coroutine_snapshot(self, coroutine_id: int) -> None:
@@ -196,6 +208,9 @@ class BytecodeVM:
             stack=list(self.stack),
             call_stack=self._capture_traceback(),
             coroutines=list(self._coroutine_snapshots.values()),
+            upvalues=list(self.current_upvalues),
+            emit_stack=list(self.emit_stack),
+            output=list(self.output),
         )
 
     def _capture_traceback(self) -> List[TraceFrame]:
