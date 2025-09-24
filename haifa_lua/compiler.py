@@ -9,11 +9,13 @@ from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocat
 from .analysis import FunctionInfo, analyze
 from .ast import (
     Assignment,
+    BreakStmt,
     BinaryOp,
     Block,
     BooleanLiteral,
     CallExpr,
     Chunk,
+    DoStmt,
     Expr,
     ExprStmt,
     FieldAccess,
@@ -25,6 +27,7 @@ from .ast import (
     MethodCallExpr,
     NilLiteral,
     NumberLiteral,
+    RepeatStmt,
     ReturnStmt,
     StringLiteral,
     TableConstructor,
@@ -197,6 +200,12 @@ class LuaCompiler:
                 self._compile_if(stmt)
             elif isinstance(stmt, WhileStmt):
                 self._compile_while(stmt)
+            elif isinstance(stmt, RepeatStmt):
+                raise CompileError("repeat-until is not supported yet")
+            elif isinstance(stmt, DoStmt):
+                self._compile_block(stmt.body)
+            elif isinstance(stmt, BreakStmt):
+                raise CompileError("break is not supported yet")
             elif isinstance(stmt, ReturnStmt):
                 self._compile_return(stmt)
             elif isinstance(stmt, FunctionStmt):
@@ -305,15 +314,27 @@ class LuaCompiler:
         raise CompileError("Assignment target type is not supported yet")
 
     def _compile_if(self, stmt: IfStmt):
-        cond_reg = self._compile_expr(stmt.condition)
-        else_label = f"__else_{self._new_temp()}"
+        branches = [(stmt.condition, stmt.then_branch)]
+        for clause in stmt.elseif_branches:
+            branches.append((clause.condition, clause.body))
+
         end_label = f"__endif_{self._new_temp()}"
-        self._emit(Opcode.JZ, [cond_reg, else_label], node=stmt)
-        self._compile_block(stmt.then_branch)
-        self._emit(Opcode.JMP, [end_label], node=stmt)
-        self._emit(Opcode.LABEL, [else_label], node=stmt)
+
+        for idx, (condition, block) in enumerate(branches):
+            has_following = idx < len(branches) - 1 or stmt.else_branch is not None
+            false_label = (
+                f"__if_next_{self._new_temp()}" if has_following else end_label
+            )
+            cond_reg = self._compile_expr(condition)
+            self._emit(Opcode.JZ, [cond_reg, false_label], node=stmt)
+            self._compile_block(block)
+            self._emit(Opcode.JMP, [end_label], node=stmt)
+            if has_following:
+                self._emit(Opcode.LABEL, [false_label], node=stmt)
+
         if stmt.else_branch:
             self._compile_block(stmt.else_branch)
+
         self._emit(Opcode.LABEL, [end_label], node=stmt)
 
     def _compile_while(self, stmt: WhileStmt):

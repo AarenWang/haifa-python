@@ -6,6 +6,7 @@ from typing import Dict, List, Set, Tuple
 from .ast import (
     Assignment,
     Block,
+    BreakStmt,
     CallExpr,
     Expr,
     ExprStmt,
@@ -16,9 +17,11 @@ from .ast import (
     IfStmt,
     IndexExpr,
     MethodCallExpr,
+    RepeatStmt,
     ReturnStmt,
     Chunk,
     TableConstructor,
+    DoStmt,
     VarargExpr,
     WhileStmt,
 )
@@ -101,11 +104,21 @@ def _analyze_block(block: Block, scope: Scope, mapping: Dict[int, FunctionInfo])
         elif isinstance(stmt, IfStmt):
             _analyze_expr(stmt.condition, scope, mapping)
             _analyze_block(stmt.then_branch, scope, mapping)
+            for clause in stmt.elseif_branches:
+                _analyze_expr(clause.condition, scope, mapping)
+                _analyze_block(clause.body, scope, mapping)
             if stmt.else_branch:
                 _analyze_block(stmt.else_branch, scope, mapping)
         elif isinstance(stmt, WhileStmt):
             _analyze_expr(stmt.condition, scope, mapping)
             _analyze_block(stmt.body, scope, mapping)
+        elif isinstance(stmt, RepeatStmt):
+            _analyze_block(stmt.body, scope, mapping)
+            _analyze_expr(stmt.condition, scope, mapping)
+        elif isinstance(stmt, DoStmt):
+            _analyze_block(stmt.body, scope, mapping)
+        elif isinstance(stmt, BreakStmt):
+            pass
         elif isinstance(stmt, ReturnStmt):
             for value in stmt.values:
                 _analyze_expr(value, scope, mapping)
