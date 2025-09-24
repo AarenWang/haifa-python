@@ -317,6 +317,16 @@ class LuaCompiler:
             else:
                 self._emit(Opcode.MOV, [f"G_{target.name}", value_reg], node=node)
             return
+        if isinstance(target, FieldAccess):
+            table_reg = self._compile_expr(target.table)
+            key_reg = self._emit_literal(target.field, target, hint=self._new_temp())
+            self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=node)
+            return
+        if isinstance(target, IndexExpr):
+            table_reg = self._compile_expr(target.table)
+            index_reg = self._compile_expr(target.index)
+            self._emit(Opcode.TABLE_SET, [table_reg, index_reg, value_reg], node=node)
+            return
         raise CompileError("Assignment target type is not supported yet")
 
     def _compile_if(self, stmt: IfStmt):
@@ -556,6 +566,8 @@ class LuaCompiler:
                 self._emit(Opcode.NEG, [dst, operand], node=expr)
             elif expr.op == "not":
                 self._emit(Opcode.NOT, [dst, operand], node=expr)
+            elif expr.op == "#":
+                self._emit(Opcode.LEN, [dst, operand], node=expr)
             else:
                 raise CompileError(f"Unsupported unary operator {expr.op}")
             return dst
@@ -569,8 +581,12 @@ class LuaCompiler:
             return self._compile_vararg_expr(multi=False, node=expr)
         if isinstance(expr, FieldAccess):
             return self._compile_field_access(expr)
-        if isinstance(expr, (MethodCallExpr, IndexExpr, TableConstructor)):
-            raise CompileError("Unsupported expression: tables and method calls are not implemented yet")
+        if isinstance(expr, IndexExpr):
+            return self._compile_index_expr(expr)
+        if isinstance(expr, TableConstructor):
+            return self._compile_table_constructor(expr)
+        if isinstance(expr, MethodCallExpr):
+            raise CompileError("Unsupported expression: method calls are not implemented yet")
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -734,25 +750,51 @@ class LuaCompiler:
         return f"G_{name}"
 
     def _compile_field_access(self, expr: FieldAccess) -> str:
-        chain = self._field_chain(expr)
-        if not chain:
-            raise CompileError("Field access on non-identifier bases is not supported yet")
-        base_name = chain[0]
-        binding = self._lookup_binding(base_name)
-        if binding is not None:
-            raise CompileError("Field access on local tables is not implemented yet")
-        full_name = ".".join(chain)
-        return f"G_{full_name}"
+        table_reg = self._compile_expr(expr.table)
+        key_reg = self._emit_literal(expr.field, expr, hint=self._new_temp())
+        dst = self._new_temp()
+        self._emit(Opcode.TABLE_GET, [dst, table_reg, key_reg], node=expr)
+        return dst
 
-    def _field_chain(self, expr: FieldAccess) -> Optional[List[str]]:
-        parts: List[str] = [expr.field]
-        current: Expr = expr.table
-        while isinstance(current, FieldAccess):
-            parts.insert(0, current.field)
-            current = current.table
-        if isinstance(current, Identifier):
-            parts.insert(0, current.name)
-            return parts
-        return None
+    def _compile_index_expr(self, expr: IndexExpr) -> str:
+        table_reg = self._compile_expr(expr.table)
+        index_reg = self._compile_expr(expr.index)
+        dst = self._new_temp()
+        self._emit(Opcode.TABLE_GET, [dst, table_reg, index_reg], node=expr)
+        return dst
+
+    def _compile_table_constructor(self, expr: TableConstructor) -> str:
+        table_reg = self._new_temp()
+        self._emit(Opcode.TABLE_NEW, [table_reg], node=expr)
+        total = len(expr.fields)
+        for idx, field in enumerate(expr.fields):
+            value_node = field.value
+            if field.key is not None:
+                key_reg = self._compile_expr(field.key)
+                value_reg = self._compile_expr(field.value)
+                self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=value_node)
+                continue
+            if field.name is not None:
+                key_reg = self._emit_literal(field.name, value_node, hint=self._new_temp())
+                value_reg = self._compile_expr(field.value)
+                self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=value_node)
+                continue
+            is_last = idx == total - 1
+            if is_last and isinstance(field.value, CallExpr):
+                list_reg = self._compile_call(field.value, want_list=True)
+                self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
+                continue
+            if is_last and isinstance(field.value, VarargExpr):
+                list_reg = self._compile_vararg_expr(multi=True, node=field.value)
+                self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
+                continue
+            if isinstance(field.value, CallExpr):
+                value_reg = self._compile_call(field.value)
+            elif isinstance(field.value, VarargExpr):
+                value_reg = self._compile_vararg_expr(multi=False, node=field.value)
+            else:
+                value_reg = self._compile_expr(field.value)
+            self._emit(Opcode.TABLE_APPEND, [table_reg, value_reg], node=value_node)
+        return table_reg
 
 __all__ = ["LuaCompiler", "CompileError"]

@@ -346,6 +346,40 @@ def test_multi_assignment_expands_vararg():
     assert run_source(src) == [7, 8, None]
 
 
+def test_table_constructor_and_field_updates():
+    src = """
+    local t = {10, answer = 42, [3] = 99}
+    t.extra = 7
+    t[2] = 20
+    return t[1], t.answer, t[2], t[3], t.extra
+    """
+    assert run_source(src) == [10, 42, 20, 99, 7]
+
+
+def test_table_length_and_insert():
+    src = """
+    local t = {}
+    t[1] = "a"
+    t[2] = "b"
+    t[2] = nil
+    table.insert(t, "c")
+    return #t, t[1], t[2]
+    """
+    assert run_source(src) == [2, "a", "c"]
+
+
+def test_table_constructor_expands_last_call():
+    src = """
+    function produce()
+        return 1, 2, 3
+    end
+
+    local t = {0, produce()}
+    return #t, t[1], t[2], t[3], t[4]
+    """
+    assert run_source(src) == [4, 0, 1, 2, 3]
+
+
 def test_runtime_error_reports_lua_style_location():
     src = """
     local x = 1
