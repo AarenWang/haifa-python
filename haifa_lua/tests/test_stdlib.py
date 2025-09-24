@@ -1,6 +1,8 @@
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -72,3 +74,47 @@ def test_print_handles_multi_return():
     """
     result = run_source(src)
     assert result == ["1\t2"]
+
+
+def test_coroutine_yield_and_resume_roundtrip():
+    env = create_default_environment()
+    setup = """
+    function worker(a)
+        local inc = coroutine.yield(a + 1)
+        return a + inc, a
+    end
+
+    return coroutine.create(worker)
+    """
+    coroutine_obj = run_source(setup, env)[0]
+    env.register("co", coroutine_obj)
+
+    first = run_source("return coroutine.resume(co, 10)", env)
+    second = run_source("return coroutine.resume(co, 5)", env)
+    assert first == [True, 11]
+    assert second == [True, 15, 10]
+
+
+def test_coroutine_resume_after_completion():
+    env = create_default_environment()
+    setup = """
+    function once()
+        return 99
+    end
+
+    return coroutine.create(once)
+    """
+    co = run_source(setup, env)[0]
+    env.register("co", co)
+
+    first = run_source("return coroutine.resume(co)", env)
+    assert first == [True, 99]
+
+    second = run_source("return coroutine.resume(co)", env)
+    assert second[0] is False
+    assert isinstance(second[1], str)
+
+
+def test_coroutine_yield_outside_context_raises():
+    with pytest.raises(RuntimeError):
+        run_source("return coroutine.yield(1)")

@@ -37,6 +37,7 @@ def run_source(source: str, globals: Optional[object] = None, *, load_stdlib: bo
     instructions = list(compile_source(source))
     env = _prepare_environment(globals, load_stdlib)
     vm = BytecodeVM(instructions)
+    vm.lua_env = env
     vm.registers.update(env.to_vm_registers())
     output = vm.run()
     env.sync_from_vm(vm.registers)

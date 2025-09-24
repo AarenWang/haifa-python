@@ -3,6 +3,15 @@ from dataclasses import dataclass
 from typing import List
 
 from .bytecode import Opcode, Instruction
+
+
+class LuaYield:
+    __slots__ = ("values",)
+
+    def __init__(self, values):
+        self.values = list(values)
+
+
 from .value_utils import resolve_value
 
 
@@ -26,6 +35,10 @@ class BytecodeVM:
         self.output = []
         self.current_upvalues = []
         self.last_return: List[object] = []
+        self.last_event = None
+        self.yield_values: List[object] = []
+        self.awaiting_resume = False
+        self.current_coroutine = None
         # Opcode dispatch table for cleaner control flow
         self._handlers = {
             Opcode.LOAD_IMM: self._op_LOAD_IMM,
@@ -116,12 +129,16 @@ class BytecodeVM:
             return None  # PC is already updated
         if control == "halt":
             return "halt"
+        if control == "yield":
+            self.pc += 1
+            return "yield"
 
         self.pc += 1
         return None
 
-    def run(self, debug=False):
+    def run(self, debug=False, stop_on_yield=False):
         self.index_labels()
+        self.last_event = None
         while self.pc < len(self.instructions):
             if debug:
                 inst = self.instructions[self.pc]
@@ -129,9 +146,18 @@ class BytecodeVM:
                 print(f"  REGISTERS: {self.registers}")
                 print(f"  OUTPUT: {self.output}\n")
 
-            if self.step() == "halt":
+            status = self.step()
+            if status == "halt":
+                self.last_event = "halt"
+                break
+            if status == "yield":
+                if not stop_on_yield:
+                    raise RuntimeError("coroutine.yield called outside coroutine")
+                self.last_event = "yield"
                 break
 
+        if self.last_event is None:
+            self.last_event = "halt"
         return self.output
 
     # -------------------- Opcode handlers --------------------
@@ -254,9 +280,20 @@ class BytecodeVM:
             result = callee(*args_to_pass)
         else:
             raise RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
+        if isinstance(result, LuaYield):
+            if self.current_coroutine is None:
+                raise RuntimeError("coroutine.yield called outside coroutine")
+            self.yield_values = list(result.values)
+            self.awaiting_resume = True
+            self.last_return = []
+            self.return_value = None
+            if hasattr(self.current_coroutine, "_set_yield"):
+                self.current_coroutine._set_yield(self.yield_values)
+            return "yield"
         values = self._coerce_call_result(result)
         self.last_return = values
         self.return_value = values[0] if values else None
+        self.awaiting_resume = False
         return None
 
     def _op_BIND_UPVALUE(self, args):
@@ -306,9 +343,17 @@ class BytecodeVM:
         if self.call_stack:
             self.pc, self.param_stack, self.registers, self.current_upvalues, self.pending_params = self.call_stack.pop()
             return "jump"
+        if self.current_coroutine is not None and hasattr(self.current_coroutine, "_set_result"):
+            self.current_coroutine._set_result(self.last_return)
         self.current_upvalues = []
         self.pending_params = []
+        self.awaiting_resume = False
         return "halt"
+
+    def prepare_resume(self, values):
+        self.last_return = list(values)
+        self.return_value = self.last_return[0] if self.last_return else None
+        self.awaiting_resume = False
 
     def _coerce_call_result(self, result):
         if result is None:
