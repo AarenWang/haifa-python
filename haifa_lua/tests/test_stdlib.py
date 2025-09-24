@@ -174,3 +174,36 @@ def test_coroutine_event_sequence():
     completed = events[-1]
     assert isinstance(completed, CoroutineCompleted)
     assert list(completed.values) == [10]
+
+
+def test_coroutine_snapshot_contains_runtime_state():
+    source = """
+    function worker(a)
+        local inc = coroutine.yield(a + 1)
+        return inc * 2
+    end
+
+    local co = coroutine.create(worker)
+    coroutine.resume(co, 10)
+    """
+
+    instructions = list(compile_source(source, source_name="<snapshot>"))
+    env = create_default_environment()
+    vm = BytecodeVM(instructions)
+    vm.lua_env = env
+    vm.registers.update(env.to_vm_registers())
+    vm.run()
+
+    snapshot = vm.snapshot_state()
+    assert snapshot.coroutines, "expected coroutine snapshot to be recorded"
+
+    coro_snapshot = snapshot.coroutines[0]
+    assert coro_snapshot.status == "suspended"
+    assert coro_snapshot.last_resume_args == [10]
+    assert coro_snapshot.last_yield == [11]
+    assert coro_snapshot.function_name == "worker"
+    assert coro_snapshot.registers is not None
+    assert isinstance(coro_snapshot.registers, dict)
+    assert coro_snapshot.call_stack, "call stack should contain at least the current frame"
+    assert coro_snapshot.upvalues is not None
+    assert coro_snapshot.current_pc is not None
