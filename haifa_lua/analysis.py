@@ -87,8 +87,15 @@ def _analyze_block(block: Block, scope: Scope, mapping: Dict[int, FunctionInfo])
     for stmt in block.statements:
         if isinstance(stmt, Assignment):
             if stmt.is_local:
-                scope.declare(stmt.target.name)
-            _analyze_expr(stmt.value, scope, mapping)
+                for target in stmt.targets:
+                    if isinstance(target, Identifier):
+                        scope.declare(target.name)
+            else:
+                for target in stmt.targets:
+                    if not isinstance(target, Identifier):
+                        _analyze_expr(target, scope, mapping)
+            for value in stmt.values:
+                _analyze_expr(value, scope, mapping)
         elif isinstance(stmt, ExprStmt):
             _analyze_expr(stmt.expr, scope, mapping)
         elif isinstance(stmt, IfStmt):

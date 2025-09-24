@@ -177,22 +177,52 @@ class LuaParser:
         self._expect("end")
         func_expr = FunctionExpr(local_tok.line, local_tok.column, params, vararg, body)
         ident = Identifier(name_tok.line, name_tok.column, name_tok.value)
-        return Assignment(local_tok.line, local_tok.column, ident, func_expr, True)
+        return Assignment(local_tok.line, local_tok.column, [ident], [func_expr], True)
 
     def _parse_local_assignment(self) -> Assignment:
         tok = self._expect("local")
-        name = self._expect("IDENT")
-        self._expect_op("=")
-        expr = self._parse_expression()
-        return Assignment(tok.line, tok.column, Identifier(name.line, name.column, name.value), expr, True)
+        names: List[Identifier] = []
+        while True:
+            name_tok = self._expect("IDENT")
+            names.append(Identifier(name_tok.line, name_tok.column, name_tok.value))
+            if not self._match(","):
+                break
+        values: List[Expr] = []
+        if self._current().kind == "OP" and self._current().value == "=":
+            self._advance()
+            values = self._parse_expression_list()
+        return Assignment(tok.line, tok.column, list(names), values, True)
 
     def _parse_assignment_or_expression(self):
         expr = self._parse_expression()
-        if isinstance(expr, Identifier) and self._current().kind == "OP" and self._current().value == "=":
-            self._advance()
-            value = self._parse_expression()
-            return Assignment(expr.line, expr.column, expr, value, False)
+        if self._is_assignable(expr):
+            targets: List[Expr] = [expr]
+            if self._match(","):
+                while True:
+                    next_expr = self._parse_expression()
+                    if not self._is_assignable(next_expr):
+                        raise ParserError("Invalid assignment target")
+                    targets.append(next_expr)
+                    if not self._match(","):
+                        break
+                self._expect_op("=")
+                values = self._parse_expression_list()
+                first = targets[0]
+                return Assignment(first.line, first.column, targets, values, False)
+            if self._current().kind == "OP" and self._current().value == "=":
+                self._advance()
+                values = self._parse_expression_list()
+                return Assignment(expr.line, expr.column, targets, values, False)
         return ExprStmt(expr.line, expr.column, expr)
+
+    def _parse_expression_list(self) -> List[Expr]:
+        values: List[Expr] = [self._parse_expression()]
+        while self._match(","):
+            values.append(self._parse_expression())
+        return values
+
+    def _is_assignable(self, expr: Expr) -> bool:
+        return isinstance(expr, (Identifier, FieldAccess, IndexExpr))
 
     # ------------------------ expression parsing ------------------------- #
     def _parse_expression(self) -> Expr:

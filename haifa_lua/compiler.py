@@ -209,27 +209,100 @@ class LuaCompiler:
         self.is_top_level = prev_top
 
     def _compile_assignment(self, stmt: Assignment):
-        value_reg = self._compile_expr(stmt.value)
-        binding = self._lookup_binding(stmt.target.name)
+        target_count = len(stmt.targets)
+        value_regs = self._collect_assignment_values(stmt.values, target_count, stmt)
+
         if stmt.is_local:
-            captured = stmt.target.name in self.function_info.captured_locals
-            if captured:
-                cell_reg = self._alloc_cell_reg(stmt.target.name)
-                self.scope_stack[-1][stmt.target.name] = VarBinding(cell_reg, True)
-                self._emit(Opcode.MAKE_CELL, [cell_reg, value_reg], node=stmt)
-            else:
-                reg = self._alloc_local_reg(stmt.target.name)
-                self.scope_stack[-1][stmt.target.name] = VarBinding(reg, False)
-                self._emit(Opcode.MOV, [reg, value_reg], node=stmt)
+            for idx, target in enumerate(stmt.targets):
+                if not isinstance(target, Identifier):
+                    raise CompileError("local declarations require identifier targets")
+                name = target.name
+                value_reg = value_regs[idx] if idx < len(value_regs) else self._emit_literal(None, stmt)
+                captured = name in self.function_info.captured_locals
+                if captured:
+                    cell_reg = self._alloc_cell_reg(name)
+                    self.scope_stack[-1][name] = VarBinding(cell_reg, True)
+                    self._emit(Opcode.MAKE_CELL, [cell_reg, value_reg], node=stmt)
+                else:
+                    reg = self._alloc_local_reg(name)
+                    self.scope_stack[-1][name] = VarBinding(reg, False)
+                    self._emit(Opcode.MOV, [reg, value_reg], node=stmt)
             return
 
-        if binding:
-            if binding.is_cell:
-                self._emit(Opcode.CELL_SET, [binding.storage, value_reg], node=stmt)
+        for target, value_reg in zip(stmt.targets, value_regs):
+            self._store_assignment_target(target, value_reg, stmt)
+
+    def _collect_assignment_values(self, values: List[Expr], target_count: int, node: Assignment) -> List[str]:
+        if target_count == 0:
+            return []
+
+        regs: List[str] = []
+        if not values:
+            for _ in range(target_count):
+                regs.append(self._emit_literal(None, node))
+            return regs
+
+        total = len(values)
+        for idx, expr in enumerate(values):
+            is_last = idx == total - 1
+            if is_last:
+                needed = target_count - len(regs)
+                regs.extend(self._eval_last_assignment_expr(expr, needed))
             else:
-                self._emit(Opcode.MOV, [binding.storage, value_reg], node=stmt)
-        else:
-            self._emit(Opcode.MOV, [f"G_{stmt.target.name}", value_reg], node=stmt)
+                result = self._eval_assignment_expr(expr)
+                if len(regs) < target_count:
+                    regs.append(result)
+
+        while len(regs) < target_count:
+            regs.append(self._emit_literal(None, node))
+
+        if len(regs) > target_count:
+            return regs[:target_count]
+        return regs
+
+    def _eval_assignment_expr(self, expr: Expr) -> str:
+        if isinstance(expr, CallExpr):
+            return self._compile_call(expr)
+        if isinstance(expr, VarargExpr):
+            return self._compile_vararg_expr(multi=False, node=expr)
+        return self._compile_expr(expr)
+
+    def _eval_last_assignment_expr(self, expr: Expr, needed: int) -> List[str]:
+        if needed <= 0:
+            self._eval_assignment_expr(expr)
+            return []
+        if isinstance(expr, CallExpr):
+            if needed == 1:
+                return [self._compile_call(expr)]
+            list_reg = self._compile_call(expr, want_list=True)
+            return self._unpack_list(list_reg, needed, expr)
+        if isinstance(expr, VarargExpr):
+            if needed == 1:
+                return [self._compile_vararg_expr(multi=False, node=expr)]
+            list_reg = self._compile_vararg_expr(multi=True, node=expr)
+            return self._unpack_list(list_reg, needed, expr)
+        return [self._compile_expr(expr)]
+
+    def _unpack_list(self, list_reg: str, count: int, node: Expr) -> List[str]:
+        regs: List[str] = []
+        for index in range(count):
+            dst = self._new_temp()
+            self._emit(Opcode.LIST_GET, [dst, list_reg, index], node=node)
+            regs.append(dst)
+        return regs
+
+    def _store_assignment_target(self, target: Expr, value_reg: str, node: Assignment):
+        if isinstance(target, Identifier):
+            binding = self._lookup_binding(target.name)
+            if binding:
+                if binding.is_cell:
+                    self._emit(Opcode.CELL_SET, [binding.storage, value_reg], node=node)
+                else:
+                    self._emit(Opcode.MOV, [binding.storage, value_reg], node=node)
+            else:
+                self._emit(Opcode.MOV, [f"G_{target.name}", value_reg], node=node)
+            return
+        raise CompileError("Assignment target type is not supported yet")
 
     def _compile_if(self, stmt: IfStmt):
         cond_reg = self._compile_expr(stmt.condition)
