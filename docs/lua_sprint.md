@@ -81,7 +81,7 @@
 - [ ] 测试：添加典型循环与条件组合场景，验证 `break`、`until`、`for` 的边界行为。
 
 ### Milestone 7：标准库与错误处理增强
-- [ ] 内置函数：增加 `type`、`next`、`pairs`/`ipairs`、`tonumber`、`tostring`、`error`、`assert` 等核心能力。
+- [x] 内置函数：增加 `type`、`next`、`pairs`/`ipairs`、`tonumber`、`tostring`、`error`、`assert` 等核心能力。
 - [ ] 字符串/表扩展：实现 `string.sub/upper/lower`、`table.concat/sort` 等高频 API。
 - [ ] 错误与保护调用：支持 `pcall`/`xpcall`、改进异常对象，补充错误传播测试。
 - [ ] 文档：更新 `docs/lua_guide.md` 与 CLI 帮助，列出标准库覆盖范围与示例。
