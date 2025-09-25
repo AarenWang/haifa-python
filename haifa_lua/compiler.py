@@ -554,7 +554,7 @@ class LuaCompiler:
         if isinstance(expr, StringLiteral):
             return self._emit_literal(expr.value, expr)
         if isinstance(expr, BooleanLiteral):
-            return self._emit_literal(int(expr.value), expr)
+            return self._emit_literal(expr.value, expr)
         if isinstance(expr, NilLiteral):
             return self._emit_literal(None, expr)
         if isinstance(expr, Identifier):
@@ -732,7 +732,9 @@ class LuaCompiler:
 
     def _emit_literal(self, value, node: Expr, hint: Optional[str] = None) -> str:
         dst = hint or self._new_temp()
-        if isinstance(value, int):
+        if isinstance(value, bool):
+            self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
+        elif isinstance(value, int):
             self._emit(Opcode.LOAD_IMM, [dst, value], node=node)
         else:
             self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
