@@ -213,13 +213,38 @@ class LuaParser:
                 values.append(self._parse_expression())
         return ReturnStmt(tok.line, tok.column, values)
 
-    def _parse_function(self) -> FunctionStmt:
+    def _parse_function(self):
         tok = self._expect("function")
-        name_tok = self._expect("IDENT")
+        target, is_method = self._parse_function_name()
         params, vararg = self._parse_param_list()
+        if is_method:
+            params = ["self", *params]
         body = self._parse_block(["end"])
         self._expect("end")
-        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body, vararg)
+        if isinstance(target, Identifier):
+            return FunctionStmt(tok.line, tok.column, target, params, body, vararg)
+        func_expr = FunctionExpr(tok.line, tok.column, params, vararg, body)
+        return Assignment(tok.line, tok.column, [target], [func_expr], False)
+
+    def _parse_function_name(self) -> Tuple[Expr, bool]:
+        name_tok = self._expect("IDENT")
+        expr: Expr = self._make_identifier_expr(name_tok)
+        is_method = False
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == ".":
+                self._advance()
+                part_tok = self._expect("IDENT")
+                expr = FieldAccess(part_tok.line, part_tok.column, expr, part_tok.value)
+                continue
+            if token.kind == ":":
+                self._advance()
+                method_tok = self._expect("IDENT")
+                expr = FieldAccess(method_tok.line, method_tok.column, expr, method_tok.value)
+                is_method = True
+                break
+            break
+        return expr, is_method
 
     def _parse_param_list(self) -> Tuple[List[str], bool]:
         params: List[str] = []

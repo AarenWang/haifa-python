@@ -88,6 +88,53 @@ def _is_lua_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _lua_setmetatable(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
+    _ensure_args(args, 2, 2)
+    table = _ensure_table(args[0])
+    metatable_value = args[1]
+    if metatable_value is None:
+        table.set_metatable(None)
+        return table
+    metatable = _ensure_table(metatable_value)
+    table.set_metatable(metatable)
+    return table
+
+
+def _lua_getmetatable(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    table = _ensure_table(args[0])
+    return table.get_metatable()
+
+
+def _lua_rawget(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 2, 2)
+    table = _ensure_table(args[0])
+    return table.raw_get(args[1])
+
+
+def _lua_rawset(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
+    _ensure_args(args, 3, 3)
+    table = _ensure_table(args[0])
+    table.raw_set(args[1], args[2])
+    return table
+
+
+def _lua_rawequal(args: Sequence[Any], vm: Any) -> bool:  # noqa: ANN401
+    _ensure_args(args, 2, 2)
+    left, right = args
+    if left is right:
+        return True
+    if left is None or right is None:
+        return False
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if _is_lua_number(left) and _is_lua_number(right):
+        return float(left) == float(right)
+    if isinstance(left, LuaTable) and isinstance(right, LuaTable):
+        return left is right
+    return left == right
+
+
 def _lua_type(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401 - VM is dynamic
     _ensure_args(args, 1, 1)
     value = args[0]
@@ -462,6 +509,11 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     env.register("assert", assert_builtin)
     env.register("pcall", pcall_builtin)
     env.register("xpcall", xpcall_builtin)
+    env.register("setmetatable", BuiltinFunction("setmetatable", _lua_setmetatable))
+    env.register("getmetatable", BuiltinFunction("getmetatable", _lua_getmetatable))
+    env.register("rawget", BuiltinFunction("rawget", _lua_rawget))
+    env.register("rawset", BuiltinFunction("rawset", _lua_rawset))
+    env.register("rawequal", BuiltinFunction("rawequal", _lua_rawequal))
 
     math_members = {
         "abs": BuiltinFunction("math.abs", _math_unary(lambda x: abs(x))),
