@@ -6,8 +6,8 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from .jq_runtime import run_filter
-from .jq_cli import main
+from ..jq_runtime import run_filter
+from ..jq_cli import main
 
 
 class TestJQVariablesAndCLI(unittest.TestCase):

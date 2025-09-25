@@ -1,6 +1,6 @@
 import unittest
 
-from .jq_runtime import run_filter
+from ..jq_runtime import run_filter
 
 
 class TestJQSortAgg(unittest.TestCase):

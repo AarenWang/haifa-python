@@ -1,8 +1,8 @@
 import unittest
 
-from .jq_ast import Field, Identity, IndexAll, Literal, ObjectLiteral, Pipe, flatten_pipe
-from .jq_parser import JQSyntaxError, parse_jq_program
-from .jq_ast import Index, Slice
+from ..jq_ast import Field, Identity, IndexAll, Literal, ObjectLiteral, Pipe, flatten_pipe
+from ..jq_parser import JQSyntaxError, parse_jq_program
+from ..jq_ast import Index, Slice
 
 
 class TestJQParser(unittest.TestCase):

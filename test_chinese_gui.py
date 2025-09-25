@@ -39,16 +39,14 @@ def test_chinese_display():
         
         pygame.quit()
         print("中文字体测试完成！")
-        return True
         
     except ImportError as e:
         print(f"pygame 未安装: {e}")
         print("请运行: pip install \".[gui]\"")
-        return False
+        raise
     except Exception as e:
         print(f"测试失败: {e}")
-        return False
+        raise
 
 if __name__ == "__main__":
-    success = test_chinese_display()
-    sys.exit(0 if success else 1)
+    test_chinese_display()
