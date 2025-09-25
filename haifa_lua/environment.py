@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
+from .table import LuaTable
+
 
 @dataclass
 class LuaMultiReturn:
@@ -32,15 +34,21 @@ class LuaEnvironment:
             self.merge(initial)
 
     def register(self, name: str, value: Any) -> None:
-        if isinstance(value, BuiltinFunction):
-            self._globals[name] = value
-        else:
-            self._globals[name] = value
+        self._globals[name] = value
 
     def register_library(self, namespace: str, members: Mapping[str, Any]) -> None:
-        prefix = f"{namespace}." if namespace else ""
+        if not namespace:
+            for key, value in members.items():
+                self.register(key, value)
+            return
+        existing = self._globals.get(namespace)
+        if isinstance(existing, LuaTable):
+            table = existing
+        else:
+            table = LuaTable()
+            self._globals[namespace] = table
         for key, value in members.items():
-            self.register(f"{prefix}{key}", value)
+            table.raw_set(key, value)
 
     def merge(self, other: Mapping[str, Any]) -> None:
         for key, value in other.items():
