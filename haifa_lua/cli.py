@@ -82,11 +82,17 @@ def _execute_with_debug(source: str, source_name: str, trace_filter: str, args: 
     vm = BytecodeVM(instructions)
     vm.lua_env = env
     vm.registers.update(env.to_vm_registers())
+    module_system = getattr(env, "module_system", None)
+    if module_system is not None and source_name and not source_name.startswith("<"):
+        module_system.set_base_path(pathlib.Path(source_name))
     debug = trace_filter in {"all", "instructions"}
+    env.bind_vm(vm)
     try:
         vm.run(debug=debug)
     except VMRuntimeError as exc:
         raise as_lua_error(exc) from exc
+    finally:
+        env.unbind_vm()
     env.sync_from_vm(vm.registers)
     events = vm.drain_events()
     if trace_filter in {"all", "coroutine"}:
