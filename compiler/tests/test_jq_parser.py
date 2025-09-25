@@ -1,6 +1,17 @@
 import unittest
 
-from ..jq_ast import Field, Identity, IndexAll, Literal, ObjectLiteral, Pipe, flatten_pipe
+from ..jq_ast import (
+    Field,
+    Identity,
+    IfElse,
+    IndexAll,
+    Literal,
+    ObjectLiteral,
+    Pipe,
+    Sequence,
+    TryCatch,
+    flatten_pipe,
+)
 from ..jq_parser import JQSyntaxError, parse_jq_program
 from ..jq_ast import Index, Slice
 
@@ -84,6 +95,29 @@ class TestJQParser(unittest.TestCase):
     def test_slice_open_ended(self):
         self.assertIsInstance(parse_jq_program(".items[:2]"), Slice)
         self.assertIsInstance(parse_jq_program(".items[1:]"), Slice)
+
+    def test_comma_sequence(self):
+        node = parse_jq_program(".a, .b | .c")
+        self.assertIsInstance(node, Sequence)
+        self.assertEqual(len(node.expressions), 2)
+        self.assertIsInstance(node.expressions[0], Field)
+        self.assertIsInstance(node.expressions[1], Pipe)
+
+    def test_if_else_structure(self):
+        node = parse_jq_program("if .flag then .value else .alt end")
+        self.assertIsInstance(node, IfElse)
+        self.assertIsInstance(node.then_branch, Field)
+        self.assertIsInstance(node.else_branch, Field)
+
+    def test_try_catch_structure(self):
+        node = parse_jq_program("try (.a / .b) catch 'fail'")
+        self.assertIsInstance(node, TryCatch)
+        self.assertIsNotNone(node.catch_expr)
+
+    def test_def_inlines_body(self):
+        node = parse_jq_program("def greet: .name; greet")
+        self.assertIsInstance(node, Field)
+        self.assertEqual(node.name, "name")
 
 
 if __name__ == "__main__":

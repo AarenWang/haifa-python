@@ -42,4 +42,4 @@ pyjq = "compiler.jq_cli:main"
 pylua = "haifa_lua.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["compiler*", "haifa_lua*"]
+include = ["compiler*", "haifa_lua*", "haifa_jq*"]
