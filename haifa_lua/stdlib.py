@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
+import re
+import time
+from functools import lru_cache
 from typing import Any, Sequence
 
 from compiler.bytecode_vm import LuaYield
@@ -49,6 +53,212 @@ def _ensure_string(value: Any) -> str:
     if isinstance(value, str):
         return value
     raise RuntimeError("expected string")
+
+
+def _ensure_int(value: Any) -> int:
+    number = _ensure_number(value)
+    return int(number)
+
+
+_LUA_PATTERN_CLASS_MAP = {
+    "a": "[A-Za-z]",
+    "A": "[^A-Za-z]",
+    "d": r"\d",
+    "D": r"\D",
+    "s": r"\s",
+    "S": r"\S",
+    "w": r"[A-Za-z0-9_]",
+    "W": r"[^A-Za-z0-9_]",
+    "l": "[a-z]",
+    "L": "[^a-z]",
+    "u": "[A-Z]",
+    "U": "[^A-Z]",
+    "p": r"[!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]",
+    "P": r"[^!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]",
+    "c": r"[\x00-\x1F\x7F]",
+    "C": r"[^\x00-\x1F\x7F]",
+    "g": r"[^\s]",
+    "G": r"\s",
+    "x": r"[0-9A-Fa-f]",
+    "X": r"[^0-9A-Fa-f]",
+    "z": r"\x00",
+    "Z": r"[^\x00]",
+    "%": "%",
+}
+
+_LUA_CLASS_SET_MAP = {
+    "a": "A-Za-z",
+    "d": "0-9",
+    "l": "a-z",
+    "u": "A-Z",
+    "w": "A-Za-z0-9_",
+    "x": "0-9A-Fa-f",
+    "s": r"\s",
+    "z": r"\x00",
+}
+
+
+def _translate_lua_pattern(pattern: str) -> str:
+    result: list[str] = []
+    length = len(pattern)
+    i = 0
+    while i < length:
+        char = pattern[i]
+        if char == "%":
+            i += 1
+            if i >= length:
+                result.append("%")
+                break
+            code = pattern[i]
+            if code.isdigit():
+                result.append(f"\\{code}")
+            elif code == "b":
+                raise RuntimeError("pattern %b is not supported")
+            elif code == "f":
+                raise RuntimeError("pattern %f is not supported")
+            else:
+                mapped = _LUA_PATTERN_CLASS_MAP.get(code)
+                if mapped is not None:
+                    result.append(mapped)
+                else:
+                    result.append(re.escape(code))
+        elif char == "[":
+            j = i + 1
+            negate = False
+            if j < length and pattern[j] == "^":
+                negate = True
+                j += 1
+            parts: list[str] = []
+            while j < length and pattern[j] != "]":
+                current = pattern[j]
+                if current == "%":
+                    j += 1
+                    if j >= length:
+                        break
+                    code = pattern[j]
+                    mapped = _LUA_CLASS_SET_MAP.get(code)
+                    if mapped is None:
+                        mapped = _LUA_PATTERN_CLASS_MAP.get(code)
+                        if mapped is None:
+                            mapped = re.escape(code)
+                        elif mapped.startswith("[") and mapped.endswith("]"):
+                            mapped = mapped[1:-1]
+                        else:
+                            if mapped.startswith("[^"):
+                                raise RuntimeError("unsupported character class complement in set")
+                    parts.append(mapped)
+                else:
+                    parts.append(re.escape(current))
+                j += 1
+            if j >= length:
+                result.append(re.escape("["))
+            else:
+                content = "".join(parts)
+                prefix = "^" if negate else ""
+                result.append("[" + prefix + content + "]")
+                i = j
+        elif char in "().^$":
+            result.append(char)
+        elif char == "-":
+            result.append("*?")
+        elif char in "*+?":
+            result.append(char)
+        elif char == ".":
+            result.append(".")
+        else:
+            result.append(re.escape(char))
+        i += 1
+    return "".join(result)
+
+
+@lru_cache(maxsize=128)
+def _compile_lua_pattern(pattern: str) -> re.Pattern[str]:
+    translated = _translate_lua_pattern(pattern)
+    return re.compile(translated)
+
+
+def _normalize_start(length: int, init: Any | None) -> int:
+    if init is None:
+        return 0
+    index = int(_ensure_number(init))
+    if index > 0:
+        if index > length + 1:
+            return length
+        return index - 1
+    if index == 0:
+        return 0
+    computed = length + index + 1
+    if computed < 1:
+        return 0
+    if computed > length + 1:
+        computed = length + 1
+    return computed - 1
+
+
+def _collect_match_groups(match: re.Match[str]) -> list[Any]:
+    groups = list(match.groups())
+    if groups:
+        return [group if group is not None else None for group in groups]
+    return [match.group(0)]
+
+
+def _expand_replacement(template: str, match: re.Match[str]) -> str:
+    pieces: list[str] = []
+    i = 0
+    length = len(template)
+    while i < length:
+        char = template[i]
+        if char != "%":
+            pieces.append(char)
+            i += 1
+            continue
+        i += 1
+        if i >= length:
+            pieces.append("%")
+            break
+        code = template[i]
+        if code == "%":
+            pieces.append("%")
+        elif code.isdigit():
+            group_index = int(code)
+            try:
+                value = match.group(group_index)
+            except IndexError:
+                value = ""
+            pieces.append(value or "")
+        else:
+            pieces.append(code)
+        i += 1
+    return "".join(pieces)
+
+
+def _match_replacement_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return _lua_tostring(value)
+
+
+def _resolve_gsub_replacement(match: re.Match[str], repl: Any, vm: Any) -> str:  # noqa: ANN401
+    if isinstance(repl, str):
+        return _expand_replacement(repl, match)
+    if isinstance(repl, LuaTable):
+        groups = match.groups()
+        key = groups[0] if groups else match.group(0)
+        value = repl.raw_get(key)
+        if value is None:
+            return match.group(0)
+        return _match_replacement_value(value)
+    values = vm.call_callable(repl, _collect_match_groups(match))
+    if not values:
+        return match.group(0)
+    replacement = values[0]
+    if replacement is None:
+        return match.group(0)
+    return _match_replacement_value(replacement)
+
+
+_RANDOM_GENERATOR = random.Random()
+IO_STREAM_MARKER = "__lua_io_stream__"
 
 
 def _wrap_frames(frames) -> LuaTable:
@@ -184,6 +394,72 @@ def _math_max(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
     _ensure_args(args, 1)
     numbers = [_ensure_number(arg) for arg in args]
     return float(max(numbers))
+
+
+def _math_deg(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    return math.degrees(_ensure_number(args[0]))
+
+
+def _math_rad(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    return math.radians(_ensure_number(args[0]))
+
+
+def _math_log(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 2)
+    value = _ensure_number(args[0])
+    if len(args) == 2:
+        base = _ensure_number(args[1])
+        return math.log(value, base)
+    return math.log(value)
+
+
+def _math_exp(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    return math.exp(_ensure_number(args[0]))
+
+
+def _math_modf(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    value = _ensure_number(args[0])
+    integer = math.trunc(value)
+    fractional = value - integer
+    return LuaMultiReturn([float(integer), fractional])
+
+
+def _math_random(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    count = len(args)
+    if count == 0:
+        return _RANDOM_GENERATOR.random()
+    if count == 1:
+        upper = int(_ensure_number(args[0]))
+        if upper < 1:
+            raise RuntimeError("interval is empty")
+        return float(_RANDOM_GENERATOR.randint(1, upper))
+    if count == 2:
+        lower = int(_ensure_number(args[0]))
+        upper = int(_ensure_number(args[1]))
+        if lower > upper:
+            raise RuntimeError("interval is empty")
+        return float(_RANDOM_GENERATOR.randint(lower, upper))
+    raise RuntimeError("wrong number of arguments")
+
+
+def _math_randomseed(args: Sequence[Any], vm: Any) -> None:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    seed = int(_ensure_number(args[0]))
+    _RANDOM_GENERATOR.seed(seed)
+    return None
+
+
+def _math_atan(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 2)
+    y = _ensure_number(args[0])
+    if len(args) == 2:
+        x = _ensure_number(args[1])
+        return math.atan2(y, x)
+    return math.atan(y)
 
 
 def _lua_next(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
@@ -358,6 +634,194 @@ def _string_lower(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     return _ensure_string(args[0]).lower()
 
 
+def _string_find(args: Sequence[Any], vm: Any) -> LuaMultiReturn | None:  # noqa: ANN401
+    _ensure_args(args, 2, 4)
+    text = _ensure_string(args[0])
+    pattern = _ensure_string(args[1])
+    init = args[2] if len(args) >= 3 else None
+    plain = bool(args[3]) if len(args) >= 4 and args[3] is not None else False
+    start_index = _normalize_start(len(text), init)
+    if start_index > len(text):
+        return None
+    segment = text[start_index:]
+    if plain:
+        position = segment.find(pattern)
+        if position == -1:
+            return None
+        start = start_index + position + 1
+        end = start + len(pattern) - 1
+        return LuaMultiReturn([start, end])
+    try:
+        regex = _compile_lua_pattern(pattern)
+    except RuntimeError as exc:  # pragma: no cover - defensive
+        raise RuntimeError(str(exc)) from exc
+    match = regex.search(segment)
+    if not match:
+        return None
+    start = start_index + match.start() + 1
+    end = start_index + match.end()
+    captures = [group if group is not None else None for group in match.groups()]
+    return LuaMultiReturn([start, end, *captures])
+
+
+def _string_match(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 2, 3)
+    text = _ensure_string(args[0])
+    pattern = _ensure_string(args[1])
+    init = args[2] if len(args) >= 3 else None
+    start_index = _normalize_start(len(text), init)
+    if start_index > len(text):
+        return None
+    segment = text[start_index:]
+    try:
+        regex = _compile_lua_pattern(pattern)
+    except RuntimeError as exc:  # pragma: no cover - defensive
+        raise RuntimeError(str(exc)) from exc
+    match = regex.search(segment)
+    if not match:
+        return None
+    captures = [group if group is not None else None for group in match.groups()]
+    if captures:
+        if len(captures) == 1:
+            return captures[0]
+        return LuaMultiReturn(captures)
+    return match.group(0)
+
+
+def _string_gsub(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 3, 4)
+    text = _ensure_string(args[0])
+    pattern = _ensure_string(args[1])
+    replacement = args[2]
+    limit = None
+    if len(args) >= 4 and args[3] is not None:
+        limit_value = int(_ensure_number(args[3]))
+        if limit_value <= 0:
+            return LuaMultiReturn([text, 0])
+        limit = limit_value
+    try:
+        regex = _compile_lua_pattern(pattern)
+    except RuntimeError as exc:  # pragma: no cover - defensive
+        raise RuntimeError(str(exc)) from exc
+    result_parts: list[str] = []
+    last_end = 0
+    replacements = 0
+    position = 0
+    text_length = len(text)
+    while True:
+        match = regex.search(text, position)
+        if not match:
+            break
+        if limit is not None and replacements >= limit:
+            break
+        start, end = match.span()
+        if start == end:
+            if start >= text_length:
+                break
+            result_parts.append(text[last_end:start + 1])
+            position = start + 1
+            last_end = position
+            continue
+        result_parts.append(text[last_end:start])
+        replacement_text = _resolve_gsub_replacement(match, replacement, vm)
+        result_parts.append(replacement_text)
+        replacements += 1
+        position = end
+        last_end = end
+    result_parts.append(text[last_end:])
+    return LuaMultiReturn(["".join(result_parts), replacements])
+
+
+def _string_format(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401, unused vm
+    _ensure_args(args, 1)
+    template = _ensure_string(args[0])
+    values = iter(args[1:])
+    output: list[str] = []
+    length = len(template)
+    index = 0
+    while index < length:
+        char = template[index]
+        if char != "%":
+            output.append(char)
+            index += 1
+            continue
+        index += 1
+        if index < length and template[index] == "%":
+            output.append("%")
+            index += 1
+            continue
+        flags = ""
+        while index < length and template[index] in "-+ #0":
+            flags += template[index]
+            index += 1
+        width = ""
+        while index < length and template[index].isdigit():
+            width += template[index]
+            index += 1
+        precision = ""
+        if index < length and template[index] == ".":
+            index += 1
+            while index < length and template[index].isdigit():
+                precision += template[index]
+                index += 1
+        if index < length and template[index] in "hlL":
+            index += 1
+        if index >= length:
+            raise RuntimeError("incomplete format specifier")
+        specifier = template[index]
+        index += 1
+        try:
+            value = next(values)
+        except StopIteration as exc:  # pragma: no cover - defensive
+            raise RuntimeError("not enough arguments for string.format") from exc
+        if specifier in "diu":
+            py_spec = "%" + flags + width
+            if precision:
+                py_spec += "." + precision
+            py_spec += "d"
+            formatted = py_spec % _ensure_int(value)
+        elif specifier in "oOxX":
+            py_spec = "%" + flags + width
+            if precision:
+                py_spec += "." + precision
+            py_spec += specifier
+            formatted = py_spec % _ensure_int(value)
+        elif specifier in "eEfFgG":
+            py_spec = "%" + flags + width
+            if precision:
+                py_spec += "." + precision
+            py_spec += specifier
+            formatted = py_spec % float(_ensure_number(value))
+        elif specifier == "c":
+            char_code = _ensure_int(value)
+            text = chr(char_code)
+            if width or flags:
+                fmt = "%" + flags + width + "s"
+                formatted = fmt % text
+            else:
+                formatted = text
+        elif specifier == "s":
+            py_spec = "%" + flags + width
+            if precision:
+                py_spec += "." + precision
+            py_spec += "s"
+            formatted = py_spec % _lua_tostring(value)
+        elif specifier == "q":
+            escaped = _ensure_string(value)
+            escaped = (
+                escaped.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            )
+            formatted = f'"{escaped}"'
+        else:  # pragma: no cover - defensive
+            raise RuntimeError(f"unsupported format specifier %{specifier}")
+        output.append(formatted)
+    return "".join(output)
+
+
 def _table_concat(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     _ensure_args(args, 1, 4)
     table = _ensure_table(args[0])
@@ -464,6 +928,51 @@ def _table_remove(args: Sequence[Any], vm: Any) -> Any:  # noqa: ANN401
 
 
 
+def _table_pack(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
+    table = LuaTable()
+    for index, value in enumerate(args, start=1):
+        table.raw_set(index, value)
+    table.raw_set("n", len(args))
+    return table
+
+
+def _table_unpack(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 1, 3)
+    table = _ensure_table(args[0])
+    start = int(_ensure_number(args[1])) if len(args) >= 2 and args[1] is not None else 1
+    if len(args) >= 3 and args[2] is not None:
+        stop = int(_ensure_number(args[2]))
+    else:
+        stop = table.lua_len()
+    if stop < start:
+        return LuaMultiReturn([])
+    values = [table.raw_get(index) for index in range(start, stop + 1)]
+    return LuaMultiReturn(values)
+
+
+def _table_move(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
+    _ensure_args(args, 4, 5)
+    source = _ensure_table(args[0])
+    start = int(_ensure_number(args[1]))
+    finish = int(_ensure_number(args[2]))
+    dest_index = int(_ensure_number(args[3]))
+    destination = source
+    if len(args) == 5 and args[4] is not None:
+        destination = _ensure_table(args[4])
+    count = finish - start + 1
+    if count <= 0:
+        return destination
+    if destination is source and dest_index > start and dest_index <= start + count - 1:
+        for offset in range(count - 1, -1, -1):
+            value = source.raw_get(start + offset)
+            destination.raw_set(dest_index + offset, value)
+    else:
+        for offset in range(count):
+            value = source.raw_get(start + offset)
+            destination.raw_set(dest_index + offset, value)
+    return destination
+
+
 def _coroutine_create(args: Sequence[Any], vm: Any) -> LuaCoroutine:  # noqa: ANN401
     _ensure_args(args, 1, 1)
     try:
@@ -485,6 +994,132 @@ def _coroutine_resume(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: 
 def _coroutine_yield(args: Sequence[Any], vm: Any) -> LuaYield:  # noqa: ANN401
     return LuaYield(args)
 
+
+
+def _os_clock(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 0, 0)
+    return time.process_time()
+
+
+def _os_time(args: Sequence[Any], vm: Any) -> int:  # noqa: ANN401
+    _ensure_args(args, 0, 1)
+    if not args:
+        return int(time.time())
+    table = _ensure_table(args[0])
+    year = _ensure_int(table.raw_get("year"))
+    month = _ensure_int(table.raw_get("month"))
+    day = _ensure_int(table.raw_get("day"))
+    hour_value = table.raw_get("hour")
+    minute_value = table.raw_get("min")
+    second_value = table.raw_get("sec")
+    isdst_value = table.raw_get("isdst")
+    hour = _ensure_int(hour_value) if hour_value is not None else 12
+    minute = _ensure_int(minute_value) if minute_value is not None else 0
+    second = _ensure_int(second_value) if second_value is not None else 0
+    isdst = -1
+    if isdst_value is not None:
+        isdst = 1 if _is_lua_truthy(isdst_value) else 0
+    tm_tuple = (year, month, day, hour, minute, second, 0, 0, isdst)
+    return int(time.mktime(tm_tuple))
+
+
+def _os_date(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 0, 2)
+    format_string = "%c"
+    timestamp = None
+    if args:
+        if args[0] is not None:
+            format_string = _ensure_string(args[0])
+    if len(args) >= 2 and args[1] is not None:
+        timestamp = float(_ensure_number(args[1]))
+    if timestamp is None:
+        timestamp = time.time()
+    use_utc = False
+    if format_string.startswith("!"):
+        use_utc = True
+        format_string = format_string[1:]
+    struct = time.gmtime(timestamp) if use_utc else time.localtime(timestamp)
+    if format_string == "*t":
+        table = LuaTable()
+        table.raw_set("year", struct.tm_year)
+        table.raw_set("month", struct.tm_mon)
+        table.raw_set("day", struct.tm_mday)
+        table.raw_set("hour", struct.tm_hour)
+        table.raw_set("min", struct.tm_min)
+        table.raw_set("sec", struct.tm_sec)
+        table.raw_set("wday", struct.tm_wday + 1)
+        table.raw_set("yday", struct.tm_yday)
+        table.raw_set("isdst", struct.tm_isdst > 0)
+        return table
+    if not format_string:
+        format_string = "%c"
+    try:
+        return time.strftime(format_string, struct)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _os_difftime(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
+    _ensure_args(args, 1, 2)
+    later = _ensure_number(args[0])
+    earlier = _ensure_number(args[1]) if len(args) == 2 else 0.0
+    return float(later - earlier)
+
+
+def _io_write_callable(default_stream: LuaTable):
+    def _io_write(args: Sequence[Any], vm: Any):  # noqa: ANN401
+        stream = default_stream
+        values = args
+        if values and isinstance(values[0], LuaTable) and values[0].raw_get(IO_STREAM_MARKER):
+            stream = values[0]
+            values = values[1:]
+        text = "".join(_lua_tostring(value) for value in values)
+        if text:
+            vm.output.append(text)
+        return stream
+
+
+    return _io_write
+
+
+def _io_flush(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    stream = args[0] if args else None
+    if isinstance(stream, LuaTable) and stream.raw_get(IO_STREAM_MARKER):
+        return stream
+    return True
+
+
+def _io_type(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    value = args[0]
+    if isinstance(value, LuaTable) and value.raw_get(IO_STREAM_MARKER):
+        return "file"
+    return None
+
+
+def _io_read_disabled(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    raise RuntimeError("io.read is not available in this environment")
+
+
+def _debug_traceback(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
+    arg_index = 0
+    if args and isinstance(args[0], LuaCoroutine):
+        raise RuntimeError("debug.traceback does not support thread arguments yet")
+    message = ""
+    level = 1
+    if arg_index < len(args) and args[arg_index] is not None:
+        message = _lua_tostring(args[arg_index])
+        arg_index += 1
+    if arg_index < len(args):
+        level = int(_ensure_number(args[arg_index]))
+    frames = vm.snapshot_state().call_stack
+    skip = max(level - 1, 0)
+    if skip:
+        frames = frames[skip:]
+    trace = format_traceback(frames)
+    if message:
+        return f"{message}\n{trace}"
+    return trace
 
 
 def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
@@ -516,6 +1151,38 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     env.register("rawset", BuiltinFunction("rawset", _lua_rawset))
     env.register("rawequal", BuiltinFunction("rawequal", _lua_rawequal))
 
+    os_members = {
+        "clock": BuiltinFunction("os.clock", _os_clock),
+        "time": BuiltinFunction("os.time", _os_time),
+        "date": BuiltinFunction("os.date", _os_date),
+        "difftime": BuiltinFunction("os.difftime", _os_difftime),
+    }
+
+    stdout_stream = LuaTable()
+    stdout_stream.raw_set(IO_STREAM_MARKER, True)
+    stderr_stream = LuaTable()
+    stderr_stream.raw_set(IO_STREAM_MARKER, True)
+    stdout_write_callable = _io_write_callable(stdout_stream)
+    stderr_write_callable = _io_write_callable(stderr_stream)
+    io_write_builtin = BuiltinFunction("io.write", stdout_write_callable)
+    stdout_stream.raw_set("write", BuiltinFunction("io.stdout.write", stdout_write_callable))
+    stdout_stream.raw_set("flush", BuiltinFunction("io.stdout.flush", _io_flush))
+    stderr_stream.raw_set("write", BuiltinFunction("io.stderr.write", stderr_write_callable))
+    stderr_stream.raw_set("flush", BuiltinFunction("io.stderr.flush", _io_flush))
+    io_members = {
+        "write": io_write_builtin,
+        "flush": BuiltinFunction("io.flush", _io_flush),
+        "type": BuiltinFunction("io.type", _io_type),
+        "read": BuiltinFunction("io.read", _io_read_disabled),
+        "stdout": stdout_stream,
+        "stderr": stderr_stream,
+    }
+
+    debug_members = {
+        "traceback": BuiltinFunction("debug.traceback", _debug_traceback),
+    }
+
+
     math_members = {
         "abs": BuiltinFunction("math.abs", _math_unary(lambda x: abs(x))),
         "sqrt": BuiltinFunction("math.sqrt", _math_unary(lambda x: math.sqrt(x))),
@@ -523,7 +1190,21 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "ceil": BuiltinFunction("math.ceil", _math_unary(lambda x: math.ceil(x))),
         "min": BuiltinFunction("math.min", _math_min),
         "max": BuiltinFunction("math.max", _math_max),
+        "sin": BuiltinFunction("math.sin", _math_unary(lambda x: math.sin(x))),
+        "cos": BuiltinFunction("math.cos", _math_unary(lambda x: math.cos(x))),
+        "tan": BuiltinFunction("math.tan", _math_unary(lambda x: math.tan(x))),
+        "asin": BuiltinFunction("math.asin", _math_unary(lambda x: math.asin(x))),
+        "acos": BuiltinFunction("math.acos", _math_unary(lambda x: math.acos(x))),
+        "atan": BuiltinFunction("math.atan", _math_atan),
+        "deg": BuiltinFunction("math.deg", _math_deg),
+        "rad": BuiltinFunction("math.rad", _math_rad),
+        "exp": BuiltinFunction("math.exp", _math_exp),
+        "log": BuiltinFunction("math.log", _math_log),
+        "modf": BuiltinFunction("math.modf", _math_modf),
+        "random": BuiltinFunction("math.random", _math_random),
+        "randomseed": BuiltinFunction("math.randomseed", _math_randomseed),
         "pi": math.pi,
+        "huge": float("inf"),
     }
     env.register_library("math", math_members)
 
@@ -532,6 +1213,9 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "remove": BuiltinFunction("table.remove", _table_remove),
         "concat": BuiltinFunction("table.concat", _table_concat),
         "sort": BuiltinFunction("table.sort", _table_sort),
+        "pack": BuiltinFunction("table.pack", _table_pack),
+        "unpack": BuiltinFunction("table.unpack", _table_unpack),
+        "move": BuiltinFunction("table.move", _table_move),
     }
     env.register_library("table", table_members)
 
@@ -540,8 +1224,15 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "sub": BuiltinFunction("string.sub", _string_sub),
         "upper": BuiltinFunction("string.upper", _string_upper),
         "lower": BuiltinFunction("string.lower", _string_lower),
+        "find": BuiltinFunction("string.find", _string_find),
+        "match": BuiltinFunction("string.match", _string_match),
+        "gsub": BuiltinFunction("string.gsub", _string_gsub),
+        "format": BuiltinFunction("string.format", _string_format),
     }
     env.register_library("string", string_members)
+    env.register_library("os", os_members)
+    env.register_library("io", io_members)
+    env.register_library("debug", debug_members)
 
     coroutine_members = {
         "create": BuiltinFunction("coroutine.create", _coroutine_create),
