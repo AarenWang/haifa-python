@@ -15,6 +15,8 @@ from .ast import (
     FunctionStmt,
     Identifier,
     IfStmt,
+    ForNumericStmt,
+    ForGenericStmt,
     IndexExpr,
     MethodCallExpr,
     RepeatStmt,
@@ -111,6 +113,19 @@ def _analyze_block(block: Block, scope: Scope, mapping: Dict[int, FunctionInfo])
                 _analyze_block(stmt.else_branch, scope, mapping)
         elif isinstance(stmt, WhileStmt):
             _analyze_expr(stmt.condition, scope, mapping)
+            _analyze_block(stmt.body, scope, mapping)
+        elif isinstance(stmt, ForNumericStmt):
+            scope.declare(stmt.var)
+            _analyze_expr(stmt.start, scope, mapping)
+            _analyze_expr(stmt.limit, scope, mapping)
+            if stmt.step is not None:
+                _analyze_expr(stmt.step, scope, mapping)
+            _analyze_block(stmt.body, scope, mapping)
+        elif isinstance(stmt, ForGenericStmt):
+            for expr in stmt.iter_exprs:
+                _analyze_expr(expr, scope, mapping)
+            for name in stmt.names:
+                scope.declare(name)
             _analyze_block(stmt.body, scope, mapping)
         elif isinstance(stmt, RepeatStmt):
             _analyze_block(stmt.body, scope, mapping)

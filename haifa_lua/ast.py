@@ -133,6 +133,20 @@ class BreakStmt(Stmt):
     pass
 
 @dataclass
+class ForNumericStmt(Stmt):
+    var: str
+    start: Expr
+    limit: Expr
+    step: Optional[Expr]
+    body: "Block"
+
+@dataclass
+class ForGenericStmt(Stmt):
+    names: List[str]
+    iter_exprs: List[Expr]
+    body: "Block"
+
+@dataclass
 class VarargExpr(Expr):
     pass
 
@@ -184,6 +198,8 @@ __all__ = [
     "RepeatStmt",
     "DoStmt",
     "BreakStmt",
+    "ForNumericStmt",
+    "ForGenericStmt",
     "ReturnStmt",
     "FunctionStmt",
     "ExprStmt",
