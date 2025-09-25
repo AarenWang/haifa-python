@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, List, Optional
 
 
 class LuaTable:
     """Hybrid table supporting Lua-style array and dictionary access."""
 
-    __slots__ = ("array", "map", "__lua_table__")
+    __slots__ = ("array", "map", "metatable", "__lua_table__")
 
     def __init__(self, array: Iterable[Any] | None = None, mapping: Dict[Any, Any] | None = None) -> None:
         self.array: List[Any] = list(array) if array is not None else []
         self.map: Dict[Any, Any] = dict(mapping) if mapping is not None else {}
+        self.metatable: Optional["LuaTable"] = None
         self.__lua_table__ = True
 
     # ---------------------------- array helpers ---------------------------- #
@@ -73,6 +76,13 @@ class LuaTable:
             self.map.pop(key, None)
         else:
             self.map[key] = value
+
+    # ---------------------------- metatable helpers --------------------------- #
+    def set_metatable(self, metatable: "LuaTable" | None) -> None:
+        self.metatable = metatable
+
+    def get_metatable(self) -> "LuaTable" | None:
+        return self.metatable
 
 
     # ---------------------------- iteration helpers --------------------------- #

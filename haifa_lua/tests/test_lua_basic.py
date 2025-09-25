@@ -7,8 +7,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from haifa_lua.compiler import CompileError
 from haifa_lua.debug import LuaRuntimeError
-from haifa_lua.runtime import run_source
+from haifa_lua.runtime import compile_source, run_source
 
 
 def test_arithmetic_and_assignment():
@@ -474,3 +475,57 @@ def test_runtime_error_reports_lua_style_location():
 
     message = str(excinfo.value)
     assert message.startswith("<string>:3:")
+
+
+def test_goto_skips_intervening_block():
+    src = """
+    local value = 1
+    goto skip
+    value = 42
+    ::skip::
+    value = value + 1
+    return value
+    """
+    assert run_source(src) == [2]
+
+
+def test_goto_into_nested_scope_is_rejected():
+    src = """
+    goto inner
+    do
+        ::inner::
+        return 1
+    end
+    """
+    with pytest.raises(CompileError):
+        compile_source(src)
+
+
+def test_exponent_and_floor_division():
+    src = "return 2 ^ 3 ^ 2, 7 // 2, -7 // 2"
+    assert run_source(src) == [512, 3, -4]
+
+
+def test_bitwise_operators_and_shifts():
+    src = "return (6 & 3), (6 | 3), (6 ~ 3), (3 << 3), (32 >> 2)"
+    assert run_source(src) == [2, 7, 5, 24, 8]
+
+
+def test_unary_bitwise_not():
+    src = "return (~0)"
+    assert run_source(src) == [-1]
+
+
+def test_short_circuit_behavior_preserves_operands():
+    src = """
+    local flag = 0
+    local function mark()
+        flag = flag + 1
+        return 123
+    end
+    local a = false and mark()
+    local b = true or mark()
+    return a, b, flag
+    """
+    result = run_source(src)
+    assert result == [False, True, 0]

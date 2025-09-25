@@ -3,7 +3,9 @@ from haifa_lua.ast import (
     DoStmt,
     ForGenericStmt,
     ForNumericStmt,
+    GotoStmt,
     IfStmt,
+    LabelStmt,
     RepeatStmt,
     ReturnStmt,
 )
@@ -98,3 +100,17 @@ def test_generic_for_parses_iterator_list():
     assert isinstance(stmt, ForGenericStmt)
     assert stmt.names == ["k", "v"]
     assert len(stmt.iter_exprs) == 1
+
+
+def test_goto_and_label_statements():
+    src = """
+    goto skip
+    ::skip::
+    """
+    chunk = LuaParser.parse(src)
+    assert len(chunk.body.statements) == 2
+    goto_stmt, label_stmt = chunk.body.statements
+    assert isinstance(goto_stmt, GotoStmt)
+    assert goto_stmt.label == "skip"
+    assert isinstance(label_stmt, LabelStmt)
+    assert label_stmt.name == "skip"
