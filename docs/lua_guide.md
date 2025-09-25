@@ -104,7 +104,8 @@ print(x, y, a, b)
 
 #### 3. 算术运算
 - 加法 (`+`)、减法 (`-`)、乘法 (`*`)、除法 (`/`)
-- 幂运算 (`^`)、取模 (`%`)
+- 幂运算 (`^`)、整除 (`//`)、取模 (`%`)
+- 位运算：按位与 (`&`)、按位或 (`|`)、按位异或 (`~`)、左移 (`<<`)、右移 (`>>`)、按位取反（`~x`）
 
 ```lua
 -- 练习：创建 examples/arithmetic.lua
@@ -115,8 +116,15 @@ print("a + b =", a + b)
 print("a - b =", a - b)
 print("a * b =", a * b)
 print("a / b =", a / b)
+print("a // b =", a // b)
 print("a % b =", a % b)
 print("a ^ b =", a ^ b)
+print("a & b =", a & b)
+print("a | b =", a | b)
+print("a ~ b =", a ~ b)
+print("a << 1 =", a << 1)
+print("b >> 1 =", b >> 1)
+print("~b =", ~b)
 ```
 
 #### 4. 比较运算
@@ -139,6 +147,8 @@ print("x >= y:", x >= y)
 #### 5. 逻辑运算
 - 逻辑与 (`and`)、逻辑或 (`or`)、逻辑非 (`not`)
 
+Lua 的 `and` / `or` 操作符保留原始操作数，并具备短路语义：只有在必要时才会计算右侧表达式。
+
 ```lua
 -- 练习：创建 examples/logical.lua
 local a = true
@@ -148,6 +158,8 @@ print("a and b:", a and b)
 print("a or b:", a or b)
 print("not a:", not a)
 print("not b:", not b)
+print("false and 42:", false and 42)
+print("true or 42:", true or 42)
 ```
 
 #### 6. 控制流语句
@@ -177,6 +189,17 @@ while i <= 5 do
     i = i + 1
 end
 ```
+
+**goto 与标签：**
+```lua
+-- 练习：观察跳转与作用域
+goto skip
+print("这行不会被执行")
+::skip::
+print("跳转后继续执行")
+```
+
+标签只能在当前或外层作用域中跳转，尝试跳入尚未生效的局部变量作用域会触发编译错误，行为与标准 Lua 5.3 一致。
 
 #### 7. 函数定义和调用
 ```lua

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
 
@@ -21,11 +21,13 @@ from .ast import (
     FieldAccess,
     FunctionExpr,
     FunctionStmt,
+    GotoStmt,
     Identifier,
     IfStmt,
     ForNumericStmt,
     ForGenericStmt,
     IndexExpr,
+    LabelStmt,
     MethodCallExpr,
     NilLiteral,
     NumberLiteral,
@@ -79,6 +81,8 @@ class LuaCompiler:
         self.function_name = function_name
         self._last_debug: InstructionDebug | None = None
         self.loop_stack: List[str] = []
+        self.label_definitions: Dict[str, Tuple[str, int, object]] = {}
+        self.pending_gotos: List[Tuple[str, int, object]] = []
 
     # ------------------------------------------------------------------
     @classmethod
@@ -102,6 +106,7 @@ class LuaCompiler:
         self.is_top_level = True
         self._bind_upvalues()
         self._compile_block(chunk.body, top_level=True)
+        self._finalize_labels()
         self._emit(Opcode.JMP, [self.exit_label], node=chunk.body.statements[-1] if chunk.body.statements else None)
         self.instructions.extend(self.function_blocks)
         self._emit(Opcode.LABEL, [self.exit_label])
@@ -217,6 +222,10 @@ class LuaCompiler:
                 self._compile_block(stmt.body)
             elif isinstance(stmt, BreakStmt):
                 self._compile_break(stmt)
+            elif isinstance(stmt, GotoStmt):
+                self._compile_goto(stmt)
+            elif isinstance(stmt, LabelStmt):
+                self._compile_label(stmt)
             elif isinstance(stmt, ReturnStmt):
                 self._compile_return(stmt)
             elif isinstance(stmt, FunctionStmt):
@@ -538,6 +547,20 @@ class LuaCompiler:
         target = self.loop_stack[-1]
         self._emit(Opcode.JMP, [target], node=stmt)
 
+    def _compile_goto(self, stmt: GotoStmt):
+        symbol = self._label_symbol(stmt.label)
+        depth = len(self.scope_stack)
+        self.pending_gotos.append((stmt.label, depth, stmt))
+        self._emit(Opcode.JMP, [symbol], node=stmt)
+
+    def _compile_label(self, stmt: LabelStmt):
+        if stmt.name in self.label_definitions:
+            raise CompileError(f"duplicate label '{stmt.name}'")
+        symbol = self._label_symbol(stmt.name)
+        depth = len(self.scope_stack)
+        self.label_definitions[stmt.name] = (symbol, depth, stmt)
+        self._emit(Opcode.LABEL, [symbol], node=stmt)
+
     def _compile_return(self, stmt: ReturnStmt):
         if not stmt.values:
             self._emit(Opcode.RETURN, ["0"], node=stmt)
@@ -576,6 +599,7 @@ class LuaCompiler:
         compiler._bind_upvalues()
         compiler._setup_parameters(stmt.params, info, stmt.vararg, stmt)
         compiler._compile_block(stmt.body)
+        compiler._finalize_labels()
         compiler._emit(Opcode.RETURN, ["0"], node=stmt)
         self.function_blocks.extend(compiler.instructions)
         self.function_blocks.extend(compiler.function_blocks)
@@ -602,6 +626,8 @@ class LuaCompiler:
                 self._emit(Opcode.NOT, [dst, operand], node=expr)
             elif expr.op == "#":
                 self._emit(Opcode.LEN, [dst, operand], node=expr)
+            elif expr.op == "~":
+                self._emit(Opcode.NOT_BIT, [dst, operand], node=expr)
             else:
                 raise CompileError(f"Unsupported unary operator {expr.op}")
             return dst
@@ -624,21 +650,57 @@ class LuaCompiler:
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
+        op = expr.op
+        if op == "and":
+            left = self._compile_expr(expr.left)
+            result = self._new_temp()
+            self._emit(Opcode.MOV, [result, left], node=expr.left)
+            skip_label = f"__logic_skip_{self._new_temp()}"
+            self._emit(Opcode.JZ, [left, skip_label], node=expr)
+            right = self._compile_expr(expr.right)
+            self._emit(Opcode.MOV, [result, right], node=expr.right)
+            self._emit(Opcode.LABEL, [skip_label], node=expr)
+            return result
+        if op == "or":
+            left = self._compile_expr(expr.left)
+            result = self._new_temp()
+            self._emit(Opcode.MOV, [result, left], node=expr.left)
+            skip_label = f"__logic_skip_{self._new_temp()}"
+            self._emit(Opcode.JNZ, [left, skip_label], node=expr)
+            right = self._compile_expr(expr.right)
+            self._emit(Opcode.MOV, [result, right], node=expr.right)
+            self._emit(Opcode.LABEL, [skip_label], node=expr)
+            return result
+
         left = self._compile_expr(expr.left)
         right = self._compile_expr(expr.right)
         dst = self._new_temp()
-        op = expr.op
-        table = {
+
+        arithmetic = {
             "+": Opcode.ADD,
             "-": Opcode.SUB,
             "*": Opcode.MUL,
             "/": Opcode.DIV,
             "%": Opcode.MOD,
+            "//": Opcode.IDIV,
+            "^": Opcode.POW,
             "..": Opcode.CONCAT,
         }
-        if op in table:
-            self._emit(table[op], [dst, left, right], node=expr)
+        if op in arithmetic:
+            self._emit(arithmetic[op], [dst, left, right], node=expr)
             return dst
+
+        bitwise = {
+            "&": Opcode.AND_BIT,
+            "|": Opcode.OR_BIT,
+            "~": Opcode.XOR,
+            "<<": Opcode.SHL,
+            ">>": Opcode.SAR,
+        }
+        if op in bitwise:
+            self._emit(bitwise[op], [dst, left, right], node=expr)
+            return dst
+
         comp_table = {
             "==": Opcode.EQ,
             "<": Opcode.LT,
@@ -661,16 +723,6 @@ class LuaCompiler:
             tmp = self._new_temp()
             self._emit(Opcode.LT, [tmp, left, right], node=expr)
             self._emit(Opcode.NOT, [dst, tmp], node=expr)
-            return dst
-        if op == "and":
-            tmp = self._new_temp()
-            self._emit(Opcode.AND, [tmp, left, right], node=expr)
-            self._emit(Opcode.MOV, [dst, tmp], node=expr)
-            return dst
-        if op == "or":
-            tmp = self._new_temp()
-            self._emit(Opcode.OR, [tmp, left, right], node=expr)
-            self._emit(Opcode.MOV, [dst, tmp], node=expr)
             return dst
         raise CompileError(f"Unsupported binary operator {op}")
 
@@ -769,6 +821,7 @@ class LuaCompiler:
         child._bind_upvalues()
         child._setup_parameters(expr.params, info, expr.vararg, expr)
         child._compile_block(expr.body)
+        child._finalize_labels()
         child._emit(Opcode.RETURN, ["0"], node=expr)
         self.function_blocks.extend(child.instructions)
         self.function_blocks.extend(child.function_blocks)
@@ -823,6 +876,23 @@ class LuaCompiler:
         else:
             self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
         return dst
+
+    def _label_symbol(self, name: str) -> str:
+        return f"__lua_label_{name}"
+
+    def _finalize_labels(self) -> None:
+        for target, depth, node in self.pending_gotos:
+            info = self.label_definitions.get(target)
+            if info is None:
+                raise CompileError(
+                    f"undefined label '{target}' referenced at {getattr(node, 'line', '?')}:{getattr(node, 'column', '?')}"
+                )
+            _, label_depth, _ = info
+            if depth < label_depth:
+                raise CompileError(
+                    f"goto '{target}' jumps into the scope of local variables"
+                )
+        self.pending_gotos.clear()
 
     def _read_identifier(self, expr: Identifier) -> str:
         name = expr.name
