@@ -552,6 +552,7 @@ class BytecodeVM:
         dst = args[0]
         self.registers[dst] = table_cls()
 
+
     def _op_TABLE_SET(self, args):
         table_reg, key_arg, value_arg = args
         table = self._ensure_table(self.val(table_reg), table_reg)
