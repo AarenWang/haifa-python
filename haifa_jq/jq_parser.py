@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 
+
 from haifa_jq.jq_ast import (
     Field,
     FunctionCall,
@@ -84,6 +85,7 @@ class FunctionDefinition:
     body: JQNode
 
 
+
 def _tokenize(source: str) -> List[Token]:
     pos = 0
     tokens: List[Token] = []
@@ -111,6 +113,7 @@ class JQParser:
         self._stop_ident_stack: List[Set[str]] = [set()]
         self._stop_type_stack: List[Set[str]] = [set()]
         self._inlining_stack: List[str] = []
+
 
     @classmethod
     def parse(cls, source: str) -> JQNode:
@@ -142,6 +145,9 @@ class JQParser:
         body = self._parse_expression(stop_types={"SEMICOLON"})
         self._expect("SEMICOLON")
         self.definitions[name_token.value] = FunctionDefinition(name_token.value, params, body)
+        expr = parser._parse_expression()
+        parser._expect("EOF")
+        return expr
 
     # Parsing helpers -------------------------------------------------
     def _current(self) -> Token:
@@ -216,6 +222,11 @@ class JQParser:
         if len(expressions) == 1:
             return node
         return Sequence(expressions)
+    # Grammar ---------------------------------------------------------
+    def _parse_expression(self) -> JQNode:
+        # Highest-level: pipe chains
+        node = self._parse_pipe()
+        return node
 
     def _parse_pipe(self) -> JQNode:
         node = self._parse_term()
@@ -467,6 +478,7 @@ class JQParser:
             self._advance()
             catch_expr = self._parse_expression()
         return TryCatch(expr, catch_expr)
+
 
     def _parse_arguments(self) -> List[JQNode]:
         args: List[JQNode] = []
