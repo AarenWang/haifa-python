@@ -27,6 +27,8 @@ class Opcode(Enum):
     MUL = auto()
     DIV = auto()
     MOD = auto()
+    POW = auto()
+    IDIV = auto()
     CONCAT = auto()
     NEG = auto()
 

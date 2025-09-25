@@ -1,4 +1,5 @@
 import copy
+import math
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence
@@ -81,6 +82,8 @@ class BytecodeVM:
             Opcode.MUL: self._op_MUL,
             Opcode.DIV: self._op_DIV,
             Opcode.MOD: self._op_MOD,
+            Opcode.POW: self._op_POW,
+            Opcode.IDIV: self._op_IDIV,
             Opcode.CONCAT: self._op_CONCAT,
             Opcode.NEG: self._op_NEG,
             Opcode.EQ: self._op_EQ,
@@ -382,8 +385,8 @@ class BytecodeVM:
         if invoked:
             self.registers[dst] = result
         else:
-            # 整数整除，保持兼容
-            self.registers[dst] = left // right
+            self.registers[dst] = left / right
+
 
     def _op_MOD(self, args):
         dst, left_reg, right_reg = args
@@ -394,6 +397,28 @@ class BytecodeVM:
             self.registers[dst] = result
         else:
             self.registers[dst] = left % right
+
+
+    def _op_POW(self, args):
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__pow", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left ** right
+
+    def _op_IDIV(self, args):
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__idiv", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = math.floor(left / right)
+
 
     def _op_CONCAT(self, args):
         dst, left_reg, right_reg = args
@@ -928,25 +953,73 @@ class BytecodeVM:
 
     # 位运算
     def _op_AND_BIT(self, args):
-        self.registers[args[0]] = self.val(args[1]) & self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__band", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) & int(right)
 
     def _op_OR_BIT(self, args):
-        self.registers[args[0]] = self.val(args[1]) | self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__bor", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) | int(right)
 
     def _op_XOR(self, args):
-        self.registers[args[0]] = self.val(args[1]) ^ self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__bxor", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) ^ int(right)
 
     def _op_NOT_BIT(self, args):
-        self.registers[args[0]] = ~self.val(args[1])
+        dst, operand_reg = args
+        operand = self.val(operand_reg)
+        invoked, result = self._invoke_unary_metamethod(operand, "__bnot")
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = ~int(operand)
 
     def _op_SHL(self, args):
-        self.registers[args[0]] = self.val(args[1]) << self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shl", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) << int(right)
 
     def _op_SHR(self, args):
-        self.registers[args[0]] = (self.val(args[1]) % (1 << 32)) >> self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shr", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = (int(left) % (1 << 32)) >> int(right)
 
     def _op_SAR(self, args):
-        self.registers[args[0]] = self.val(args[1]) >> self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shr", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) >> int(right)
 
     # 控制流
     def _op_JMP(self, args):

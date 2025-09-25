@@ -132,6 +132,16 @@ class DoStmt(Stmt):
 class BreakStmt(Stmt):
     pass
 
+
+@dataclass
+class GotoStmt(Stmt):
+    label: str
+
+
+@dataclass
+class LabelStmt(Stmt):
+    name: str
+
 @dataclass
 class ForNumericStmt(Stmt):
     var: str
@@ -198,6 +208,8 @@ __all__ = [
     "RepeatStmt",
     "DoStmt",
     "BreakStmt",
+    "GotoStmt",
+    "LabelStmt",
     "ForNumericStmt",
     "ForGenericStmt",
     "ReturnStmt",
