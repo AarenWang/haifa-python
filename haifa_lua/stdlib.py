@@ -1182,6 +1182,7 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "traceback": BuiltinFunction("debug.traceback", _debug_traceback),
     }
 
+
     math_members = {
         "abs": BuiltinFunction("math.abs", _math_unary(lambda x: abs(x))),
         "sqrt": BuiltinFunction("math.sqrt", _math_unary(lambda x: math.sqrt(x))),
