@@ -242,18 +242,44 @@ print(t["name"])
 
 ### ❌ 待实现的功能
 
-#### 1. 协程支持
+#### 1. 协程库
+Haifa Lua 的 `coroutine` 标准库已经实现了与 Lua 5.3 类似的一组 API：
+
 ```lua
--- 目标功能（尚未实现）
-local co = coroutine.create(function()
-    for i = 1, 3 do
-        coroutine.yield(i)
-    end
+local co
+local function worker(value)
+    local thread, is_main = coroutine.running()
+    print("running() == co?", thread == co, "main?", is_main)
+    print("yieldable?", coroutine.isyieldable())
+    coroutine.yield(value + 1)
+    return "done"
+end
+
+co = coroutine.create(worker)
+print(coroutine.status(co))            -- "suspended"
+print(coroutine.resume(co, 10))        -- true, 11
+print(coroutine.status(co))            -- "suspended"
+print(coroutine.isyieldable())         -- false（主线程不可 yield）
+print(coroutine.resume(co, 99))        -- true, "done"
+print(coroutine.status(co))            -- "dead"
+
+local wrapped = coroutine.wrap(function()
+    local x = coroutine.yield("first")
+    return "second", x
 end)
 
-print(coroutine.resume(co))  -- true, 1
-print(coroutine.resume(co))  -- true, 2
+print(wrapped())       -- "first"
+print(wrapped("ok"))  -- "second"
 ```
+
+- `coroutine.status(thread)` 会返回 `"running"`、`"suspended"` 或 `"dead"`。
+- `coroutine.running()` 返回当前线程对象，以及一个布尔值标记其是否为主线程。
+- `coroutine.isyieldable()` 仅在 Lua 函数栈上且未跨越 C 调用（例如 `pcall`、元方法）时返回 `true`。
+- `coroutine.wrap(f)` 返回一个函数，直接封装 `coroutine.resume`：
+  - 正常返回时自动解包多返回值。
+  - 当协程报错时抛出 Lua 风格异常（信息包含文件与行号）。
+
+当尝试跨越受保护调用或内建函数执行 `coroutine.yield` 时，会触发 `attempt to yield across a C-call boundary` 错误，与官方 Lua 的语义保持一致。
 
 #### 2. for 循环
 ```lua

@@ -50,13 +50,23 @@ class LuaMultiReturn:
 
 
 class BuiltinFunction:
-    __slots__ = ("name", "func", "doc", "__lua_builtin__")
+    __slots__ = ("name", "func", "doc", "__lua_builtin__", "allow_yield", "yield_probe")
 
-    def __init__(self, name: str, func: Callable[[Sequence[Any], Any], Any], doc: str = "") -> None:
+    def __init__(
+        self,
+        name: str,
+        func: Callable[[Sequence[Any], Any], Any],
+        doc: str = "",
+        *,
+        allow_yield: bool = False,
+        yield_probe: bool = False,
+    ) -> None:
         self.name = name
         self.func = func
         self.doc = doc
         self.__lua_builtin__ = True  # marker for the VM
+        self.allow_yield = allow_yield
+        self.yield_probe = yield_probe
 
     def __call__(self, args: Sequence[Any], vm: Any) -> Any:  # noqa: ANN401 - VM is dynamic
         return self.func(args, vm)
