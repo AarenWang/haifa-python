@@ -68,6 +68,17 @@ class VMVisualizer:
         self.event_log: List[str] = []
         self._event_entries: List[dict[str, Any]] = []
         self.show_events = True
+        # Color attributes will be initialized in _main
+        self._attrs: Dict[str, int] = {
+            "normal": 0,
+            "heading": 0,
+            "cursor": 0,
+            "ok": 0,
+            "warn": 0,
+            "err": 0,
+            "info": 0,
+            "emph": 0,
+        }
 
     # ---------------------------- public API ----------------------------- #
     def run(self) -> None:  # pragma: no cover - interactive utility
@@ -76,6 +87,34 @@ class VMVisualizer:
     # --------------------------- internal helpers ------------------------ #
     def _main(self, stdscr: "curses._CursesWindow") -> None:
         curses.curs_set(0)
+        # Initialize color scheme if supported
+        if curses.has_colors():
+            try:
+                curses.start_color()
+                try:
+                    curses.use_default_colors()
+                except Exception:
+                    pass
+                curses.init_pair(1, curses.COLOR_CYAN, -1)      # headings
+                curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # cursor
+                curses.init_pair(3, curses.COLOR_GREEN, -1)     # ok / running
+                curses.init_pair(4, curses.COLOR_YELLOW, -1)    # warn
+                curses.init_pair(5, curses.COLOR_RED, -1)       # error
+                curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # info/emph
+                curses.init_pair(7, curses.COLOR_BLUE, -1)      # timeline
+                self._attrs.update(
+                    heading=curses.color_pair(1) | curses.A_BOLD,
+                    cursor=curses.color_pair(2) | curses.A_BOLD,
+                    ok=curses.color_pair(3) | curses.A_BOLD,
+                    warn=curses.color_pair(4) | curses.A_BOLD,
+                    err=curses.color_pair(5) | curses.A_BOLD,
+                    info=curses.color_pair(6),
+                    emph=curses.color_pair(7),
+                    normal=curses.A_NORMAL,
+                )
+            except Exception:
+                # Fallback silently if terminal does not support colors
+                pass
         stdscr.nodelay(False)
         while True:
             self._draw(stdscr)
@@ -246,7 +285,13 @@ class VMVisualizer:
     def _draw(self, stdscr: "curses._CursesWindow") -> None:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
-        self._write(stdscr, 0, 0, "Bytecode Instructions (SPACE: run/pause, n: step, r: reset, q: quit)")
+        self._write(
+            stdscr,
+            0,
+            0,
+            "Bytecode Instructions (SPACE: run/pause, n: step, r: reset, q: quit)",
+            self._attrs.get("heading", curses.A_BOLD),
+        )
 
         inst_view_height = min(10, max(1, height - 10))
         if self._program:
@@ -265,7 +310,7 @@ class VMVisualizer:
                 is_cursor = idx == cursor_index
                 prefix = "→" if is_cursor else " "
                 line = f"{prefix}{idx:03d} {self._program[idx]}"
-                attr = curses.A_REVERSE if is_cursor else curses.A_NORMAL
+                attr = self._attrs.get("cursor", curses.A_REVERSE) if is_cursor else self._attrs.get("normal", curses.A_NORMAL)
                 self._write(stdscr, row, 0, line, attr)
                 row += 1
         else:
@@ -279,13 +324,13 @@ class VMVisualizer:
         self._consume_events()
 
         row += 2
-        self._write(stdscr, row, 0, "Registers:")
+        self._write(stdscr, row, 0, "Registers:", self._attrs.get("heading", curses.A_BOLD))
         for i, (name, value) in enumerate(sorted(snapshot.registers.items())):
             display = self._fmt(value)
             self._write(stdscr, row + 1 + i, 2, f"{name} = {display}")
 
         row = min(height - 6, row + 3 + len(snapshot.registers))
-        self._write(stdscr, row, 0, "Call stack:")
+        self._write(stdscr, row, 0, "Call stack:", self._attrs.get("heading", curses.A_BOLD))
         for i, frame in enumerate(snapshot.call_stack):
             self._write(
                 stdscr,
@@ -295,12 +340,12 @@ class VMVisualizer:
             )
 
         row = min(height - 6, row + 3 + len(snapshot.call_stack))
-        self._write(stdscr, row, 0, "Upvalues:")
+        self._write(stdscr, row, 0, "Upvalues:", self._attrs.get("heading", curses.A_BOLD))
         upvalue_repr = ", ".join(self._fmt(value) for value in snapshot.upvalues)
         self._write(stdscr, row + 1, 2, upvalue_repr or "<empty>")
 
         row = min(height - 6, row + 3)
-        self._write(stdscr, row, 0, "Coroutines:")
+        self._write(stdscr, row, 0, "Coroutines:", self._attrs.get("heading", curses.A_BOLD))
         if snapshot.coroutines:
             for i, coro in enumerate(snapshot.coroutines):
                 prefix = "*" if snapshot.current_coroutine == coro.coroutine_id else "-"
@@ -320,7 +365,14 @@ class VMVisualizer:
                 )
                 if coro.last_error:
                     line += f" error={coro.last_error}"
-                self._write(stdscr, row + 1 + i, 2, line)
+                attr = self._attrs.get("ok", curses.A_NORMAL)
+                if coro.status == "dead" and coro.last_error:
+                    attr = self._attrs.get("err", curses.A_BOLD)
+                elif coro.status == "suspended":
+                    attr = self._attrs.get("warn", curses.A_BOLD)
+                elif prefix == "*":
+                    attr = self._attrs.get("emph", curses.A_BOLD)
+                self._write(stdscr, row + 1 + i, 2, line, attr)
             row += 1 + len(snapshot.coroutines)
         else:
             self._write(stdscr, row + 1, 2, "<none>")
@@ -328,12 +380,37 @@ class VMVisualizer:
 
         if self.show_events:
             recent_events = list(reversed(self.event_log[-5:]))
-            self._write(stdscr, row, 40, "Events:")
-            for i, line in enumerate(recent_events):
-                self._write(stdscr, row + 1 + i, 42, line)
+            self._write(stdscr, row, 40, "Events:", self._attrs.get("heading", curses.A_BOLD))
+            # Pull the same recent slice from entries to colorize by type
+            recent_entries = list(reversed(self._event_entries[-5:]))
+            for i, entry in enumerate(recent_entries):
+                label = entry.get("label", "")
+                ev = entry.get("event")
+                attr = self._attrs.get("info", curses.A_NORMAL)
+                try:
+                    from .vm_events import (
+                        CoroutineCreated,
+                        CoroutineResumed,
+                        CoroutineYielded,
+                        CoroutineCompleted,
+                    )
+                    if isinstance(ev, CoroutineCreated):
+                        attr = self._attrs.get("heading", curses.A_BOLD)
+                    elif isinstance(ev, CoroutineResumed):
+                        attr = self._attrs.get("ok", curses.A_BOLD)
+                    elif isinstance(ev, CoroutineYielded):
+                        attr = self._attrs.get("warn", curses.A_BOLD)
+                    elif isinstance(ev, CoroutineCompleted):
+                        if getattr(ev, "error", None):
+                            attr = self._attrs.get("err", curses.A_BOLD)
+                        else:
+                            attr = self._attrs.get("emph", curses.A_BOLD)
+                except Exception:
+                    pass
+                self._write(stdscr, row + 1 + i, 42, label, attr)
             events_block = 1 + len(recent_events) + 1
         else:
-            self._write(stdscr, row, 40, "Events: <hidden>")
+            self._write(stdscr, row, 40, "Events: <hidden>", self._attrs.get("heading", curses.A_BOLD))
             events_block = 2
 
         detail_lines = self._event_detail_lines()
@@ -342,16 +419,18 @@ class VMVisualizer:
                 self._write(stdscr, row + events_block + i, 40, text)
 
         row = min(height - 6, row + events_block + len(detail_lines))
-        self._write(stdscr, row, 0, "Emit stack:")
+        self._write(stdscr, row, 0, "Emit stack:", self._attrs.get("heading", curses.A_BOLD))
         emit_repr = ", ".join(self._fmt(e) for e in snapshot.emit_stack)
         self._write(stdscr, row + 1, 2, emit_repr or "<empty>")
 
         row += 3
-        self._write(stdscr, row, 0, "Output:")
+        self._write(stdscr, row, 0, "Output:", self._attrs.get("heading", curses.A_BOLD))
         output_repr = ", ".join(self._fmt(o) for o in snapshot.output)
         self._write(stdscr, row + 1, 2, output_repr or "<empty>")
 
-        self._write(stdscr, height - 2, 0, self.message[: width - 1])
+        # Status line colored by run state
+        state_attr = self._attrs.get("ok", curses.A_BOLD) if not self.state.halted and self.auto_run else self._attrs.get("warn", curses.A_BOLD)
+        self._write(stdscr, height - 2, 0, self.message[: width - 1], state_attr)
         stdscr.refresh()
 
     def _event_detail_lines(self) -> List[str]:

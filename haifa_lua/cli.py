@@ -27,6 +27,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Pause for confirmation when an error occurs",
     )
     parser.add_argument("--repl", action="store_true", help="Start an interactive REPL session")
+    parser.add_argument(
+        "--visualize",
+        nargs="?",
+        const="gui",
+        choices=["gui", "curses"],
+        help="Visualize VM execution (optional mode: gui or curses)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -38,6 +45,59 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.repl and (args.inline or args.script):
             parser.error("--repl cannot be combined with script or --execute")
             return 1
+        if args.visualize and args.repl:
+            parser.error("--visualize cannot be combined with --repl")
+            return 1
+
+        # Visualization path: compile source and launch GUI/headless visualizer
+        if args.visualize:
+            selected_mode = args.visualize or "gui"
+            if args.inline:
+                source = args.inline
+                source_name = "<inline>"
+            elif args.script:
+                source_name = args.script
+                source = pathlib.Path(args.script).read_text(encoding="utf-8")
+            else:
+                parser.error("missing script or --execute for visualization")
+                return 1
+
+            instructions = list(compile_source(source, source_name=source_name))
+            env = create_default_environment()
+            vm = BytecodeVM(instructions)
+            vm.lua_env = env
+            vm.registers.update(env.to_vm_registers())
+            module_system = getattr(env, "module_system", None)
+            if module_system is not None and source_name and not source_name.startswith("<"):
+                module_system.set_base_path(pathlib.Path(source_name))
+
+            vm_class = None
+            gui_exc: Exception | None = None
+            if selected_mode == "gui":
+                try:
+                    from compiler.vm_visualizer import VMVisualizer as vm_class  # type: ignore
+                except Exception as e:  # pragma: no cover - pygame missing/unavailable
+                    gui_exc = e
+                    selected_mode = "curses"
+
+            if selected_mode == "curses":
+                try:
+                    from compiler.vm_visualizer_headless import VMVisualizer as vm_class  # type: ignore
+                except Exception as headless_exc:  # pragma: no cover
+                    if gui_exc is not None:
+                        print(
+                            "Visualizer unavailable. GUI error: "
+                            f"{gui_exc}; Headless error: {headless_exc}",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(f"Visualizer unavailable: {headless_exc}", file=sys.stderr)
+                    return 1
+
+            assert vm_class is not None
+            visualizer = vm_class(vm)
+            visualizer.run()
+            return 0
         if args.repl or (not args.inline and not args.script and sys.stdin.isatty()):
             session = ReplSession(
                 trace_filter=trace_filter,

@@ -545,14 +545,22 @@ class VMVisualizer:
             event_detail_lines,
         ) = self._prepare_data()
 
-        # Instructions
+        # Compute dynamic footer reserve to avoid overlap with bottom help area
+        footer_lines = 1  # at least the status/help line
+        if self.search_mode or self.search_query:
+            footer_lines += 1
+        if self.message:
+            footer_lines += 1
+        footer_height = footer_lines * LINE_HEIGHT + 20
+
+        # Instructions (respect footer reserve; never exceed available area)
         self._draw_section(
             "Instructions",
             instructions_data,
             MARGIN,
             MARGIN,
             600,
-            SCREEN_HEIGHT - 2 * MARGIN,
+            max(0, SCREEN_HEIGHT - 2 * MARGIN - footer_height),
             highlight_index=highlight_idx,
             secondary_highlights=match_highlights,
             secondary_color=HIGHLIGHT_COLOR,
@@ -607,7 +615,8 @@ class VMVisualizer:
         self._draw_section("Emit Stack", emit_stack_data, center_x, y, center_width, 80)
 
         y += 80 + 20
-        output_height = max(60, SCREEN_HEIGHT - y - MARGIN)
+        # Clamp Output height to available space above footer to avoid overlap
+        output_height = max(0, SCREEN_HEIGHT - y - MARGIN - footer_height)
         self._draw_section("Output", output_data, center_x, y, center_width, output_height)
 
         # Coroutines panel on right
@@ -635,7 +644,8 @@ class VMVisualizer:
 
         # Timeline and event detail panels
         events_y = MARGIN + coroutine_height + 20
-        timeline_height = 300
+        # Ensure timeline fits within remaining height; leave room for details and footer
+        timeline_height = min(300, max(0, SCREEN_HEIGHT - events_y - MARGIN - footer_height - 160))
         self._draw_section(
             "Timeline",
             timeline_data or ["<no events>"],
@@ -649,7 +659,8 @@ class VMVisualizer:
         )
 
         detail_y = events_y + timeline_height + 20
-        detail_height = max(120, SCREEN_HEIGHT - detail_y - MARGIN)
+        # Constrain Event Detail to available space above footer
+        detail_height = max(0, SCREEN_HEIGHT - detail_y - MARGIN - footer_height)
         self._draw_section(
             "Event Detail",
             event_detail_lines,
@@ -666,7 +677,8 @@ class VMVisualizer:
             "[SPACE] step [P] run/pause [Q] quit [F] follow "
             "[ARROWS] navigate [/] search [L] export"
         )
-        msg_y = SCREEN_HEIGHT - MARGIN - 40
+        # Position footer block within the reserved area
+        msg_y = SCREEN_HEIGHT - MARGIN - (footer_height - 10)
         if self.search_mode or self.search_query:
             cursor = "_" if self.search_mode else ""
             self._draw_text(
