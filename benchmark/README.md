@@ -10,7 +10,7 @@ brew install lua                    # macOS
 # 或
 sudo apt-get install lua5.4         # Ubuntu
 
-# 安装 Python 依赖
+# 安装 Python 依赖（可选，用于 analyze_results 等扩展工具）
 pip install psutil
 
 # 确保在项目根目录
@@ -44,16 +44,19 @@ python benchmark/analyze_results.py benchmark/results/benchmark_results_YYYYMMDD
 ### 算术运算测试 (arithmetic_bench.lua)
 - **测试内容**: 整数运算、浮点运算
 - **评估指标**: 基础运算指令的执行效率
+- **说明**: 单一脚本同时用于官方 Lua 与 haifa_lua，由运行器在外部计时
 - **预期性能**: 目标达到官方解释器 60-80% 性能
 
-### 函数调用测试 (function_bench.lua)  
+### 函数调用测试 (function_bench.lua)
 - **测试内容**: 递归调用、迭代调用、深度调用栈、简单函数调用
 - **评估指标**: 函数调用开销、栈管理效率
+- **说明**: 单一脚本同时用于官方 Lua 与 haifa_lua，由运行器在外部计时
 - **预期性能**: 目标达到官方解释器 50-70% 性能
 
 ### 控制流测试 (control_bench.lua)
 - **测试内容**: 条件分支、嵌套循环、while循环、复杂条件
 - **评估指标**: 分支预测、循环优化效果
+- **说明**: 单一脚本同时用于官方 Lua 与 haifa_lua，由运行器在外部计时
 - **预期性能**: 目标达到官方解释器 60-80% 性能
 
 ## 结果解读
@@ -69,20 +72,18 @@ python benchmark/analyze_results.py benchmark/results/benchmark_results_YYYYMMDD
 ```
 PERFORMANCE BENCHMARK SUMMARY
 ============================================================
-Test Time: 2023-12-25 14:30:22
+Test Time: 2025-09-25 10:49:13
 Iterations: 3
-Lua Version: Lua 5.4.4
+Lua Version: None
 
 Test                 Lua (s)      haifa_lua (s)   Ratio    Performance
 ---------------------------------------------------------------------------
-Arithmetic Bench     0.2150      0.4320         2.01x    49.8%
-Function Bench       0.1890      0.5670         3.00x    33.3%
-Control Bench        0.1650      0.3960         2.40x    41.7%
----------------------------------------------------------------------------
-AVERAGE                                         2.47x    41.6%
+arithmetic_bench.lua N/A          4.6168          N/A      N/A
+function_bench.lua   N/A          2.2248          N/A      N/A
+control_bench.lua    N/A          7.6660          N/A      N/A
 
 Overall Assessment:
-  Fair - Needs optimization for production use
+  Official Lua interpreter missing — only haifa_lua timings recorded
 ```
 
 ## 故障排除
@@ -147,34 +148,28 @@ Overall Assessment:
 ### 添加新测试脚本
 
 1. 在 `benchmark/scripts/` 创建 `.lua` 文件
-2. 确保脚本包含计时逻辑和结果输出
+2. 确保脚本聚焦于构造工作负载（计时由 `benchmark_runner.py` 负责）
 3. 将脚本名添加到 `benchmark_runner.py` 的 `test_scripts` 列表
 
 ### 测试脚本模板
 
 ```lua
 -- 自定义测试脚本模板
-function test_my_feature(n)
-    local start_time = os and os.clock and os.clock() or 0
-    
-    -- 你的测试代码
+local ITERATIONS = 100000
+
+local function test_my_feature(n)
     local result = 0
     for i = 1, n do
         -- 测试逻辑
         result = result + i
     end
-    
-    local end_time = os and os.clock and os.clock() or 0
-    return end_time - start_time, result
+    return result
 end
 
--- 执行测试
-local n = 100000
-local time_taken, result = test_my_feature(n)
-
-print("My Feature Test:")
-print("Time: " .. string.format("%.4f", time_taken) .. " seconds")
-print("Result: " .. result)
+print("My Feature Test with " .. ITERATIONS .. " iterations")
+local result = test_my_feature(ITERATIONS)
+print("Result:")
+print(result)
 ```
 
 ## 持续集成

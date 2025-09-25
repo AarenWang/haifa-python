@@ -1,0 +1,77 @@
+{
+  "test_info": {
+    "timestamp": "2025-09-25 10:49:13",
+    "iterations": 3,
+    "python_version": "3.12.10 (main, Aug 28 2025, 21:54:05) [GCC 13.3.0]",
+    "lua_version": null,
+    "system_info": {
+      "platform": "linux",
+      "processor": "x86_64"
+    }
+  },
+  "tests": {
+    "arithmetic_bench.lua": {
+      "script_name": "arithmetic_bench.lua",
+      "lua_script": "arithmetic_bench.lua",
+      "haifa_script": "arithmetic_bench.lua",
+      "iterations_completed": {
+        "lua": 0,
+        "haifa": 3
+      },
+      "haifa_lua": {
+        "times": [
+          4.636499562000608,
+          4.645346735000203,
+          4.56848175199957
+        ],
+        "avg_time": 4.616776016333461,
+        "min_time": 4.56848175199957,
+        "max_time": 4.645346735000203,
+        "std_dev": 0.042057342916367535,
+        "sample_output": "Running arithmetic benchmark with 20000 iterations\nInteger ops result:\n2566861.670000002\nFloat ops result:\n2566861.670000\n"
+      }
+    },
+    "function_bench.lua": {
+      "script_name": "function_bench.lua",
+      "lua_script": "function_bench.lua",
+      "haifa_script": "function_bench.lua",
+      "iterations_completed": {
+        "lua": 0,
+        "haifa": 3
+      },
+      "haifa_lua": {
+        "times": [
+          2.241806338999595,
+          2.202080028999262,
+          2.2306331409999984
+        ],
+        "avg_time": 2.224839836332952,
+        "min_time": 2.202080028999262,
+        "max_time": 2.241806338999595,
+        "std_dev": 0.020486988816918773,
+        "sample_output": "Running function benchmark suite\nRecursive fib(24):\n1\nIterative fib(20000):\n1\nDeep call depth=800:\n320401\nSimple add calls (20000) sum:\n400040000\n"
+      }
+    },
+    "control_bench.lua": {
+      "script_name": "control_bench.lua",
+      "lua_script": "control_bench.lua",
+      "haifa_script": "control_bench.lua",
+      "iterations_completed": {
+        "lua": 0,
+        "haifa": 3
+      },
+      "haifa_lua": {
+        "times": [
+          7.489132130998769,
+          7.4744212869991316,
+          8.034478297000533
+        ],
+        "avg_time": 7.666010571666145,
+        "min_time": 7.4744212869991316,
+        "max_time": 8.034478297000533,
+        "std_dev": 0.31918717187979073,
+        "sample_output": "Running control flow benchmark suite\nBranch-heavy loop sum:\n1646\nNested loop sum:\n7\nWhile loop sum:\n200010000\nComplex condition hits:\n1646\n"
+      }
+    }
+  }
+}
