@@ -387,6 +387,7 @@ class BytecodeVM:
         else:
             self.registers[dst] = left / right
 
+
     def _op_MOD(self, args):
         dst, left_reg, right_reg = args
         left = self.val(left_reg)
@@ -396,6 +397,7 @@ class BytecodeVM:
             self.registers[dst] = result
         else:
             self.registers[dst] = left % right
+
 
     def _op_POW(self, args):
         dst, left_reg, right_reg = args
@@ -416,6 +418,7 @@ class BytecodeVM:
             self.registers[dst] = result
         else:
             self.registers[dst] = math.floor(left / right)
+
 
     def _op_CONCAT(self, args):
         dst, left_reg, right_reg = args
