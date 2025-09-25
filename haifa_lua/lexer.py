@@ -106,7 +106,7 @@ class LuaLexer:
 
         # Operators / punctuation
         two_char = ch + self._peek(1)
-        if two_char in {"==", "~=", "<=", ">="}:
+        if two_char in {"==", "~=", "<=", ">=", ".."}:
             self._advance(2)
             return Token("OP", two_char, start_line, start_col)
         if ch in "+-*/%=#<>.":

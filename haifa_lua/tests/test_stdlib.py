@@ -96,6 +96,21 @@ def test_string_library_functions():
     assert result == ["ello", "lo World", "World", "HELLO WORLD", "hello world"]
 
 
+def test_tonumber_base_conversion_and_invalid_digits():
+    src = """
+    local invalid = tonumber("7", 2)
+    return tonumber("ff", 16), invalid == nil
+    """
+    result = run_source(src)
+    assert result == [255.0, True]
+
+
+def test_tonumber_rejects_base_out_of_range():
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source("tonumber('10', 1)")
+    assert "base out of range" in str(excinfo.value)
+
+
 def test_table_concat_and_sort():
     src = """
     local letters = {"a", "b", "c"}
@@ -125,6 +140,40 @@ def test_error_and_assertions():
     with pytest.raises(LuaRuntimeError) as excinfo2:
         run_source("assert(false, 'fail')")
     assert "fail" in str(excinfo2.value)
+
+
+def test_error_default_message_and_assert_varargs():
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source("error()")
+    assert "error" in str(excinfo.value)
+
+    src = """
+    local a, b, c = assert(5, "keep", nil)
+    return a, b, c
+    """
+    result = run_source(src)
+    assert result == [5, "keep", None]
+
+
+def test_pairs_and_ipairs_return_protocol():
+    src = """
+    local iter, tbl, seed = ipairs({10, 20})
+    local first_index, first_value = iter(tbl, seed)
+    local next_fn, next_tbl, start_key = pairs({x = 1})
+    return type(iter), type(tbl), seed, first_index, first_value,
+        type(next_fn), type(next_tbl), start_key
+    """
+    result = run_source(src)
+    assert result == [
+        "function",
+        "table",
+        0,
+        1,
+        10,
+        "function",
+        "table",
+        None,
+    ]
 
 
 def test_table_insert_and_remove_roundtrip():
