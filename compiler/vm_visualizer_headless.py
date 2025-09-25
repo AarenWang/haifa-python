@@ -308,8 +308,14 @@ class VMVisualizer:
                 yield_text = self._fmt(coro.last_yield)
                 name_text = f" fn={coro.function_name}" if coro.function_name else ""
                 pc_text = f" pc={coro.current_pc}" if getattr(coro, "current_pc", None) is not None else ""
+                tags: list[str] = []
+                if getattr(coro, "is_main", False):
+                    tags.append("main")
+                if getattr(coro, "yieldable", False):
+                    tags.append("yieldable")
+                tag_text = f" [{' '.join(tags)}]" if tags else ""
                 line = (
-                    f"{prefix} #{coro.coroutine_id} {coro.status} "
+                    f"{prefix} #{coro.coroutine_id} {coro.status}{tag_text} "
                     f"resume={resume_text} yield={yield_text}{pc_text}{name_text}"
                 )
                 if coro.last_error:

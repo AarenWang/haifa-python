@@ -8,6 +8,7 @@ from compiler.bytecode_vm import BytecodeVM
 from compiler.vm_errors import VMRuntimeError
 
 from .compiler import LuaCompiler
+from .coroutines import LuaCoroutine
 from .debug import as_lua_error
 from .environment import LuaEnvironment
 from .parser import LuaParser
@@ -47,6 +48,8 @@ def run_source(
     vm = BytecodeVM(instructions)
     vm.lua_env = env
     vm.registers.update(env.to_vm_registers())
+    main_thread = LuaCoroutine(None, vm, is_main=True)
+    vm.main_coroutine = main_thread
     module_system = getattr(env, "module_system", None)
     if module_system is not None and source_name and not source_name.startswith("<"):
         module_system.set_base_path(pathlib.Path(source_name))
@@ -54,9 +57,16 @@ def run_source(
     try:
         output = vm.run()
     except VMRuntimeError as exc:
-        raise as_lua_error(exc) from exc
+        lua_error = as_lua_error(exc)
+        main_thread.status = "dead"
+        main_thread.last_error = str(lua_error)
+        main_thread._update_snapshot()
+        raise lua_error
     finally:
         env.unbind_vm()
+    main_thread.status = "dead"
+    main_thread.last_error = None
+    main_thread._update_snapshot()
     env.sync_from_vm(vm.registers)
     if not output and vm.last_return:
         return list(vm.last_return)
