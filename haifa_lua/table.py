@@ -74,6 +74,16 @@ class LuaTable:
         else:
             self.map[key] = value
 
+
+    # ---------------------------- iteration helpers --------------------------- #
+    def iter_items(self):
+        for idx, value in enumerate(self.array, start=1):
+            if value is not None:
+                yield idx, value
+        for key, value in self.map.items():
+            yield key, value
+
+
     # ------------------------------- internals ----------------------------- #
     def _trim_array(self) -> None:
         while self.array and self.array[-1] is None:
