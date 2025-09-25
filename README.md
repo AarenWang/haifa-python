@@ -37,7 +37,14 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
 
 ## 快速上手
 1. 准备 Python 3.11+ 环境（推荐使用虚拟环境）。
-2. 安装依赖（本项目仅使用标准库与 `pytest`）。
+2. 安装依赖：
+   ```bash
+   # 仅运行时依赖
+   pip install .
+   
+   # 或安装开发依赖（包含构建工具）
+   pip install ".[dev]"
+   ```
 3. 运行测试验证环境：
    ```bash
    pytest
@@ -114,7 +121,6 @@ Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
       "LABEL end",
       "PRINT max"
   ]
-
 bytecode = ASTCompiler().compile(parse(script))
 vm = BytecodeVM(bytecode)
 VMVisualizer(vm).run()
@@ -123,7 +129,7 @@ VMVisualizer(vm).run()
 > 提示：GUI 可视化器会展示协程列表、事件时间线与参数详情；示例脚本可参考 `examples/coroutines.lua`，更多说明见 `docs/guide.md` 第 6 节。
   在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。支持 `/` 搜索指令、寄存器变更高亮，以及 `L` 导出执行轨迹（JSONL）。
 
-### jq 命令行示例
+### jq 命令行示例 
 ```bash
 # 从 stdin 读取 JSON，输出对象的键
 cat data.json | python -m compiler.jq_cli 'keys'
@@ -172,28 +178,58 @@ pylua --execute 'function add(a,b) return a+b end return add(3,4)' --print-outpu
 
 ## 安装与分发
 
-### 通过 pip 安装 `pyjq`
-项目提供了标准的 `pyproject.toml`，安装后会自动注册 `pyjq` 命令：
+### 通过 pip 安装 `pyjq` 和 `pylua`
+项目提供了标准的 `pyproject.toml`，安装后会自动注册 `pyjq` 和 `pylua` 命令：
 
 ```bash
+# 安装运行时依赖
 pip install .
+
+# 安装开发依赖（包含构建工具）
+pip install ".[dev]"
+
+# 仅安装构建依赖
+pip install ".[build]"
+
+# 使用安装的命令
 pyjq '.foo' --input sample.json
+pylua examples/hello.lua
 ```
 
-安装时会拉取 `compiler` 包，`pyjq` 实际调用 `compiler.jq_cli:main`。
+安装时会拉取 `compiler` 和 `haifa_lua` 包，`pyjq` 实际调用 `compiler.jq_cli:main`，`pylua` 调用 `haifa_lua.cli:main`。
 
 ### 构建独立可执行文件
 若希望在无 Python 环境的机器上运行，可使用 PyInstaller 打包：
 
 ```bash
-python -m pip install pyinstaller
+# 安装构建依赖
+pip install ".[build]"
+
+# 构建 pyjq 可执行文件
 pyinstaller --onefile --name pyjq compiler/jq_cli.py
-# 生成的二进制位于 dist/pyjq（Windows 下为 dist/pyjq.exe）
+
+# 构建 pylua 可执行文件  
+pyinstaller --onefile --name pylua haifa_lua/cli.py
+
+# 生成的二进制位于 dist/ 目录（Windows 下为 .exe）
+```
+
+## 依赖管理
+项目使用 `pyproject.toml` 管理依赖：
+- **运行时依赖**：`pytest`（用于内置测试功能）
+- **开发依赖**：`pyinstaller`（构建独立可执行文件）
+- **构建依赖**：与开发依赖相同，便于 CI/CD 明确安装
+
+开发者可按需选择依赖组合：
+```bash
+pip install .              # 仅运行时依赖
+pip install ".[dev]"       # 包含开发工具
+pip install ".[build]"     # 仅构建工具（CI/CD 使用）
 ```
 
 ## CI/CD：PyInstaller 构建流水线
 - `.github/workflows/pyjq-build.yml` 定义了跨平台流水线，在推送 `v*` 标签或手动触发时运行。
-- 流水线会在 Ubuntu / macOS / Windows 上运行 PyInstaller，产出 `pyjq-linux`、`pyjq-macos`、`pyjq-windows.exe` 三个制品并自动上传为构建产物。
+- 流水线会在 Ubuntu / macOS / Windows 上运行 PyInstaller，产出 `pyjq-linux`、`pyjq-macos`、`pyjq-windows.exe` 以及对应的 `pylua` 制品并自动上传为构建产物。
 - 可结合 GitHub Releases，将这些制品发布给终端用户。
 
 ## 测试与开发
