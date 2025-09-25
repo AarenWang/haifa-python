@@ -73,3 +73,24 @@ def test_require_missing_module_reports_error(tmp_path: pathlib.Path) -> None:
     with pytest.raises(Exception) as exc:
         run_source('return require("missing")', env)
     assert "module 'missing' not found" in str(exc.value)
+
+
+def test_package_add_searcher_loads_custom_module(tmp_path: pathlib.Path) -> None:
+    env = create_default_environment()
+    env.module_system.set_base_path(tmp_path)  # type: ignore[attr-defined]
+
+    script = """
+    local function custom(name)
+        if name == "extra" then
+            return function()
+                return { value = 99 }
+            end, "custom"
+        end
+        return nil, "no loader"
+    end
+    package.add_searcher(custom)
+    local module = require("extra")
+    return module.value
+    """
+    result = run_source(script, env)
+    assert result == [99.0]

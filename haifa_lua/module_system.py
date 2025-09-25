@@ -32,6 +32,10 @@ class LuaModuleSystem:
             "sandbox",
             BuiltinFunction("package.sandbox", self._lua_package_sandbox),
         )
+        self.package_table.raw_set(
+            "add_searcher",
+            BuiltinFunction("package.add_searcher", self._lua_package_add_searcher),
+        )
         self.base_path = pathlib.Path.cwd()
         self.module_envs: dict[str, LuaEnvironment] = {}
         self._install_default_searchers()
@@ -186,6 +190,15 @@ class LuaModuleSystem:
             return table
         return self.searchers
 
+    def add_searcher(self, searcher: object, *, position: int | None = None) -> None:
+        table = self._get_searchers()
+        length = table.lua_len()
+        index = length + 1 if position is None else max(1, min(position, length + 1))
+        for current in range(length, index - 1, -1):
+            value = table.raw_get(current)
+            table.raw_set(current + 1, value)
+        table.raw_set(index, searcher)
+
     def _search_preload(self, args: Sequence[object], vm: BytecodeVM) -> LuaMultiReturn:
         name = str(args[0]) if args else ""
         loader = self.preload.raw_get(name)
@@ -330,6 +343,16 @@ class LuaModuleSystem:
         env_value = args[1]
         inherit = bool(args[2]) if len(args) >= 3 else False
         self.register_module_environment(name, env_value, inherit=inherit)
+        return None
+
+    def _lua_package_add_searcher(self, args: Sequence[object], vm: BytecodeVM) -> None:
+        if not args:
+            raise RuntimeError("package.add_searcher expects function")
+        searcher = args[0]
+        position = None
+        if len(args) >= 2 and args[1] is not None:
+            position = int(args[1])
+        self.add_searcher(searcher, position=position)
         return None
 
     # ------------------------------------------------------------------ path utils

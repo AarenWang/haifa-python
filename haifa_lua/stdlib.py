@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import math
+import os
+import pathlib
 import random
 import re
+import subprocess
 import time
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from compiler.bytecode_vm import LuaYield
 from compiler.vm_errors import VMRuntimeError
@@ -98,8 +102,23 @@ _LUA_CLASS_SET_MAP = {
 }
 
 
-def _translate_lua_pattern(pattern: str) -> str:
+@dataclass(frozen=True)
+class _BalancedGroup:
+    name: str
+    open_char: str
+    close_char: str
+
+
+@dataclass(frozen=True)
+class _CompiledLuaPattern:
+    regex: re.Pattern[str]
+    balanced_groups: tuple[_BalancedGroup, ...]
+    internal_group_indices: tuple[int, ...]
+
+
+def _translate_lua_pattern(pattern: str) -> tuple[str, tuple[_BalancedGroup, ...]]:
     result: list[str] = []
+    balanced: list[_BalancedGroup] = []
     length = len(pattern)
     i = 0
     while i < length:
@@ -113,9 +132,53 @@ def _translate_lua_pattern(pattern: str) -> str:
             if code.isdigit():
                 result.append(f"\\{code}")
             elif code == "b":
-                raise RuntimeError("pattern %b is not supported")
+                if i + 2 >= length:
+                    raise RuntimeError("pattern %b expects two delimiter characters")
+                open_char = pattern[i + 1]
+                close_char = pattern[i + 2]
+                group_name = f"_bal_{len(balanced)}"
+                piece = f"(?P<{group_name}>{re.escape(open_char)}.*?{re.escape(close_char)})"
+                result.append(piece)
+                balanced.append(_BalancedGroup(group_name, open_char, close_char))
+                i += 2
             elif code == "f":
-                raise RuntimeError("pattern %f is not supported")
+                if i + 1 >= length or pattern[i + 1] != "[":
+                    raise RuntimeError("pattern %f expects frontier set")
+                j = i + 2
+                negate = False
+                if j < length and pattern[j] == "^":
+                    negate = True
+                    j += 1
+                parts: list[str] = []
+                while j < length and pattern[j] != "]":
+                    current = pattern[j]
+                    if current == "%":
+                        j += 1
+                        if j >= length:
+                            break
+                        mapped = _LUA_CLASS_SET_MAP.get(pattern[j])
+                        if mapped is None:
+                            mapped = _LUA_PATTERN_CLASS_MAP.get(pattern[j])
+                            if mapped is None:
+                                mapped = re.escape(pattern[j])
+                            elif mapped.startswith("[") and mapped.endswith("]"):
+                                mapped = mapped[1:-1]
+                            else:
+                                if mapped.startswith("[^"):
+                                    raise RuntimeError("unsupported frontier complement")
+                        parts.append(mapped)
+                    else:
+                        parts.append(re.escape(current))
+                    j += 1
+                if j >= length:
+                    raise RuntimeError("unterminated frontier pattern")
+                content = "".join(parts)
+                if not content:
+                    content = r"\s\S"
+                prefix = "^" if negate else ""
+                set_expr = f"[{prefix}{content}]"
+                result.append(f"(?:(?<!{set_expr})(?={set_expr}))")
+                i = j
             else:
                 mapped = _LUA_PATTERN_CLASS_MAP.get(code)
                 if mapped is not None:
@@ -168,13 +231,77 @@ def _translate_lua_pattern(pattern: str) -> str:
         else:
             result.append(re.escape(char))
         i += 1
-    return "".join(result)
+    return "".join(result), tuple(balanced)
+
+
+def _build_internal_indices(regex: re.Pattern[str], balanced: tuple[_BalancedGroup, ...]) -> tuple[int, ...]:
+    groupindex = regex.groupindex
+    indices: list[int] = []
+    for group in balanced:
+        index = groupindex.get(group.name)
+        if index is not None:
+            indices.append(index)
+    return tuple(sorted(indices))
 
 
 @lru_cache(maxsize=128)
-def _compile_lua_pattern(pattern: str) -> re.Pattern[str]:
-    translated = _translate_lua_pattern(pattern)
-    return re.compile(translated)
+def _compile_lua_pattern(pattern: str) -> _CompiledLuaPattern:
+    translated, balanced = _translate_lua_pattern(pattern)
+    regex = re.compile(translated)
+    internal_indices = _build_internal_indices(regex, balanced)
+    return _CompiledLuaPattern(regex=regex, balanced_groups=balanced, internal_group_indices=internal_indices)
+
+
+def _is_balanced_text(text: str, open_char: str, close_char: str) -> bool:
+    if not text or text[0] != open_char or text[-1] != close_char:
+        return False
+    depth = 0
+    for character in text:
+        if character == open_char:
+            depth += 1
+        elif character == close_char:
+            depth -= 1
+            if depth < 0:
+                return False
+        if depth == 0 and character != text[-1]:
+            continue
+    return depth == 0
+
+
+def _match_satisfies_balanced(match: re.Match[str], compiled: _CompiledLuaPattern) -> bool:
+    for group in compiled.balanced_groups:
+        value = match.group(group.name)
+        if value is None or not _is_balanced_text(value, group.open_char, group.close_char):
+            return False
+    return True
+
+
+def _next_lua_match(compiled: _CompiledLuaPattern, text: str, position: int) -> re.Match[str] | None:
+    regex = compiled.regex
+    search_pos = position
+    text_length = len(text)
+    while search_pos <= text_length:
+        match = regex.search(text, search_pos)
+        if match is None:
+            return None
+        if _match_satisfies_balanced(match, compiled):
+            return match
+        new_pos = match.start() + 1
+        if new_pos <= search_pos:
+            new_pos = search_pos + 1
+        search_pos = new_pos
+    return None
+
+
+def _extract_lua_captures(match: re.Match[str], compiled: _CompiledLuaPattern) -> list[Any]:
+    values: list[Any] = []
+    total = match.re.groups
+    internal = set(compiled.internal_group_indices)
+    for index in range(1, total + 1):
+        if index in internal:
+            continue
+        values.append(match.group(index))
+    return values
 
 
 def _normalize_start(length: int, init: Any | None) -> int:
@@ -195,10 +322,10 @@ def _normalize_start(length: int, init: Any | None) -> int:
     return computed - 1
 
 
-def _collect_match_groups(match: re.Match[str]) -> list[Any]:
-    groups = list(match.groups())
-    if groups:
-        return [group if group is not None else None for group in groups]
+def _collect_match_groups(match: re.Match[str], compiled: _CompiledLuaPattern) -> list[Any]:
+    captures = _extract_lua_captures(match, compiled)
+    if captures:
+        return [capture if capture is not None else None for capture in captures]
     return [match.group(0)]
 
 
@@ -238,17 +365,19 @@ def _match_replacement_value(value: Any) -> str:
     return _lua_tostring(value)
 
 
-def _resolve_gsub_replacement(match: re.Match[str], repl: Any, vm: Any) -> str:  # noqa: ANN401
+def _resolve_gsub_replacement(
+    match: re.Match[str], compiled: _CompiledLuaPattern, repl: Any, vm: Any
+) -> str:  # noqa: ANN401
     if isinstance(repl, str):
         return _expand_replacement(repl, match)
     if isinstance(repl, LuaTable):
-        groups = match.groups()
-        key = groups[0] if groups else match.group(0)
+        captures = _extract_lua_captures(match, compiled)
+        key = captures[0] if captures else match.group(0)
         value = repl.raw_get(key)
         if value is None:
             return match.group(0)
         return _match_replacement_value(value)
-    values = vm.call_callable(repl, _collect_match_groups(match))
+    values = vm.call_callable(repl, _collect_match_groups(match, compiled))
     if not values:
         return match.group(0)
     replacement = values[0]
@@ -259,6 +388,429 @@ def _resolve_gsub_replacement(match: re.Match[str], repl: Any, vm: Any) -> str: 
 
 _RANDOM_GENERATOR = random.Random()
 IO_STREAM_MARKER = "__lua_io_stream__"
+_FILE_OBJECT_KEY = object()
+_STREAM_KIND_KEY = object()
+_DEFAULT_INPUT_STREAM: LuaTable | None = None
+_DEFAULT_OUTPUT_STREAM: LuaTable | None = None
+
+
+def _ensure_stream(value: Any) -> LuaTable:
+    table = _ensure_table(value)
+    if not table.raw_get(IO_STREAM_MARKER):
+        raise RuntimeError("expected file")
+    return table
+
+
+def _stream_file_object(stream: LuaTable):
+    return stream.raw_get(_FILE_OBJECT_KEY)
+
+
+def _stream_kind(stream: LuaTable) -> str:
+    kind = stream.raw_get(_STREAM_KIND_KEY)
+    return str(kind) if kind else "file"
+
+
+def _stream_is_closed(stream: LuaTable) -> bool:
+    return _stream_kind(stream) == "closed"
+
+
+def _mark_stream(stream: LuaTable, *, file_obj, kind: str) -> None:
+    stream.raw_set(_FILE_OBJECT_KEY, file_obj)
+    stream.raw_set(_STREAM_KIND_KEY, kind)
+
+
+def _stream_close(stream: LuaTable) -> bool:
+    kind = _stream_kind(stream)
+    if kind in {"stdout", "stderr"}:
+        return True
+    file_obj = _stream_file_object(stream)
+    if file_obj is not None:
+        try:
+            file_obj.close()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    _mark_stream(stream, file_obj=None, kind="closed")
+    return True
+
+
+def _stream_flush(stream: LuaTable) -> bool:
+    file_obj = _stream_file_object(stream)
+    if file_obj is not None:
+        try:
+            file_obj.flush()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return True
+    return _stream_kind(stream) in {"stdout", "stderr"}
+
+
+def _translate_file_mode(mode: str | None) -> str:
+    if not mode:
+        return "r"
+    cleaned = mode.replace("t", "")
+    if "b" in cleaned:
+        raise RuntimeError("binary file mode is not supported")
+    allowed = {"r", "w", "a", "r+", "w+", "a+"}
+    if cleaned not in allowed:
+        raise RuntimeError("invalid file mode")
+    return cleaned
+
+
+def _open_file(filename: str, mode: str) -> Any:
+    path = pathlib.Path(filename)
+    translated = _translate_file_mode(mode)
+    encoding = "utf-8"
+    return path.open(translated, encoding=encoding)
+
+
+def _create_stream_from_file(file_obj, *, kind: str = "file") -> LuaTable:
+    stream = LuaTable()
+    stream.raw_set(IO_STREAM_MARKER, True)
+    _mark_stream(stream, file_obj=file_obj, kind=kind)
+    return stream
+
+
+def _write_to_stream(stream: LuaTable, text: str, vm: Any) -> None:  # noqa: ANN401
+    file_obj = _stream_file_object(stream)
+    if file_obj is None:
+        if text:
+            vm.output.append(text)
+        return
+    file_obj.write(text)
+
+
+def _parse_read_modes(args: Sequence[Any]) -> list[Any]:
+    if args and isinstance(args[0], LuaTable) and args[0].raw_get(IO_STREAM_MARKER):
+        args = args[1:]
+    if not args:
+        return ["*l"]
+    modes: list[Any] = []
+    for value in args:
+        if value is None:
+            modes.append("*l")
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            modes.append(int(value))
+        elif isinstance(value, str):
+            modes.append(value)
+        else:
+            modes.append(int(_ensure_number(value)))
+    return modes
+
+
+_NUMBER_PATTERN = re.compile(r"^[\s\u00a0]*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
+
+
+def _read_number(file_obj):
+    start = file_obj.tell()
+    data = file_obj.read()
+    if not data:
+        file_obj.seek(start)
+        return None
+    match = _NUMBER_PATTERN.match(data)
+    if not match:
+        file_obj.seek(start)
+        return None
+    text = match.group(1)
+    file_obj.seek(start + match.end())
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _read_mode(file_obj, mode) -> Any:
+    if isinstance(mode, int):
+        if mode <= 0:
+            return ""
+        data = file_obj.read(mode)
+        return data if data != "" else None
+    if mode == "*a":
+        data = file_obj.read()
+        return data if data != "" else ""
+    if mode == "*l":
+        line = file_obj.readline()
+        if line == "":
+            return None
+        return line.rstrip("\r\n")
+    if mode == "*L":
+        line = file_obj.readline()
+        if line == "":
+            return None
+        return line
+    if mode == "*n":
+        return _read_number(file_obj)
+    raise RuntimeError("unsupported read mode")
+
+
+def _stream_read(stream: LuaTable, modes: Sequence[Any]) -> list[Any]:
+    if _stream_is_closed(stream):
+        raise RuntimeError("attempt to use a closed file")
+    file_obj = _stream_file_object(stream)
+    if file_obj is None:
+        raise RuntimeError("file is not readable")
+    results: list[Any] = []
+    for mode in modes:
+        value = _read_mode(file_obj, mode)
+        if value is None:
+            if not results:
+                return [None]
+            break
+        results.append(value)
+    return results
+
+
+def _stream_seek(stream: LuaTable, whence: str | None, offset: Any | None) -> int:
+    if _stream_is_closed(stream):
+        raise RuntimeError("attempt to use a closed file")
+    file_obj = _stream_file_object(stream)
+    if file_obj is None:
+        raise RuntimeError("file is not seekable")
+    whence_map = {"set": 0, "cur": 1, "end": 2}
+    mode = 0
+    if whence is not None:
+        key = str(whence)
+        if key not in whence_map:
+            raise RuntimeError("invalid seek mode")
+        mode = whence_map[key]
+    offset_value = int(_ensure_number(offset)) if offset is not None else 0
+    file_obj.seek(offset_value, mode)
+    return file_obj.tell() + 1
+
+
+def _stream_lines_callable(
+    stream: LuaTable,
+    *,
+    close_after: bool,
+    modes: Sequence[Any] | None = None,
+) -> BuiltinFunction:
+    state = {"closed": False}
+    parsed_modes = _parse_read_modes(modes) if modes is not None else None
+
+    def _iterator(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+        if state["closed"] or _stream_is_closed(stream):
+            return LuaMultiReturn([])
+        file_obj = _stream_file_object(stream)
+        if file_obj is None:
+            state["closed"] = True
+            return LuaMultiReturn([])
+        if parsed_modes is None:
+            line = file_obj.readline()
+            if line == "":
+                if close_after:
+                    _stream_close(stream)
+                state["closed"] = True
+                return LuaMultiReturn([])
+            return LuaMultiReturn([line.rstrip("\r\n")])
+        values = _stream_read(stream, parsed_modes)
+        if values and values[0] is None:
+            if close_after:
+                _stream_close(stream)
+            state["closed"] = True
+            return LuaMultiReturn([])
+        return LuaMultiReturn(values)
+
+    return BuiltinFunction("io.lines.iterator", _iterator)
+
+
+def _file_read_callable(stream: LuaTable):
+    def _read(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+        params = args
+        if params and params[0] is stream:
+            params = params[1:]
+        modes = _parse_read_modes(params)
+        values = _stream_read(stream, modes)
+        return LuaMultiReturn(values)
+
+    return _read
+
+
+def _file_write_callable(stream: LuaTable):
+    def _write(args: Sequence[Any], vm: Any):  # noqa: ANN401
+        values = args
+        if values and values[0] is stream:
+            values = values[1:]
+        text = "".join(_lua_tostring(value) for value in values)
+        _write_to_stream(stream, text, vm)
+        return stream
+
+    return _write
+
+
+def _file_flush_callable(stream: LuaTable):
+    def _flush(args: Sequence[Any], vm: Any):  # noqa: ANN401
+        if args and args[0] is stream:
+            args = args[1:]
+        _stream_flush(stream)
+        return stream
+
+    return _flush
+
+
+def _file_close_callable(stream: LuaTable):
+    def _close(args: Sequence[Any], vm: Any):  # noqa: ANN401
+        if args and args[0] is stream:
+            args = args[1:]
+        _stream_close(stream)
+        return True
+
+    return _close
+
+
+def _file_seek_callable(stream: LuaTable):
+    def _seek(args: Sequence[Any], vm: Any):  # noqa: ANN401
+        params = args
+        if params and params[0] is stream:
+            params = params[1:]
+        whence = params[0] if params else None
+        offset = params[1] if len(params) >= 2 else None
+        return _stream_seek(stream, whence if whence is not None else "cur", offset)
+
+    return _seek
+
+
+def _prepare_file_stream(stream: LuaTable) -> LuaTable:
+    stream.raw_set("read", BuiltinFunction("file.read", _file_read_callable(stream)))
+    stream.raw_set("write", BuiltinFunction("file.write", _file_write_callable(stream)))
+    stream.raw_set("flush", BuiltinFunction("file.flush", _file_flush_callable(stream)))
+    stream.raw_set("close", BuiltinFunction("file.close", _file_close_callable(stream)))
+    stream.raw_set("seek", BuiltinFunction("file.seek", _file_seek_callable(stream)))
+    stream.raw_set(
+        "lines",
+        BuiltinFunction(
+            "file.lines",
+            lambda args, vm: _stream_lines_callable(
+                stream,
+                close_after=False,
+                modes=_parse_read_modes(args[1:] if args and args[0] is stream else args),
+            ),
+        ),
+    )
+    return stream
+
+
+def _io_open(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 2)
+    filename = _ensure_string(args[0])
+    mode = _ensure_string(args[1]) if len(args) >= 2 and args[1] is not None else "r"
+    file_obj = _open_file(filename, mode)
+    stream = _prepare_file_stream(_create_stream_from_file(file_obj))
+    return stream
+
+
+def _io_close(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    global _DEFAULT_OUTPUT_STREAM
+    if args:
+        stream = _ensure_stream(args[0])
+    else:
+        if _DEFAULT_OUTPUT_STREAM is None:
+            return True
+        stream = _DEFAULT_OUTPUT_STREAM
+    result = _stream_close(stream)
+    return result
+
+
+def _io_flush(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    global _DEFAULT_OUTPUT_STREAM
+    if args and args[0] is not None:
+        stream = _ensure_stream(args[0])
+    else:
+        if _DEFAULT_OUTPUT_STREAM is None:
+            return True
+        stream = _DEFAULT_OUTPUT_STREAM
+    _stream_flush(stream)
+    return stream
+
+
+def _io_type(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    value = args[0]
+    if isinstance(value, LuaTable) and value.raw_get(IO_STREAM_MARKER):
+        stream = _ensure_stream(value)
+        if _stream_is_closed(stream):
+            return "closed file"
+        return "file"
+    return None
+
+
+def _io_read(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    global _DEFAULT_INPUT_STREAM
+    stream = None
+    values = args
+    if values and isinstance(values[0], LuaTable) and values[0].raw_get(IO_STREAM_MARKER):
+        stream = _ensure_stream(values[0])
+        values = values[1:]
+    if stream is None:
+        if _DEFAULT_INPUT_STREAM is None:
+            raise RuntimeError("no default input stream")
+        stream = _DEFAULT_INPUT_STREAM
+    modes = _parse_read_modes(values)
+    results = _stream_read(stream, modes)
+    return LuaMultiReturn(results)
+
+
+def _io_input(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    global _DEFAULT_INPUT_STREAM
+    if not args or args[0] is None:
+        if _DEFAULT_INPUT_STREAM is None:
+            raise RuntimeError("no default input stream")
+        return _DEFAULT_INPUT_STREAM
+    target = args[0]
+    if isinstance(target, str):
+        stream = _prepare_file_stream(_create_stream_from_file(_open_file(target, "r")))
+    else:
+        stream = _ensure_stream(target)
+    _DEFAULT_INPUT_STREAM = stream
+    return stream
+
+
+def _io_output(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    global _DEFAULT_OUTPUT_STREAM
+    if not args or args[0] is None:
+        if _DEFAULT_OUTPUT_STREAM is None:
+            raise RuntimeError("no default output stream")
+        return _DEFAULT_OUTPUT_STREAM
+    target = args[0]
+    if isinstance(target, str):
+        stream = _prepare_file_stream(_create_stream_from_file(_open_file(target, "w")))
+    else:
+        stream = _ensure_stream(target)
+    _DEFAULT_OUTPUT_STREAM = stream
+    return stream
+
+
+def _io_lines(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    global _DEFAULT_INPUT_STREAM
+    if not args:
+        if _DEFAULT_INPUT_STREAM is None:
+            raise RuntimeError("no default input stream")
+        return _stream_lines_callable(_DEFAULT_INPUT_STREAM, close_after=False, modes=None)
+    target = args[0]
+    modes = _parse_read_modes(args[1:]) if len(args) > 1 else None
+    if isinstance(target, str):
+        stream = _prepare_file_stream(_create_stream_from_file(_open_file(target, "r")))
+        return _stream_lines_callable(stream, close_after=True, modes=modes)
+    stream = _ensure_stream(target)
+    return _stream_lines_callable(stream, close_after=False, modes=modes)
+
+
+def _collect_debug_frames(thread: LuaCoroutine | None, vm: Any) -> list:  # noqa: ANN401
+    if thread is None:
+        return list(vm.snapshot_state().call_stack)
+    coroutine = thread
+    if coroutine.is_main:
+        return list(coroutine.base_vm.snapshot_state().call_stack)
+    coroutine_vm = coroutine.vm
+    if coroutine_vm is vm:
+        return list(vm.snapshot_state().call_stack)
+    if coroutine_vm is not None:
+        try:
+            return list(coroutine_vm.snapshot_state().call_stack)
+        except Exception:  # pragma: no cover - defensive
+            pass
+    snapshot = coroutine.base_vm.get_coroutine_snapshot(coroutine.coroutine_id)
+    if snapshot is not None:
+        return list(snapshot.call_stack)
+    return []
 
 
 def _wrap_frames(frames) -> LuaTable:
@@ -643,24 +1195,21 @@ def _string_find(args: Sequence[Any], vm: Any) -> LuaMultiReturn | None:  # noqa
     start_index = _normalize_start(len(text), init)
     if start_index > len(text):
         return None
-    segment = text[start_index:]
     if plain:
+        segment = text[start_index:]
         position = segment.find(pattern)
         if position == -1:
             return None
         start = start_index + position + 1
         end = start + len(pattern) - 1
         return LuaMultiReturn([start, end])
-    try:
-        regex = _compile_lua_pattern(pattern)
-    except RuntimeError as exc:  # pragma: no cover - defensive
-        raise RuntimeError(str(exc)) from exc
-    match = regex.search(segment)
+    compiled = _compile_lua_pattern(pattern)
+    match = _next_lua_match(compiled, text, start_index)
     if not match:
         return None
-    start = start_index + match.start() + 1
-    end = start_index + match.end()
-    captures = [group if group is not None else None for group in match.groups()]
+    start = match.start() + 1
+    end = match.end()
+    captures = [value if value is not None else None for value in _extract_lua_captures(match, compiled)]
     return LuaMultiReturn([start, end, *captures])
 
 
@@ -672,15 +1221,11 @@ def _string_match(args: Sequence[Any], vm: Any):  # noqa: ANN401
     start_index = _normalize_start(len(text), init)
     if start_index > len(text):
         return None
-    segment = text[start_index:]
-    try:
-        regex = _compile_lua_pattern(pattern)
-    except RuntimeError as exc:  # pragma: no cover - defensive
-        raise RuntimeError(str(exc)) from exc
-    match = regex.search(segment)
+    compiled = _compile_lua_pattern(pattern)
+    match = _next_lua_match(compiled, text, start_index)
     if not match:
         return None
-    captures = [group if group is not None else None for group in match.groups()]
+    captures = [value if value is not None else None for value in _extract_lua_captures(match, compiled)]
     if captures:
         if len(captures) == 1:
             return captures[0]
@@ -699,20 +1244,17 @@ def _string_gsub(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN40
         if limit_value <= 0:
             return LuaMultiReturn([text, 0])
         limit = limit_value
-    try:
-        regex = _compile_lua_pattern(pattern)
-    except RuntimeError as exc:  # pragma: no cover - defensive
-        raise RuntimeError(str(exc)) from exc
+    compiled = _compile_lua_pattern(pattern)
     result_parts: list[str] = []
     last_end = 0
     replacements = 0
     position = 0
     text_length = len(text)
     while True:
-        match = regex.search(text, position)
-        if not match:
-            break
         if limit is not None and replacements >= limit:
+            break
+        match = _next_lua_match(compiled, text, position)
+        if not match:
             break
         start, end = match.span()
         if start == end:
@@ -723,13 +1265,40 @@ def _string_gsub(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN40
             last_end = position
             continue
         result_parts.append(text[last_end:start])
-        replacement_text = _resolve_gsub_replacement(match, replacement, vm)
+        replacement_text = _resolve_gsub_replacement(match, compiled, replacement, vm)
         result_parts.append(replacement_text)
         replacements += 1
         position = end
         last_end = end
     result_parts.append(text[last_end:])
     return LuaMultiReturn(["".join(result_parts), replacements])
+
+
+def _string_gmatch(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 2, 2)
+    text = _ensure_string(args[0])
+    pattern = _ensure_string(args[1])
+    compiled = _compile_lua_pattern(pattern)
+    position = 0
+    text_length = len(text)
+
+    def _iterator(iterator_args: Sequence[Any], iterator_vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+        nonlocal position
+        match = _next_lua_match(compiled, text, position)
+        if not match:
+            position = text_length + 1
+            return LuaMultiReturn([])
+        start, end = match.span()
+        if end == start:
+            position = end + 1
+        else:
+            position = end
+        captures = [value if value is not None else None for value in _extract_lua_captures(match, compiled)]
+        if captures:
+            return LuaMultiReturn(captures)
+        return LuaMultiReturn([match.group(0)])
+
+    return BuiltinFunction("string.gmatch.iterator", _iterator)
 
 
 def _string_format(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401, unused vm
@@ -1122,39 +1691,63 @@ def _os_difftime(args: Sequence[Any], vm: Any) -> float:  # noqa: ANN401
     return float(later - earlier)
 
 
+def _os_remove(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    path = pathlib.Path(_ensure_string(args[0]))
+    try:
+        path.unlink()
+        return True
+    except IsADirectoryError:
+        path.rmdir()
+        return True
+    except FileNotFoundError:
+        return None
+
+
+def _os_rename(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 2, 2)
+    source = pathlib.Path(_ensure_string(args[0]))
+    target = pathlib.Path(_ensure_string(args[1]))
+    try:
+        source.replace(target)
+        return True
+    except FileNotFoundError:
+        return None
+
+
+def _os_getenv(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    name = _ensure_string(args[0])
+    return os.environ.get(name)
+
+
+def _os_execute(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    command = None
+    if args and args[0] is not None:
+        command = _ensure_string(args[0])
+    if not command:
+        return LuaMultiReturn([True, "exit", 0])
+    try:
+        result = subprocess.run(command, shell=True, check=False)
+        code = result.returncode
+    except Exception:  # pragma: no cover - defensive
+        return LuaMultiReturn([False, "exit", 1])
+    return LuaMultiReturn([code == 0, "exit", code])
+
+
 def _io_write_callable(default_stream: LuaTable):
     def _io_write(args: Sequence[Any], vm: Any):  # noqa: ANN401
         stream = default_stream
         values = args
         if values and isinstance(values[0], LuaTable) and values[0].raw_get(IO_STREAM_MARKER):
-            stream = values[0]
+            stream = _ensure_stream(values[0])
             values = values[1:]
         text = "".join(_lua_tostring(value) for value in values)
-        if text:
-            vm.output.append(text)
+        _write_to_stream(stream, text, vm)
         return stream
 
 
     return _io_write
-
-
-def _io_flush(args: Sequence[Any], vm: Any):  # noqa: ANN401
-    stream = args[0] if args else None
-    if isinstance(stream, LuaTable) and stream.raw_get(IO_STREAM_MARKER):
-        return stream
-    return True
-
-
-def _io_type(args: Sequence[Any], vm: Any):  # noqa: ANN401
-    _ensure_args(args, 1, 1)
-    value = args[0]
-    if isinstance(value, LuaTable) and value.raw_get(IO_STREAM_MARKER):
-        return "file"
-    return None
-
-
-def _io_read_disabled(args: Sequence[Any], vm: Any):  # noqa: ANN401
-    raise RuntimeError("io.read is not available in this environment")
 
 
 def _debug_traceback(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
@@ -1171,26 +1764,7 @@ def _debug_traceback(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     if arg_index < len(args) and args[arg_index] is not None:
         level = int(_ensure_number(args[arg_index]))
 
-    frames: list = []
-    if thread is None:
-        frames = list(vm.snapshot_state().call_stack)
-    else:
-        coroutine = thread
-        if coroutine.is_main:
-            frames = list(coroutine.base_vm.snapshot_state().call_stack)
-        else:
-            coroutine_vm = coroutine.vm
-            if coroutine_vm is vm:
-                frames = list(vm.snapshot_state().call_stack)
-            elif coroutine_vm is not None:
-                try:
-                    frames = list(coroutine_vm.snapshot_state().call_stack)
-                except Exception:  # pragma: no cover - defensive
-                    frames = []
-            if not frames:
-                snapshot = coroutine.base_vm.get_coroutine_snapshot(coroutine.coroutine_id)
-                if snapshot is not None:
-                    frames = list(snapshot.call_stack)
+    frames = _collect_debug_frames(thread, vm)
     skip = max(level - 1, 0)
     if skip:
         frames = frames[skip:]
@@ -1200,7 +1774,101 @@ def _debug_traceback(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     return trace
 
 
+def _populate_info_from_frame(info: LuaTable, frame, what: str) -> None:
+    if "S" in what:
+        source = frame.file or "?"
+        if source != "<unknown>" and not source.startswith("@"):  # match Lua-style prefix
+            info.raw_set("source", f"@{source}")
+        else:
+            info.raw_set("source", source)
+        short_src = source[1:] if source.startswith("@") else source
+        info.raw_set("short_src", pathlib.Path(short_src).name if short_src else short_src)
+        info.raw_set("what", "Lua")
+        info.raw_set("linedefined", frame.line)
+        info.raw_set("lastlinedefined", frame.line)
+    if "l" in what:
+        info.raw_set("currentline", frame.line)
+    if "n" in what:
+        name = frame.function_name or ""
+        info.raw_set("name", name)
+        info.raw_set("namewhat", "")
+    if "u" in what:
+        info.raw_set("nups", 0)
+        info.raw_set("nparams", 0)
+        info.raw_set("isvararg", False)
+
+
+def _debug_getinfo(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    arg_index = 0
+    thread: LuaCoroutine | None = None
+    if args and isinstance(args[0], LuaCoroutine):
+        thread = _ensure_coroutine(args[0], allow_main=True)
+        arg_index = 1
+    if arg_index >= len(args):
+        raise RuntimeError("debug.getinfo expects function or level")
+    target = args[arg_index]
+    arg_index += 1
+    what = "nSluf"
+    if arg_index < len(args) and args[arg_index] is not None:
+        what = _ensure_string(args[arg_index])
+
+    info = LuaTable()
+    if isinstance(target, (int, float)) and not isinstance(target, bool):
+        level = int(target)
+        if level < 0:
+            raise RuntimeError("level out of range")
+        frames = _collect_debug_frames(thread, vm)
+        if level >= len(frames):
+            return None
+        frame = frames[level]
+        _populate_info_from_frame(info, frame, what)
+        if "f" in what:
+            info.raw_set("func", None)
+        return info
+
+    if isinstance(target, dict) and "label" in target:
+        info.raw_set("what", "Lua")
+        name = target.get("debug_name", target.get("label", "?"))
+        info.raw_set("source", name)
+        info.raw_set("short_src", name)
+        info.raw_set("linedefined", 0)
+        info.raw_set("lastlinedefined", 0)
+        if "n" in what:
+            info.raw_set("name", name)
+            info.raw_set("namewhat", "")
+        if "l" in what:
+            info.raw_set("currentline", 0)
+        if "u" in what:
+            info.raw_set("nups", len(target.get("upvalues", [])))
+            info.raw_set("nparams", 0)
+            info.raw_set("isvararg", False)
+        if "f" in what:
+            info.raw_set("func", target)
+        return info
+
+    if getattr(target, "__lua_builtin__", False) or callable(target):
+        info.raw_set("what", "C")
+        if "n" in what:
+            info.raw_set("name", getattr(target, "__name__", ""))
+            info.raw_set("namewhat", "")
+        if "S" in what:
+            info.raw_set("source", "=[C]")
+            info.raw_set("short_src", "[C]")
+            info.raw_set("linedefined", 0)
+            info.raw_set("lastlinedefined", 0)
+        if "l" in what:
+            info.raw_set("currentline", -1)
+        if "u" in what:
+            info.raw_set("nups", 0)
+            info.raw_set("nparams", 0)
+            info.raw_set("isvararg", False)
+        if "f" in what:
+            info.raw_set("func", target)
+        return info
+
+    raise RuntimeError("invalid option to debug.getinfo")
 def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
+    global _DEFAULT_OUTPUT_STREAM, _DEFAULT_INPUT_STREAM
     env.register("print", BuiltinFunction("print", _lua_print, "Write values to the VM output buffer."))
 
     type_builtin = BuiltinFunction("type", _lua_type, "Return the type of a Lua value.")
@@ -1234,30 +1902,36 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "time": BuiltinFunction("os.time", _os_time),
         "date": BuiltinFunction("os.date", _os_date),
         "difftime": BuiltinFunction("os.difftime", _os_difftime),
+        "remove": BuiltinFunction("os.remove", _os_remove),
+        "rename": BuiltinFunction("os.rename", _os_rename),
+        "getenv": BuiltinFunction("os.getenv", _os_getenv),
+        "execute": BuiltinFunction("os.execute", _os_execute),
     }
 
-    stdout_stream = LuaTable()
-    stdout_stream.raw_set(IO_STREAM_MARKER, True)
-    stderr_stream = LuaTable()
-    stderr_stream.raw_set(IO_STREAM_MARKER, True)
+    stdout_stream = _prepare_file_stream(_create_stream_from_file(None, kind="stdout"))
+    stderr_stream = _prepare_file_stream(_create_stream_from_file(None, kind="stderr"))
     stdout_write_callable = _io_write_callable(stdout_stream)
     stderr_write_callable = _io_write_callable(stderr_stream)
-    io_write_builtin = BuiltinFunction("io.write", stdout_write_callable)
     stdout_stream.raw_set("write", BuiltinFunction("io.stdout.write", stdout_write_callable))
-    stdout_stream.raw_set("flush", BuiltinFunction("io.stdout.flush", _io_flush))
     stderr_stream.raw_set("write", BuiltinFunction("io.stderr.write", stderr_write_callable))
-    stderr_stream.raw_set("flush", BuiltinFunction("io.stderr.flush", _io_flush))
     io_members = {
-        "write": io_write_builtin,
+        "write": BuiltinFunction("io.write", stdout_write_callable),
         "flush": BuiltinFunction("io.flush", _io_flush),
         "type": BuiltinFunction("io.type", _io_type),
-        "read": BuiltinFunction("io.read", _io_read_disabled),
+        "read": BuiltinFunction("io.read", _io_read),
+        "open": BuiltinFunction("io.open", _io_open),
+        "close": BuiltinFunction("io.close", _io_close),
+        "input": BuiltinFunction("io.input", _io_input),
+        "output": BuiltinFunction("io.output", _io_output),
+        "lines": BuiltinFunction("io.lines", _io_lines),
         "stdout": stdout_stream,
         "stderr": stderr_stream,
     }
+    _DEFAULT_OUTPUT_STREAM = stdout_stream
 
     debug_members = {
         "traceback": BuiltinFunction("debug.traceback", _debug_traceback),
+        "getinfo": BuiltinFunction("debug.getinfo", _debug_getinfo),
     }
 
 
@@ -1305,6 +1979,7 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "find": BuiltinFunction("string.find", _string_find),
         "match": BuiltinFunction("string.match", _string_match),
         "gsub": BuiltinFunction("string.gsub", _string_gsub),
+        "gmatch": BuiltinFunction("string.gmatch", _string_gmatch),
         "format": BuiltinFunction("string.format", _string_format),
     }
     env.register_library("string", string_members)
