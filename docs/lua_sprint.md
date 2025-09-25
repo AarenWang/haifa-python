@@ -110,6 +110,39 @@
 - [ ] 词法/解析：更新词法分析器关键字、操作符优先级表，并保证与现有语义保持向后兼容。
 - [ ] 测试/文档：补充相应单元与集成测试，在指南中说明完整的语言特性支持矩阵。
 
+### Milestone 12：协程 API 完备与兼容性
+- 目标
+  - 完成 Lua 协程库 API，定义与实现可 yield 边界与错误信息，使之与 Lua 语义兼容或明确差异。
+  - 强化可视化与事件，补齐调试工具对协程的可观测性。
+- 范围
+  - API 完备
+    - `coroutine.status(thread)`：返回 `"running" | "suspended" | "dead"`。
+    - `coroutine.wrap(f)`：返回一个函数，调用即 `resume`；报错时抛出 Lua 风格异常；多返回值直传。
+    - `coroutine.running()`：返回当前线程与是否为主线程标记（`thread, isMain`）。
+    - `coroutine.isyieldable()`：在可 yield 的上下文返回 `true`，否则 `false`。
+  - 语义与边界
+    - 明确定义“可 yield 边界”：是否允许跨 `pcall`/`xpcall`、元方法、内建（C）函数边界 `yield`；不允许时给出一致错误信息（例如 `attempt to yield across a C-call boundary`）。
+    - 保持/巩固现有约束：不能恢复运行中的协程、不能恢复已结束的协程；`resume` 返回 `(ok, ...)` 约定。
+  - 错误与回溯
+    - `debug.traceback(thread?)`：允许传入目标协程，返回该协程的栈回溯；错误消息前缀与源位置信息对齐。
+    - `resume` 失败信息与 `traceback` 风格一致（含文件名、行号）。
+  - 事件与可视化
+    - 在事件/快照中补充字段：`is_main`、`yieldable`、`status`；可视化器显示 `coroutine.status`、最近错误。
+    - 时间线为 `resume`/`yield`/`complete` 区分颜色与状态标签；选中协程时展示 `last_resume_args`/`last_yield`。
+  - 文档与示例
+    - 更新 `docs/lua_guide.md` 协程章节，新增 `wrap`/`status`/`running`/`isyieldable` 用法与差异说明。
+    - 新增 `examples/coroutine_wrap_status.lua` 展示 `wrap` 多返回值与错误传播。
+- 测试与验收
+  - 单元测试：`status`/`running`/`isyieldable` 基本行为；`wrap` 的成功/错误传播；`wrap` 的多返回值直传。
+  - 语义测试：在 `pcall`/`xpcall`/内建边界内 `yield` 的行为与错误信息一致性。
+  - 可视化器快照包含并显示新字段；CLI trace 过滤 `coroutine` 保持可读。
+  - 全量测试通过；新增示例运行输出与预期一致。
+- 完成标准
+  - 新增 API 可用并在 stdlib 注册，具备完整测试覆盖。
+  - `debug.traceback(thread)` 返回目标协程堆栈与消息。
+  - 可视化器与 CLI 能显示/过滤新字段。
+  - 文档与示例同步更新，列明与 Lua 官方差异（若有）。
+
 ## 开发原则
 - 每个里程碑保持测试通过，尽量不破坏 Core/JQ 现有行为。
 - 文档和示例与功能迭代同步更新。
