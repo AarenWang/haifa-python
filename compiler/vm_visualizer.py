@@ -1,6 +1,7 @@
 import datetime
 import json
 import sys
+import platform
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import pygame
@@ -52,13 +53,63 @@ FONT_SIZE = 18
 LINE_HEIGHT = 22
 MARGIN = 20
 
+
+def _get_chinese_font(size: int) -> pygame.font.Font:
+    """Get a font that supports Chinese characters."""
+    # Try different font options based on platform
+    font_candidates = []
+    
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        font_candidates = [
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "STHeiti",
+            "Arial Unicode MS",
+            "SF Mono",
+            "Menlo",
+        ]
+    elif system == "Windows":
+        font_candidates = [
+            "Microsoft YaHei",
+            "SimHei",
+            "SimSun",
+            "Consolas",
+            "Courier New",
+        ]
+    else:  # Linux and others
+        font_candidates = [
+            "Noto Sans CJK SC",
+            "WenQuanYi Micro Hei",
+            "DejaVu Sans Mono",
+            "Liberation Mono",
+            "Courier New",
+        ]
+    
+    # Try each font candidate
+    for font_name in font_candidates:
+        try:
+            font = pygame.font.SysFont(font_name, size)
+            # Test if the font can render Chinese characters
+            test_surface = font.render("测试", False, (0, 0, 0))
+            if test_surface.get_width() > 0:
+                return font
+        except (pygame.error, OSError):
+            continue
+    
+    # Fallback to default font
+    try:
+        return pygame.font.SysFont("monospace", size)
+    except (pygame.error, OSError):
+        return pygame.font.Font(None, size)
+
 class VMVisualizer:
     def __init__(self, vm: BytecodeVM):
         self.vm = vm
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Bytecode VM Visualizer")
-        self.font = pygame.font.SysFont("monospace", FONT_SIZE)
+        self.font = _get_chinese_font(FONT_SIZE)
         self.clock = pygame.time.Clock()
         self.running = True
         self.paused = True
@@ -86,8 +137,14 @@ class VMVisualizer:
         )
 
     def _draw_text(self, text: str, x: int, y: int, color=FONT_COLOR, background=None):
-        surface = self.font.render(text, True, color, background)
-        self.screen.blit(surface, (x, y))
+        try:
+            surface = self.font.render(text, True, color, background)
+            self.screen.blit(surface, (x, y))
+        except (pygame.error, UnicodeEncodeError):
+            # Fallback: try to render without problematic characters
+            safe_text = text.encode('ascii', 'replace').decode('ascii')
+            surface = self.font.render(safe_text, True, color, background)
+            self.screen.blit(surface, (x, y))
 
     def _ensure_vm_environment(
         self, vm: BytecodeVM

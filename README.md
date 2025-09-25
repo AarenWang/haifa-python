@@ -126,8 +126,26 @@ vm = BytecodeVM(bytecode)
 VMVisualizer(vm).run()
 ```
 
-> 提示：GUI 可视化器会展示协程列表、事件时间线与参数详情；示例脚本可参考 `examples/coroutines.lua`，更多说明见 `docs/guide.md` 第 6 节。
-  在 GUI 内使用 `SPACE` 单步或 `p`/`q` 控制，以查看 `CALL max2` 时调用栈的变化。支持 `/` 搜索指令、寄存器变更高亮，以及 `L` 导出执行轨迹（JSONL）。
+### 可视化调试器
+
+项目提供两种可视化模式，均支持中文显示：
+
+**GUI 模式（需要安装 `pip install ".[gui]"`）：**
+```bash
+pylua --visualize gui examples/chinese_test.lua
+```
+- 支持中文字符显示，自动检测系统字体
+- 协程列表、事件时间线与参数详情
+- `SPACE` 单步执行，`P` 自动运行/暂停，`Q` 退出
+- `/` 搜索指令，寄存器变更高亮
+- `L` 导出执行轨迹（JSONL）
+
+**Curses 模式（无需额外依赖）：**
+```bash
+pylua --visualize curses examples/chinese_test.lua
+```
+- 终端内文本界面，原生支持中文
+- 基本的执行控制和状态显示
 
 ### jq 命令行示例 
 ```bash
@@ -217,13 +235,15 @@ pyinstaller --onefile --name pylua haifa_lua/cli.py
 ## 依赖管理
 项目使用 `pyproject.toml` 管理依赖：
 - **运行时依赖**：`pytest`（用于内置测试功能）
-- **开发依赖**：`pyinstaller`（构建独立可执行文件）
-- **构建依赖**：与开发依赖相同，便于 CI/CD 明确安装
+- **GUI 依赖**：`pygame`（GUI 可视化器，支持中文显示）
+- **开发依赖**：`pyinstaller` + `pygame`（构建工具和GUI）
+- **构建依赖**：`pyinstaller`（仅构建工具，适用于 CI/CD）
 
 开发者可按需选择依赖组合：
 ```bash
 pip install .              # 仅运行时依赖
-pip install ".[dev]"       # 包含开发工具
+pip install ".[gui]"       # 包含GUI可视化器
+pip install ".[dev]"       # 包含所有开发工具
 pip install ".[build]"     # 仅构建工具（CI/CD 使用）
 ```
 

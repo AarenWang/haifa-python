@@ -1,0 +1,76 @@
+name: Build PyInstaller Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            pyjq_name: pyjq-linux
+            pylua_name: pylua-linux
+          - os: macos-latest
+            pyjq_name: pyjq-macos
+            pylua_name: pylua-macos
+          - os: windows-latest
+            pyjq_name: pyjq-windows.exe
+            pylua_name: pylua-windows.exe
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ".[build]"
+
+    - name: Build pyjq executable
+      run: |
+        pyinstaller --onefile --name ${{ matrix.pyjq_name }} compiler/jq_cli.py
+
+    - name: Build pylua executable
+      run: |
+        pyinstaller --onefile --name ${{ matrix.pylua_name }} haifa_lua/cli.py
+
+    - name: Upload pyjq artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.pyjq_name }}
+        path: dist/${{ matrix.pyjq_name }}
+
+    - name: Upload pylua artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.pylua_name }}
+        path: dist/${{ matrix.pylua_name }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+
+    - name: Run tests
+      run: |
+        pytest

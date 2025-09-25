@@ -2,3 +2,6 @@
 **/*.jsonl
 .venv/
 benchmark/results
+build/*
+dist/*
+haifa_python.egg-info/*
