@@ -597,9 +597,12 @@ class BytecodeVM:
             with self._non_yieldable_context():
                 result = callee(*args_to_pass)
         else:
-            raise self._wrap_runtime_error(
-                RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
-            )
+            handler = self._find_metamethod(callee, "__call")
+            if handler is None or not self._is_direct_callable(handler):
+                raise self._wrap_runtime_error(
+                    RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
+                )
+            result = self.call_callable(handler, [callee, *args_to_pass])
         if isinstance(result, LuaYield):
             if self.current_coroutine is None:
                 raise self._wrap_runtime_error(RuntimeError("coroutine.yield called outside coroutine"))
@@ -677,12 +680,22 @@ class BytecodeVM:
                 LuaTable = _LuaTable
         return LuaTable
 
-    def _is_callable_value(self, value) -> bool:
+    def _is_direct_callable(self, value) -> bool:
         if isinstance(value, dict) and "label" in value:
             return True
         if getattr(value, "__lua_builtin__", False):
             return True
         return callable(value)
+
+    def _is_callable_value(self, value) -> bool:
+        if self._is_direct_callable(value):
+            return True
+        table_cls = self._resolve_lua_table()
+        if table_cls is not None and isinstance(value, table_cls):
+            handler = self._find_metamethod(value, "__call")
+            if handler is not None and self._is_direct_callable(handler):
+                return True
+        return False
 
     def _find_metamethod(self, value, name: str, *, allow_table: bool = False):
         table_cls = self._resolve_lua_table()
@@ -707,7 +720,7 @@ class BytecodeVM:
             if handler is not None:
                 if allow_table:
                     return handler
-                if self._is_callable_value(handler):
+                if self._is_direct_callable(handler):
                     return handler
                 return None
 
@@ -725,7 +738,7 @@ class BytecodeVM:
         handler = self._find_metamethod(left, name)
         if handler is None:
             handler = self._find_metamethod(right, name)
-        if handler is None or not self._is_callable_value(handler):
+        if handler is None or not self._is_direct_callable(handler):
             return False, None
         result = self.call_callable(handler, [left, right])
         value = result[0] if result else None
@@ -733,7 +746,7 @@ class BytecodeVM:
 
     def _invoke_unary_metamethod(self, operand, name: str):
         handler = self._find_metamethod(operand, name)
-        if handler is None or not self._is_callable_value(handler):
+        if handler is None or not self._is_direct_callable(handler):
             return False, None
         result = self.call_callable(handler, [operand])
         value = result[0] if result else None
@@ -743,7 +756,7 @@ class BytecodeVM:
         handler = self._find_metamethod(left, name)
         if handler is None:
             handler = self._find_metamethod(right, name)
-        if handler is None or not self._is_callable_value(handler):
+        if handler is None or not self._is_direct_callable(handler):
             return False, None
         result = self.call_callable(handler, [left, right])
         value = result[0] if result else None
@@ -754,11 +767,11 @@ class BytecodeVM:
         right_handler = self._find_metamethod(right, "__eq")
         handler = None
         if left_handler is not None and right_handler is not None:
-            if left_handler is right_handler and self._is_callable_value(left_handler):
+            if left_handler is right_handler and self._is_direct_callable(left_handler):
                 handler = left_handler
-        elif left_handler is not None and self._is_callable_value(left_handler):
+        elif left_handler is not None and self._is_direct_callable(left_handler):
             handler = left_handler
-        elif right_handler is not None and self._is_callable_value(right_handler):
+        elif right_handler is not None and self._is_direct_callable(right_handler):
             handler = right_handler
         if handler is None:
             return False, None
@@ -828,6 +841,17 @@ class BytecodeVM:
                 continue
             current.raw_set(key, value)
             return True
+
+    def _invoke_len_metamethod(self, operand):
+        table_cls = self._resolve_lua_table()
+        if table_cls is None or not isinstance(operand, table_cls):
+            return False, None
+        handler = self._find_metamethod(operand, "__len")
+        if handler is None or not self._is_direct_callable(handler):
+            return False, None
+        result = self.call_callable(handler, [operand])
+        value = result[0] if result else None
+        return True, value
 
     def _ensure_table(self, value, reg_name: object):
         table_cls = self._resolve_lua_table()
@@ -990,7 +1014,10 @@ class BytecodeVM:
                 result = func(*args_list)
                 values = self._coerce_call_result(result)
         else:
-            raise self._wrap_runtime_error(RuntimeError("expected callable"))
+            handler = self._find_metamethod(func, "__call")
+            if handler is None or not self._is_direct_callable(handler):
+                raise self._wrap_runtime_error(RuntimeError("expected callable"))
+            values = self.call_callable(handler, [func, *args_list])
         self.last_return = saved_last_return
         self.return_value = saved_return_value
         self.awaiting_resume = saved_awaiting
@@ -1155,6 +1182,10 @@ class BytecodeVM:
     def _op_LEN(self, args):
         dst, src = args
         value = self.val(src)
+        invoked, result = self._invoke_len_metamethod(value)
+        if invoked:
+            self.registers[dst] = result
+            return
         if LuaTable is not None and isinstance(value, LuaTable):
             self.registers[dst] = value.lua_len()
             return

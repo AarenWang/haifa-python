@@ -1,4 +1,5 @@
 import math
+import os
 import pathlib
 import sys
 
@@ -95,6 +96,32 @@ def test_string_library_functions():
     """
     result = run_source(src)
     assert result == ["ello", "lo World", "World", "HELLO WORLD", "hello world"]
+
+
+def test_string_pattern_balanced_and_frontier():
+    src = """
+    local text = "(abc) xyz"
+    local s = "  word"
+    local start_pos, end_pos = string.find(text, "%b()")
+    local replaced, count = string.gsub("[link] text [item]", "%b[]", "()")
+    local frontier_start, frontier_end = string.find(s, "%f[%a]%a+")
+    return start_pos, end_pos, replaced, count, frontier_start, frontier_end
+    """
+    result = run_source(src)
+    assert result == [1, 5, "() text ()", 2, 3, 6]
+
+
+def test_string_gmatch_iterator():
+    src = """
+    local iter = string.gmatch("one two three", "%a+")
+    local first = iter()
+    local second = iter()
+    local third = iter()
+    local fourth = iter()
+    return first, second, third, fourth
+    """
+    result = run_source(src)
+    assert result == ["one", "two", "three", None]
 
 
 def test_tonumber_base_conversion_and_invalid_digits():
@@ -665,6 +692,32 @@ def test_io_streams_and_debug_traceback():
     assert env["stream_type"] == "file"
 
 
+def test_io_open_read_and_lines(tmp_path: pathlib.Path):
+    env = create_default_environment()
+    filepath = tmp_path / "data.txt"
+    env.register("filepath", str(filepath))
+    script = """
+    local file = assert(io.open(filepath, "w"))
+    file:write("line1\nline2")
+    file:close()
+    local reader = assert(io.open(filepath, "r"))
+    local first, rest = reader:read("*l", "*a")
+    reader:close()
+    local iter = io.lines(filepath)
+    local total = 0
+    for line in iter do
+        total = total + 1
+    end
+    local handle = assert(io.open(filepath, "r"))
+    io.input(handle)
+    local direct = io.read("*l")
+    handle:close()
+    return first, rest, total, direct
+    """
+    result = run_source(script, env)
+    assert result == ["line1", "line2", 2, "line1"]
+
+
 def test_debug_traceback_returns_message_and_stack():
     src = """
     local function inner()
@@ -710,4 +763,40 @@ def test_debug_traceback_supports_coroutines():
     assert "stack traceback" in suspended_trace
     assert ok2 is False
     assert err.startswith("<string>:")
+
+
+def test_debug_getinfo_reports_function_metadata():
+    src = """
+    local function sample()
+        local info = debug.getinfo(1, "Sl")
+        return info.what, info.currentline > 0
+    end
+    local kind, has_line = sample()
+    local func_info = debug.getinfo(sample)
+    return kind, has_line, func_info.what
+    """
+    result = run_source(src)
+    assert result == ["Lua", True, "Lua"]
+
+
+def test_os_remove_rename_execute(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    env = create_default_environment()
+    source = tmp_path / "src.txt"
+    target = tmp_path / "renamed.txt"
+    env.register("source_path", str(source))
+    env.register("target_path", str(target))
+    env.register("env_var_name", "HAIFA_TEST_ENV")
+    monkeypatch.setenv("HAIFA_TEST_ENV", "value")
+    script = """
+    local file = assert(io.open(source_path, "w"))
+    file:write("data")
+    file:close()
+    local renamed = os.rename(source_path, target_path)
+    local ok, kind, code = os.execute("true")
+    local env_value = os.getenv(env_var_name)
+    local removed = os.remove(target_path)
+    return renamed, ok, kind, code, env_value, removed
+    """
+    result = run_source(script, env)
+    assert result == [True, True, "exit", 0.0, "value", True]
 
