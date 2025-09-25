@@ -9,7 +9,6 @@ import sys
 import time
 import subprocess
 import json
-import psutil
 import statistics
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -141,9 +140,9 @@ class LuaBenchmarkRunner:
         """运行完整的基准测试套件"""
         # 原始脚本用于官方Lua，haifa兼容脚本用于haifa_lua
         test_scripts = [
-            ("arithmetic_bench.lua", "arithmetic_haifa.lua"),
-            ("function_bench.lua", "function_haifa.lua"), 
-            ("control_bench.lua", "control_haifa.lua")
+            "arithmetic_bench.lua",
+            "function_bench.lua",
+            "control_bench.lua"
         ]
         
         results = {
@@ -160,17 +159,11 @@ class LuaBenchmarkRunner:
             "tests": {}
         }
         
-        for script_pair in test_scripts:
-            if isinstance(script_pair, tuple):
-                lua_script, haifa_script = script_pair
-            else:
-                # 向后兼容单个脚本
-                lua_script = haifa_script = script_pair
-            
-            lua_script_path = self.scripts_dir / lua_script
-            haifa_script_path = self.scripts_dir / haifa_script
-            
-            print(f"\nRunning {lua_script} vs {haifa_script}...")
+        for script_name in test_scripts:
+            lua_script_path = self.scripts_dir / script_name
+            haifa_script_path = lua_script_path
+
+            print(f"\nRunning {script_name} on both interpreters...")
             
             # 运行多次取平均值
             lua_times = []
@@ -209,9 +202,9 @@ class LuaBenchmarkRunner:
             
             # 计算统计结果
             test_result = {
-                "script_name": f"{lua_script} vs {haifa_script}",
-                "lua_script": lua_script,
-                "haifa_script": haifa_script,
+                "script_name": script_name,
+                "lua_script": script_name,
+                "haifa_script": script_name,
                 "iterations_completed": {
                     "lua": len(lua_times),
                     "haifa": len(haifa_times)
@@ -246,7 +239,7 @@ class LuaBenchmarkRunner:
                     test_result["performance_ratio"] = haifa_avg / lua_avg
                     test_result["relative_performance"] = (lua_avg / haifa_avg) * 100
             
-            results["tests"][lua_script] = test_result
+            results["tests"][script_name] = test_result
         
         return results
     
