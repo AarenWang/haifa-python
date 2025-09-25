@@ -26,6 +26,7 @@ class LuaRuntimeError(VMRuntimeError):
         super().__init__(message, frames)
         top = frames[0] if frames else None
         self.lua_message = format_lua_error(message, top)
+        self.traceback = format_traceback(frames) if frames else ""
 
     def __str__(self) -> str:
         return self.lua_message
