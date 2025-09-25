@@ -43,22 +43,32 @@ class LuaCoroutine:
         "coroutine_id",
         "debug_name",
         "last_resume_args",
+        "is_main",
     )
 
-    def __init__(self, closure: dict, base_vm: BytecodeVM) -> None:
-        if not isinstance(closure, dict) or "label" not in closure:
-            raise CoroutineError("coroutine.create expects a function or closure")
+    def __init__(self, closure: dict | None, base_vm: BytecodeVM, *, is_main: bool = False) -> None:
+        self.is_main = is_main
+        if not is_main:
+            if not isinstance(closure, dict) or "label" not in closure:
+                raise CoroutineError("coroutine.create expects a function or closure")
+        else:
+            if closure is None:
+                closure = {"label": "<main>", "debug_name": "<main>"}
+        assert closure is not None
         self.closure = closure
         self.base_vm = base_vm
         self.instructions = base_vm.instructions
         self.env: LuaEnvironment | None = getattr(base_vm, "lua_env", None)
-        self.vm: BytecodeVM | None = None
-        self.status = "suspended"
-        self.started = False
+        self.vm: BytecodeVM | None = base_vm if is_main else None
+        self.status = "running" if is_main else "suspended"
+        self.started = is_main
         self.awaiting_resume = False
         self.last_yield: List[object] = []
         self.last_error: str | None = None
-        self.coroutine_id = base_vm.allocate_coroutine_id()
+        if is_main:
+            self.coroutine_id = 0
+        else:
+            self.coroutine_id = base_vm.allocate_coroutine_id()
         self.debug_name = closure.get("debug_name") or closure.get("label")
         self.last_resume_args: List[object] = []
         base_vm.set_coroutine_snapshot(
@@ -66,17 +76,22 @@ class LuaCoroutine:
             status=self.status,
             last_yield=self.last_yield,
             last_error=self.last_error,
+            is_main=self.is_main,
+            yieldable=False,
         )
-        parent_id = getattr(base_vm.current_coroutine, "coroutine_id", None)
-        base_vm.emit_event(
-            CoroutineCreated(
-                coroutine_id=self.coroutine_id,
-                parent_id=parent_id,
-                function_name=self.debug_name,
-                args=(),
-                timestamp=time.time(),
+        if is_main:
+            setattr(base_vm, "main_coroutine", self)
+        if not is_main:
+            parent_id = getattr(base_vm.current_coroutine, "coroutine_id", None)
+            base_vm.emit_event(
+                CoroutineCreated(
+                    coroutine_id=self.coroutine_id,
+                    parent_id=parent_id,
+                    function_name=self.debug_name,
+                    args=(),
+                    timestamp=time.time(),
+                )
             )
-        )
 
     # ------------------------------------------------------------------ helpers
     def _ensure_vm(self) -> BytecodeVM:
@@ -115,6 +130,8 @@ class LuaCoroutine:
     def _set_yield(self, values: Iterable[object]) -> None:
         self.last_yield = list(values)
         self.awaiting_resume = True
+        if self.vm:
+            self.vm.current_coroutine = None
         self._update_snapshot()
 
     def _set_result(self, values: Iterable[object]) -> None:
@@ -129,6 +146,7 @@ class LuaCoroutine:
         upvalues = None
         call_stack = None
         current_pc = None
+        yieldable = False
         if self.vm is not None:
             try:
                 vm_snapshot = self.vm.snapshot_state()
@@ -141,6 +159,7 @@ class LuaCoroutine:
                 call_stack = vm_snapshot.call_stack
                 current_pc = vm_snapshot.pc
             upvalues = list(getattr(self.vm, "current_upvalues", []))
+            yieldable = bool(getattr(self.vm, "is_yieldable", False))
         else:
             upvalues = list(self.closure.get("upvalues", []))
 
@@ -149,6 +168,8 @@ class LuaCoroutine:
             status=self.status,
             last_yield=self.last_yield,
             last_error=self.last_error,
+            is_main=self.is_main,
+            yieldable=yieldable,
             function_name=self.debug_name,
             last_resume_args=self.last_resume_args,
             registers=registers,
@@ -159,6 +180,8 @@ class LuaCoroutine:
 
     # ------------------------------------------------------------------ public API
     def resume(self, args: Sequence[object]) -> ResumeResult:
+        if self.is_main:
+            return ResumeResult(False, ["cannot resume main coroutine"])
         if self.status == "dead":
             return ResumeResult(False, ["cannot resume dead coroutine"])
         if self.status == "running":
@@ -209,6 +232,7 @@ class LuaCoroutine:
 
         if vm.last_event == "yield":
             self.status = "suspended"
+            self.last_error = None
             self._update_snapshot()
             self.base_vm.emit_event(
                 CoroutineYielded(
@@ -221,6 +245,7 @@ class LuaCoroutine:
             return ResumeResult(True, list(self.last_yield))
 
         self.status = "dead"
+        self.last_error = None
         self._update_snapshot()
         self.base_vm.emit_event(
             CoroutineCompleted(

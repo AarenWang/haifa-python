@@ -57,6 +57,8 @@ class CoroutineSnapshot:
     status: str
     last_yield: List[Any]
     last_error: str | None
+    is_main: bool = False
+    yieldable: bool = False
     function_name: Optional[str] = None
     last_resume_args: List[Any] = field(default_factory=list)
     registers: Optional[Mapping[str, Any]] = None
