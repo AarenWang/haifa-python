@@ -315,15 +315,24 @@ class LuaParser:
         return expr
 
     def _parse_comparison(self) -> Expr:
-        expr = self._parse_term()
+        expr = self._parse_concat()
         while True:
             token = self._current()
             if token.kind == "OP" and token.value in {"==", "~=", "<", ">", "<=", ">="}:
                 op_tok = self._advance()
-                right = self._parse_term()
+                right = self._parse_concat()
                 expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
             else:
                 break
+        return expr
+
+    def _parse_concat(self) -> Expr:
+        expr = self._parse_term()
+        token = self._current()
+        if token.kind == "OP" and token.value == "..":
+            op_tok = self._advance()
+            right = self._parse_concat()
+            expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
         return expr
 
     def _parse_term(self) -> Expr:
