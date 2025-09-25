@@ -15,7 +15,7 @@ from compiler.vm_events import (
     CoroutineYielded,
 )
 
-from haifa_lua import BuiltinFunction, create_default_environment, run_source
+from haifa_lua import BuiltinFunction, LuaTable, create_default_environment, run_source
 from haifa_lua.debug import LuaRuntimeError
 from haifa_lua.runtime import compile_source
 
@@ -31,9 +31,105 @@ def test_math_and_string_builtins():
     assert result == [5.0, 5]
 
 
+def test_type_number_and_string_helpers():
+    src = """
+    local tbl = {}
+    local function fn() end
+    local co = coroutine.create(function() end)
+    local none = tonumber(nil)
+    local invalid = tonumber("oops")
+    return type(nil), type(true), type(3.5), type("hi"), type(tbl), type(fn), type(co),
+        tostring(nil), tostring(true), tostring(12), tostring(12.5),
+        tonumber("10"), tonumber("3.5"), tonumber("10", 16), none, invalid
+    """
+    result = run_source(src)
+    assert result == [
+        "nil",
+        "boolean",
+        "number",
+        "string",
+        "table",
+        "function",
+        "thread",
+        "nil",
+        "true",
+        "12",
+        "12.5",
+        10.0,
+        3.5,
+        16.0,
+        None,
+        None,
+    ]
+
+
+def test_next_pairs_and_ipairs_iteration():
+    src = """
+    local t = {10, 20, answer = 42}
+    local k1, v1 = next(t)
+    local k2, v2 = next(t, k1)
+    local k3, v3 = next(t, k2)
+    local k4, v4 = next(t, k3)
+    local count = 0
+    local sum = 0
+    for _, value in pairs(t) do
+        count = count + 1
+        sum = sum + value
+    end
+    local seq = 0
+    for i, value in ipairs({4, 5, 6}) do
+        seq = seq + i * value
+    end
+    return k1, v1, k2, v2, k3, v3, k4, v4, count, sum, seq
+    """
+    result = run_source(src)
+    assert result == [1, 10, 2, 20, "answer", 42, None, None, 3, 72, 32]
+
+
+def test_string_library_functions():
+    src = """
+    local text = "Hello World"
+    return string.sub(text, 2, 5), string.sub(text, 4), string.sub(text, -5, -1),
+        string.upper(text), string.lower(text)
+    """
+    result = run_source(src)
+    assert result == ["ello", "lo World", "World", "HELLO WORLD", "hello world"]
+
+
+def test_table_concat_and_sort():
+    src = """
+    local letters = {"a", "b", "c"}
+    local joined = table.concat(letters)
+    local sliced = table.concat(letters, "-", 2, 3)
+    local numbers = {5, 1, 3}
+    table.sort(numbers)
+    local words = {"aa", "bbbb", "c"}
+    table.sort(words, function(a, b) return #a > #b end)
+    return joined, sliced, numbers[1], numbers[2], numbers[3], words[1], words[2], words[3]
+    """
+    result = run_source(src)
+    assert result == ["abc", "b-c", 1, 3, 5, "bbbb", "aa", "c"]
+
+
+def test_error_and_assertions():
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source("error('boom')")
+    assert "boom" in str(excinfo.value)
+
+    src = """
+    local ok, msg, extra = assert(true, "ok", 5)
+    return ok, msg, extra
+    """
+    assert run_source(src) == [True, "ok", 5]
+
+    with pytest.raises(LuaRuntimeError) as excinfo2:
+        run_source("assert(false, 'fail')")
+    assert "fail" in str(excinfo2.value)
+
+
 def test_table_insert_and_remove_roundtrip():
     env = create_default_environment()
-    env.register("arr", [])
+    env.register("arr", LuaTable())
     script = """
     table.insert(arr, 1)
     table.insert(arr, 2)
@@ -42,7 +138,10 @@ def test_table_insert_and_remove_roundtrip():
     """
     result = run_source(script, env)
     assert result == [2]
-    assert env["arr"] == [1]
+    arr = env["arr"]
+    assert isinstance(arr, LuaTable)
+    assert arr.lua_len() == 1
+    assert arr.raw_get(1) == 1
 
 
 def test_environment_hot_update():

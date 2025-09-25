@@ -1,4 +1,12 @@
-from haifa_lua.ast import BreakStmt, DoStmt, IfStmt, RepeatStmt, ReturnStmt
+from haifa_lua.ast import (
+    BreakStmt,
+    DoStmt,
+    ForGenericStmt,
+    ForNumericStmt,
+    IfStmt,
+    RepeatStmt,
+    ReturnStmt,
+)
 from haifa_lua.parser import LuaParser
 
 
@@ -55,3 +63,38 @@ def test_do_block_wraps_inner_statements():
 def test_break_statement_node():
     stmt = _first_statement("break")
     assert isinstance(stmt, BreakStmt)
+
+
+def test_numeric_for_statement_with_step():
+    src = """
+    for i = 1, 5, 2 do
+        return i
+    end
+    """
+    stmt = _first_statement(src)
+    assert isinstance(stmt, ForNumericStmt)
+    assert stmt.var == "i"
+    assert stmt.step is not None
+
+
+def test_numeric_for_without_step_defaults():
+    src = """
+    for idx = 0, 3 do
+        return idx
+    end
+    """
+    stmt = _first_statement(src)
+    assert isinstance(stmt, ForNumericStmt)
+    assert stmt.step is None
+
+
+def test_generic_for_parses_iterator_list():
+    src = """
+    for k, v in iter() do
+        return k
+    end
+    """
+    stmt = _first_statement(src)
+    assert isinstance(stmt, ForGenericStmt)
+    assert stmt.names == ["k", "v"]
+    assert len(stmt.iter_exprs) == 1

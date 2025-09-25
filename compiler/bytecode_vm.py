@@ -16,6 +16,11 @@ from .vm_events import (
     VMStateSnapshot,
 )
 
+try:
+    from haifa_lua.table import LuaTable  # type: ignore
+except ImportError:  # pragma: no cover - Lua frontend may be absent in some contexts
+    LuaTable = None  # type: ignore[misc]
+
 
 class LuaYield:
     __slots__ = ("values",)
@@ -106,6 +111,11 @@ class BytecodeVM:
             Opcode.RESULT_MULTI: self._op_RESULT_MULTI,
             Opcode.RESULT_LIST: self._op_RESULT_LIST,
             Opcode.LIST_GET: self._op_LIST_GET,
+            Opcode.TABLE_NEW: self._op_TABLE_NEW,
+            Opcode.TABLE_SET: self._op_TABLE_SET,
+            Opcode.TABLE_GET: self._op_TABLE_GET,
+            Opcode.TABLE_APPEND: self._op_TABLE_APPEND,
+            Opcode.TABLE_EXTEND: self._op_TABLE_EXTEND,
             Opcode.AND_BIT: self._op_AND_BIT,
             Opcode.OR_BIT: self._op_OR_BIT,
             Opcode.XOR: self._op_XOR,
@@ -354,22 +364,22 @@ class BytecodeVM:
 
     # 逻辑运算
     def _op_EQ(self, args):
-        self.registers[args[0]] = int(self.val(args[1]) == self.val(args[2]))
+        self.registers[args[0]] = self.val(args[1]) == self.val(args[2])
 
     def _op_GT(self, args):
-        self.registers[args[0]] = int(self.val(args[1]) > self.val(args[2]))
+        self.registers[args[0]] = self.val(args[1]) > self.val(args[2])
 
     def _op_LT(self, args):
-        self.registers[args[0]] = int(self.val(args[1]) < self.val(args[2]))
+        self.registers[args[0]] = self.val(args[1]) < self.val(args[2])
 
     def _op_AND(self, args):
-        self.registers[args[0]] = int(bool(self.val(args[1])) and bool(self.val(args[2])))
+        self.registers[args[0]] = bool(self.val(args[1])) and bool(self.val(args[2]))
 
     def _op_OR(self, args):
-        self.registers[args[0]] = int(bool(self.val(args[1])) or bool(self.val(args[2])))
+        self.registers[args[0]] = bool(self.val(args[1])) or bool(self.val(args[2]))
 
     def _op_NOT(self, args):
-        self.registers[args[0]] = int(not bool(self.val(args[1])))
+        self.registers[args[0]] = not bool(self.val(args[1]))
 
     def _op_CLR(self, args):
         self.registers[args[0]] = 0
@@ -516,6 +526,58 @@ class BytecodeVM:
         else:
             self.registers[dst] = None
 
+    def _resolve_lua_table(self):
+        global LuaTable
+        if LuaTable is None:
+            try:
+                from haifa_lua.table import LuaTable as _LuaTable  # type: ignore
+            except ImportError:
+                return None
+            else:
+                LuaTable = _LuaTable
+        return LuaTable
+
+    def _ensure_table(self, value, reg_name: object):
+        table_cls = self._resolve_lua_table()
+        if table_cls is None or not isinstance(value, table_cls):
+            raise self._wrap_runtime_error(
+                RuntimeError(f"expected table in {reg_name}")
+            )
+        return value
+
+    def _op_TABLE_NEW(self, args):
+        table_cls = self._resolve_lua_table()
+        if table_cls is None:
+            raise self._wrap_runtime_error(RuntimeError("Lua table support is unavailable"))
+        dst = args[0]
+        self.registers[dst] = table_cls()
+
+    def _op_TABLE_SET(self, args):
+        table_reg, key_arg, value_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        key = self.val(key_arg)
+        value = self.val(value_arg)
+        table.raw_set(key, value)
+
+    def _op_TABLE_GET(self, args):
+        dst, table_reg, key_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        key = self.val(key_arg)
+        self.registers[dst] = table.raw_get(key)
+
+    def _op_TABLE_APPEND(self, args):
+        table_reg, value_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        value = self.val(value_arg)
+        table.append(value)
+
+    def _op_TABLE_EXTEND(self, args):
+        table_reg, values_arg = args
+        table = self._ensure_table(self.val(table_reg), table_reg)
+        values = self._coerce_call_result(self.val(values_arg))
+        if values:
+            table.extend(values)
+
     def _return_with(self, values: List[object]):
         self.last_return = list(values)
         self.return_value = self.last_return[0] if self.last_return else None
@@ -558,6 +620,70 @@ class BytecodeVM:
         if values is not None:
             return list(values)
         return [result]
+
+    def call_callable(self, func, args: Sequence[object]) -> List[object]:
+        args_list = list(args)
+        saved_last_return = list(self.last_return)
+        saved_return_value = self.return_value
+        saved_awaiting = self.awaiting_resume
+        if isinstance(func, dict) and "label" in func:
+            saved_pc = self.pc
+            saved_registers = self.registers
+            saved_param_stack = self.param_stack
+            saved_pending = self.pending_params
+            saved_upvalues = self.current_upvalues
+            saved_call_stack = list(self.call_stack)
+            target_depth = len(saved_call_stack)
+            frame = CallFrame(
+                return_pc=self.pc,
+                param_stack=self.param_stack,
+                registers=self.registers,
+                upvalues=self.current_upvalues,
+                pending_params=self.pending_params,
+                caller_debug=self._instruction_debug(self.pc),
+            )
+            self.call_stack.append(frame)
+            self.registers = dict(self.registers)
+            self.param_stack = list(args_list)
+            self.pending_params = []
+            self.current_upvalues = list(func.get("upvalues", []))
+            self.pc = self.labels[func["label"]]
+            result: List[object] = []
+            try:
+                while True:
+                    status = self.step()
+                    if status == "yield":
+                        raise self._wrap_runtime_error(
+                            RuntimeError("cannot yield from builtin helper call")
+                        )
+                    if status == "halt":
+                        break
+                    if len(self.call_stack) <= target_depth:
+                        break
+                result = list(self.last_return)
+            finally:
+                self.pc = saved_pc
+                self.registers = saved_registers
+                self.param_stack = saved_param_stack
+                self.pending_params = saved_pending
+                self.current_upvalues = saved_upvalues
+                self.call_stack = saved_call_stack
+                self.last_return = saved_last_return
+                self.return_value = saved_return_value
+                self.awaiting_resume = saved_awaiting
+            return result
+        if getattr(func, "__lua_builtin__", False):
+            result = func(args_list, self)
+            values = self._coerce_call_result(result)
+        elif callable(func):
+            result = func(*args_list)
+            values = self._coerce_call_result(result)
+        else:
+            raise self._wrap_runtime_error(RuntimeError("expected callable"))
+        self.last_return = saved_last_return
+        self.return_value = saved_return_value
+        self.awaiting_resume = saved_awaiting
+        return values
 
     # 位运算
     def _op_AND_BIT(self, args):
@@ -668,8 +794,16 @@ class BytecodeVM:
         self.registers[args[0]] = value
 
     def _op_LEN(self, args):
-        array = self.arrays.get(args[1], [])
-        self.registers[args[0]] = len(array)
+        dst, src = args
+        value = self.val(src)
+        if LuaTable is not None and isinstance(value, LuaTable):
+            self.registers[dst] = value.lua_len()
+            return
+        if isinstance(value, (list, tuple, str)):
+            self.registers[dst] = len(value)
+            return
+        array = self.arrays.get(src, [])
+        self.registers[dst] = len(array)
 
     def _op_PUSH(self, args):
         self.stack.append(self.val(args[0]))

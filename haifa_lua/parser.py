@@ -19,6 +19,8 @@ from .ast import (
     FunctionStmt,
     Identifier,
     IfStmt,
+    ForNumericStmt,
+    ForGenericStmt,
     IndexExpr,
     MethodCallExpr,
     NilLiteral,
@@ -97,6 +99,8 @@ class LuaParser:
             return self._parse_if()
         if token.kind == "while":
             return self._parse_while()
+        if token.kind == "for":
+            return self._parse_for()
         if token.kind == "repeat":
             return self._parse_repeat()
         if token.kind == "do":
@@ -160,6 +164,34 @@ class LuaParser:
         self._expect("until")
         condition = self._parse_expression()
         return RepeatStmt(tok.line, tok.column, body, condition)
+
+    def _parse_for(self):
+        tok = self._expect("for")
+        name_tok = self._expect("IDENT")
+        if self._current().kind == "OP" and self._current().value == "=":
+            self._advance()
+            start = self._parse_expression()
+            self._expect(",")
+            limit = self._parse_expression()
+            step = None
+            if self._match(","):
+                step = self._parse_expression()
+            self._expect("do")
+            body = self._parse_block(["end"])
+            self._expect("end")
+            return ForNumericStmt(tok.line, tok.column, name_tok.value, start, limit, step, body)
+        names = [name_tok.value]
+        while self._match(","):
+            next_tok = self._expect("IDENT")
+            names.append(next_tok.value)
+        self._expect("in")
+        iter_exprs = [self._parse_expression()]
+        while self._match(","):
+            iter_exprs.append(self._parse_expression())
+        self._expect("do")
+        body = self._parse_block(["end"])
+        self._expect("end")
+        return ForGenericStmt(tok.line, tok.column, names, iter_exprs, body)
 
     def _parse_do(self) -> DoStmt:
         tok = self._expect("do")
@@ -321,6 +353,10 @@ class LuaParser:
     def _parse_unary(self) -> Expr:
         token = self._current()
         if token.kind == "OP" and token.value == "-":
+            op_tok = self._advance()
+            operand = self._parse_unary()
+            return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
+        if token.kind == "OP" and token.value == "#":
             op_tok = self._advance()
             operand = self._parse_unary()
             return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)

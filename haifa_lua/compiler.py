@@ -23,6 +23,8 @@ from .ast import (
     FunctionStmt,
     Identifier,
     IfStmt,
+    ForNumericStmt,
+    ForGenericStmt,
     IndexExpr,
     MethodCallExpr,
     NilLiteral,
@@ -200,6 +202,10 @@ class LuaCompiler:
                 self._compile_if(stmt)
             elif isinstance(stmt, WhileStmt):
                 self._compile_while(stmt)
+            elif isinstance(stmt, ForNumericStmt):
+                self._compile_numeric_for(stmt)
+            elif isinstance(stmt, ForGenericStmt):
+                self._compile_generic_for(stmt)
             elif isinstance(stmt, RepeatStmt):
                 raise CompileError("repeat-until is not supported yet")
             elif isinstance(stmt, DoStmt):
@@ -311,6 +317,16 @@ class LuaCompiler:
             else:
                 self._emit(Opcode.MOV, [f"G_{target.name}", value_reg], node=node)
             return
+        if isinstance(target, FieldAccess):
+            table_reg = self._compile_expr(target.table)
+            key_reg = self._emit_literal(target.field, target, hint=self._new_temp())
+            self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=node)
+            return
+        if isinstance(target, IndexExpr):
+            table_reg = self._compile_expr(target.table)
+            index_reg = self._compile_expr(target.index)
+            self._emit(Opcode.TABLE_SET, [table_reg, index_reg, value_reg], node=node)
+            return
         raise CompileError("Assignment target type is not supported yet")
 
     def _compile_if(self, stmt: IfStmt):
@@ -346,6 +362,147 @@ class LuaCompiler:
         self._compile_block(stmt.body)
         self._emit(Opcode.JMP, [start_label], node=stmt)
         self._emit(Opcode.LABEL, [end_label], node=stmt)
+
+    def _compile_numeric_for(self, stmt: ForNumericStmt):
+        start_value = self._compile_expr(stmt.start)
+        start_reg = self._new_temp()
+        self._emit(Opcode.MOV, [start_reg, start_value], node=stmt.start)
+
+        limit_value = self._compile_expr(stmt.limit)
+        limit_reg = self._new_temp()
+        self._emit(Opcode.MOV, [limit_reg, limit_value], node=stmt.limit)
+
+        if stmt.step is not None:
+            step_value = self._compile_expr(stmt.step)
+            step_reg = self._new_temp()
+            self._emit(Opcode.MOV, [step_reg, step_value], node=stmt.step)
+        else:
+            step_reg = self._emit_literal(1, stmt, hint=self._new_temp())
+
+        zero_reg = self._emit_literal(0, stmt, hint=self._new_temp())
+        positive_reg = self._new_temp()
+        self._emit(Opcode.GT, [positive_reg, step_reg, zero_reg], node=stmt)
+
+        self._push_scope()
+        loop_scope = self.scope_stack[-1]
+        captured = stmt.var in self.function_info.captured_locals
+        if captured:
+            cell_reg = self._alloc_cell_reg(stmt.var)
+            loop_scope[stmt.var] = VarBinding(cell_reg, True)
+            self._emit(Opcode.MAKE_CELL, [cell_reg, start_reg], node=stmt)
+        else:
+            var_reg = self._alloc_local_reg(stmt.var)
+            loop_scope[stmt.var] = VarBinding(var_reg, False)
+            self._emit(Opcode.MOV, [var_reg, start_reg], node=stmt)
+
+        var_binding = loop_scope[stmt.var]
+        end_label = f"__for_end_{self._new_temp()}"
+        loop_label = f"__for_loop_{self._new_temp()}"
+        negative_label = f"__for_neg_{self._new_temp()}"
+        after_check = f"__for_after_{self._new_temp()}"
+        cond_reg = self._new_temp()
+
+        self._emit(Opcode.JZ, [positive_reg, negative_label], node=stmt)
+        initial_val = self._binding_read(var_binding, stmt)
+        tmp_gt = self._new_temp()
+        self._emit(Opcode.GT, [tmp_gt, initial_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg, tmp_gt], node=stmt)
+        self._emit(Opcode.JMP, [after_check], node=stmt)
+
+        self._emit(Opcode.LABEL, [negative_label], node=stmt)
+        initial_val_neg = self._binding_read(var_binding, stmt)
+        tmp_lt = self._new_temp()
+        self._emit(Opcode.LT, [tmp_lt, initial_val_neg, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg, tmp_lt], node=stmt)
+        self._emit(Opcode.LABEL, [after_check], node=stmt)
+        self._emit(Opcode.JZ, [cond_reg, end_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [loop_label], node=stmt)
+        self._compile_block(stmt.body)
+        current_val = self._binding_read(var_binding, stmt)
+        next_val = self._new_temp()
+        self._emit(Opcode.ADD, [next_val, current_val, step_reg], node=stmt)
+        self._binding_write(var_binding, next_val, stmt)
+
+        negative_label2 = f"__for_neg_{self._new_temp()}"
+        after_check2 = f"__for_after_{self._new_temp()}"
+        cond_reg2 = self._new_temp()
+
+        self._emit(Opcode.JZ, [positive_reg, negative_label2], node=stmt)
+        pos_val = self._binding_read(var_binding, stmt)
+        tmp_gt2 = self._new_temp()
+        self._emit(Opcode.GT, [tmp_gt2, pos_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg2, tmp_gt2], node=stmt)
+        self._emit(Opcode.JMP, [after_check2], node=stmt)
+
+        self._emit(Opcode.LABEL, [negative_label2], node=stmt)
+        neg_val = self._binding_read(var_binding, stmt)
+        tmp_lt2 = self._new_temp()
+        self._emit(Opcode.LT, [tmp_lt2, neg_val, limit_reg], node=stmt)
+        self._emit(Opcode.NOT, [cond_reg2, tmp_lt2], node=stmt)
+        self._emit(Opcode.LABEL, [after_check2], node=stmt)
+        self._emit(Opcode.JNZ, [cond_reg2, loop_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
+        self._pop_scope()
+
+    def _compile_generic_for(self, stmt: ForGenericStmt):
+        values = self._collect_assignment_values(stmt.iter_exprs, 3, stmt)
+        while len(values) < 3:
+            values.append(self._emit_literal(None, stmt))
+
+        iter_func_reg = self._new_temp()
+        self._emit(Opcode.MOV, [iter_func_reg, values[0]], node=stmt)
+        state_reg = self._new_temp()
+        self._emit(Opcode.MOV, [state_reg, values[1]], node=stmt)
+        control_reg = self._new_temp()
+        self._emit(Opcode.MOV, [control_reg, values[2]], node=stmt)
+
+        self._push_scope()
+        loop_scope = self.scope_stack[-1]
+        bindings: List[VarBinding] = []
+        nil_reg = self._emit_literal(None, stmt, hint=self._new_temp())
+        for name in stmt.names:
+            captured = name in self.function_info.captured_locals
+            if captured:
+                cell_reg = self._alloc_cell_reg(name)
+                loop_scope[name] = VarBinding(cell_reg, True)
+                self._emit(Opcode.MAKE_CELL, [cell_reg, nil_reg], node=stmt)
+            else:
+                reg = self._alloc_local_reg(name)
+                loop_scope[name] = VarBinding(reg, False)
+                self._emit(Opcode.MOV, [reg, nil_reg], node=stmt)
+            bindings.append(loop_scope[name])
+
+        loop_label = f"__forgen_loop_{self._new_temp()}"
+        end_label = f"__forgen_end_{self._new_temp()}"
+
+        self._emit(Opcode.LABEL, [loop_label], node=stmt)
+        self._emit(Opcode.PARAM, [state_reg], node=stmt)
+        self._emit(Opcode.PARAM, [control_reg], node=stmt)
+        self._emit(Opcode.CALL_VALUE, [iter_func_reg], node=stmt)
+        result_list = self._new_temp()
+        self._emit(Opcode.RESULT_LIST, [result_list], node=stmt)
+        first_value = self._new_temp()
+        self._emit(Opcode.LIST_GET, [first_value, result_list, 0], node=stmt)
+        self._emit(Opcode.MOV, [control_reg, first_value], node=stmt)
+        nil_check = self._new_temp()
+        self._emit(Opcode.IS_NULL, [nil_check, first_value], node=stmt)
+        self._emit(Opcode.JNZ, [nil_check, end_label], node=stmt)
+
+        for idx, binding in enumerate(bindings):
+            if idx == 0:
+                value_reg = first_value
+            else:
+                value_reg = self._new_temp()
+                self._emit(Opcode.LIST_GET, [value_reg, result_list, idx], node=stmt)
+            self._binding_write(binding, value_reg, stmt)
+
+        self._compile_block(stmt.body)
+        self._emit(Opcode.JMP, [loop_label], node=stmt)
+
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
+        self._pop_scope()
 
     def _compile_return(self, stmt: ReturnStmt):
         if not stmt.values:
@@ -397,7 +554,7 @@ class LuaCompiler:
         if isinstance(expr, StringLiteral):
             return self._emit_literal(expr.value, expr)
         if isinstance(expr, BooleanLiteral):
-            return self._emit_literal(int(expr.value), expr)
+            return self._emit_literal(expr.value, expr)
         if isinstance(expr, NilLiteral):
             return self._emit_literal(None, expr)
         if isinstance(expr, Identifier):
@@ -409,6 +566,8 @@ class LuaCompiler:
                 self._emit(Opcode.NEG, [dst, operand], node=expr)
             elif expr.op == "not":
                 self._emit(Opcode.NOT, [dst, operand], node=expr)
+            elif expr.op == "#":
+                self._emit(Opcode.LEN, [dst, operand], node=expr)
             else:
                 raise CompileError(f"Unsupported unary operator {expr.op}")
             return dst
@@ -422,8 +581,12 @@ class LuaCompiler:
             return self._compile_vararg_expr(multi=False, node=expr)
         if isinstance(expr, FieldAccess):
             return self._compile_field_access(expr)
-        if isinstance(expr, (MethodCallExpr, IndexExpr, TableConstructor)):
-            raise CompileError("Unsupported expression: tables and method calls are not implemented yet")
+        if isinstance(expr, IndexExpr):
+            return self._compile_index_expr(expr)
+        if isinstance(expr, TableConstructor):
+            return self._compile_table_constructor(expr)
+        if isinstance(expr, MethodCallExpr):
+            raise CompileError("Unsupported expression: method calls are not implemented yet")
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -548,6 +711,19 @@ class LuaCompiler:
         return head
 
     # ------------------------------------------------------------------ Helpers
+    def _binding_read(self, binding: VarBinding, node: object) -> str:
+        if binding.is_cell:
+            dst = self._new_temp()
+            self._emit(Opcode.CELL_GET, [dst, binding.storage], node=node)
+            return dst
+        return binding.storage
+
+    def _binding_write(self, binding: VarBinding, value_reg: str, node: object) -> None:
+        if binding.is_cell:
+            self._emit(Opcode.CELL_SET, [binding.storage, value_reg], node=node)
+        else:
+            self._emit(Opcode.MOV, [binding.storage, value_reg], node=node)
+
     def _binding_cell(self, name: str) -> str:
         binding = self._lookup_binding(name)
         if not binding or not binding.is_cell:
@@ -556,7 +732,9 @@ class LuaCompiler:
 
     def _emit_literal(self, value, node: Expr, hint: Optional[str] = None) -> str:
         dst = hint or self._new_temp()
-        if isinstance(value, int):
+        if isinstance(value, bool):
+            self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
+        elif isinstance(value, int):
             self._emit(Opcode.LOAD_IMM, [dst, value], node=node)
         else:
             self._emit(Opcode.LOAD_CONST, [dst, value], node=node)
@@ -574,25 +752,51 @@ class LuaCompiler:
         return f"G_{name}"
 
     def _compile_field_access(self, expr: FieldAccess) -> str:
-        chain = self._field_chain(expr)
-        if not chain:
-            raise CompileError("Field access on non-identifier bases is not supported yet")
-        base_name = chain[0]
-        binding = self._lookup_binding(base_name)
-        if binding is not None:
-            raise CompileError("Field access on local tables is not implemented yet")
-        full_name = ".".join(chain)
-        return f"G_{full_name}"
+        table_reg = self._compile_expr(expr.table)
+        key_reg = self._emit_literal(expr.field, expr, hint=self._new_temp())
+        dst = self._new_temp()
+        self._emit(Opcode.TABLE_GET, [dst, table_reg, key_reg], node=expr)
+        return dst
 
-    def _field_chain(self, expr: FieldAccess) -> Optional[List[str]]:
-        parts: List[str] = [expr.field]
-        current: Expr = expr.table
-        while isinstance(current, FieldAccess):
-            parts.insert(0, current.field)
-            current = current.table
-        if isinstance(current, Identifier):
-            parts.insert(0, current.name)
-            return parts
-        return None
+    def _compile_index_expr(self, expr: IndexExpr) -> str:
+        table_reg = self._compile_expr(expr.table)
+        index_reg = self._compile_expr(expr.index)
+        dst = self._new_temp()
+        self._emit(Opcode.TABLE_GET, [dst, table_reg, index_reg], node=expr)
+        return dst
+
+    def _compile_table_constructor(self, expr: TableConstructor) -> str:
+        table_reg = self._new_temp()
+        self._emit(Opcode.TABLE_NEW, [table_reg], node=expr)
+        total = len(expr.fields)
+        for idx, field in enumerate(expr.fields):
+            value_node = field.value
+            if field.key is not None:
+                key_reg = self._compile_expr(field.key)
+                value_reg = self._compile_expr(field.value)
+                self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=value_node)
+                continue
+            if field.name is not None:
+                key_reg = self._emit_literal(field.name, value_node, hint=self._new_temp())
+                value_reg = self._compile_expr(field.value)
+                self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=value_node)
+                continue
+            is_last = idx == total - 1
+            if is_last and isinstance(field.value, CallExpr):
+                list_reg = self._compile_call(field.value, want_list=True)
+                self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
+                continue
+            if is_last and isinstance(field.value, VarargExpr):
+                list_reg = self._compile_vararg_expr(multi=True, node=field.value)
+                self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
+                continue
+            if isinstance(field.value, CallExpr):
+                value_reg = self._compile_call(field.value)
+            elif isinstance(field.value, VarargExpr):
+                value_reg = self._compile_vararg_expr(multi=False, node=field.value)
+            else:
+                value_reg = self._compile_expr(field.value)
+            self._emit(Opcode.TABLE_APPEND, [table_reg, value_reg], node=value_node)
+        return table_reg
 
 __all__ = ["LuaCompiler", "CompileError"]

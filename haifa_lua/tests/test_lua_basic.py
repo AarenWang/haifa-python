@@ -152,6 +152,118 @@ def test_vararg_return_non_last():
     assert run_source(src) == [7, 99]
 
 
+def test_numeric_for_accumulates_sum():
+    src = """
+    local sum = 0
+    for i = 1, 5 do
+        sum = sum + i
+    end
+    return sum
+    """
+    assert run_source(src) == [15]
+
+
+def test_numeric_for_negative_step():
+    src = """
+    local total = 0
+    for i = 5, 1, -2 do
+        total = total + i
+    end
+    return total
+    """
+    assert run_source(src) == [9]
+
+
+def test_numeric_for_loop_variable_scope():
+    src = """
+    local value = 42
+    for value = 1, 3 do
+    end
+    return value
+    """
+    assert run_source(src) == [42]
+
+
+def test_numeric_for_loop_variable_capture():
+    src = """
+    local f
+    for i = 1, 3 do
+        f = function()
+            return i
+        end
+    end
+    return f()
+    """
+    assert run_source(src) == [4]
+
+
+def test_generic_for_iterates_custom_iterator():
+    src = """
+    function counter(limit)
+        local function iter(state, last)
+            local next = last + 1
+            if next > state then
+                return nil
+            end
+            return next, next * 2
+        end
+        return iter, limit, 0
+    end
+
+    local total = 0
+    for value, doubled in counter(3) do
+        total = total + value + doubled
+    end
+    return total
+    """
+    assert run_source(src) == [18]
+
+
+def test_generic_for_loop_variable_scope():
+    src = """
+    function counter(limit)
+        local function iter(state, last)
+            local next = last + 1
+            if next > state then
+                return nil
+            end
+            return next
+        end
+        return iter, limit, 0
+    end
+
+    local outer = 10
+    for inner in counter(2) do
+    end
+    return outer
+    """
+    assert run_source(src) == [10]
+
+
+def test_generic_for_loop_variable_capture():
+    src = """
+    function counter(limit)
+        local function iter(state, last)
+            local next = last + 1
+            if next > state then
+                return nil
+            end
+            return next
+        end
+        return iter, limit, 0
+    end
+
+    local f
+    for value in counter(2) do
+        f = function()
+            return value
+        end
+    end
+    return f()
+    """
+    assert run_source(src) == [2]
+
+
 def test_call_expands_last_argument():
     src = """
     function pair()
@@ -232,6 +344,40 @@ def test_multi_assignment_expands_vararg():
     return take(7, 8)
     """
     assert run_source(src) == [7, 8, None]
+
+
+def test_table_constructor_and_field_updates():
+    src = """
+    local t = {10, answer = 42, [3] = 99}
+    t.extra = 7
+    t[2] = 20
+    return t[1], t.answer, t[2], t[3], t.extra
+    """
+    assert run_source(src) == [10, 42, 20, 99, 7]
+
+
+def test_table_length_and_insert():
+    src = """
+    local t = {}
+    t[1] = "a"
+    t[2] = "b"
+    t[2] = nil
+    table.insert(t, "c")
+    return #t, t[1], t[2]
+    """
+    assert run_source(src) == [2, "a", "c"]
+
+
+def test_table_constructor_expands_last_call():
+    src = """
+    function produce()
+        return 1, 2, 3
+    end
+
+    local t = {0, produce()}
+    return #t, t[1], t[2], t[3], t[4]
+    """
+    assert run_source(src) == [4, 0, 1, 2, 3]
 
 
 def test_runtime_error_reports_lua_style_location():
