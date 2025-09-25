@@ -5,9 +5,10 @@ pytest>=7.0.0
 # PyInstaller is only needed for building standalone executables
 pyinstaller>=5.0.0
 
-# Optional: GUI visualizer (uncomment to enable pygame-based GUI)
-# pygame>=2.5.0
+# Optional GUI dependencies
+pygame>=2.5.0
 
-# Note: Consider using 'pip install ".[dev]" or ".[build]"' instead
-# for proper dependency management via pyproject.toml
+# Note: Use 'pip install ".[gui]"' to install GUI dependencies
+# Use 'pip install ".[dev]"' to install all development dependencies
+# Use 'pip install ".[build]"' for CI/CD build tools only
 
