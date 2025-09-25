@@ -380,6 +380,89 @@ def test_table_constructor_expands_last_call():
     assert run_source(src) == [4, 0, 1, 2, 3]
 
 
+def test_string_concatenation_operator():
+    src = """
+    local greeting = "hello"
+    local value = 42
+    return greeting .. " " .. value
+    """
+    assert run_source(src) == ["hello 42"]
+
+
+def test_length_operator_for_string_and_table():
+    src = """
+    local t = {1, 2, 3}
+    local s = "abc"
+    return #t, #s
+    """
+    assert run_source(src) == [3, 3]
+
+
+def test_repeat_until_loop_executes_until_condition():
+    src = """
+    local x = 0
+    repeat
+        x = x + 1
+    until x >= 4
+    return x
+    """
+    assert run_source(src) == [4]
+
+
+def test_repeat_until_condition_sees_block_locals():
+    src = """
+    local result = 0
+    repeat
+        local next = result + 1
+        result = next
+    until next >= 3
+    return result
+    """
+    assert run_source(src) == [3]
+
+
+def test_break_exits_only_innermost_loop():
+    src = """
+    local total = 0
+    for i = 1, 3 do
+        for j = 1, 3 do
+            if j == 2 then
+                break
+            end
+            total = total + 10 * i + j
+        end
+    end
+    return total
+    """
+    assert run_source(src) == [63]
+
+
+def test_break_from_repeat_loop():
+    src = """
+    local count = 0
+    repeat
+        count = count + 1
+        if count == 2 then
+            break
+        end
+    until count > 10
+    return count
+    """
+    assert run_source(src) == [2]
+
+
+def test_do_block_creates_isolated_scope():
+    src = """
+    local value = 1
+    do
+        local value = 5
+        value = value + 1
+    end
+    return value
+    """
+    assert run_source(src) == [1]
+
+
 def test_runtime_error_reports_lua_style_location():
     src = """
     local x = 1
