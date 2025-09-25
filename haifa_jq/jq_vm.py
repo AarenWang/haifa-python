@@ -138,6 +138,7 @@ class JQVM(BytecodeVM):
         if self.try_stack:
             self.try_stack.pop()
 
+
     def _op_FLATTEN(self, args):
         value = self.val(args[1])
         if isinstance(value, list):

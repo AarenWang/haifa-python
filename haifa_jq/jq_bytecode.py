@@ -21,7 +21,6 @@ class JQOpcode(Enum):
     EMIT = auto()
     TRY_BEGIN = auto()
     TRY_END = auto()
-
     OBJ_SET = auto()
     FLATTEN = auto()
     REDUCE = auto()
