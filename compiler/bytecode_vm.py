@@ -1,6 +1,7 @@
 import copy
 import math
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence
 
@@ -72,6 +73,8 @@ class BytecodeVM:
         self._next_coroutine_id = 1
         self._function_names: Dict[str, str] = {}
         self._last_traceback: Optional[List[TraceFrame]] = None
+        self._non_yieldable_depth = 0
+        self.main_coroutine = None
         # Opcode dispatch table for cleaner control flow
         self._handlers = {
             Opcode.LOAD_IMM: self._op_LOAD_IMM,
@@ -192,6 +195,8 @@ class BytecodeVM:
         status: str,
         last_yield: Sequence[object],
         last_error: Optional[str],
+        is_main: bool = False,
+        yieldable: bool = False,
         function_name: str | None = None,
         last_resume_args: Sequence[object] | None = None,
         registers: Mapping[str, object] | None = None,
@@ -204,6 +209,8 @@ class BytecodeVM:
             status=status,
             last_yield=list(last_yield),
             last_error=last_error,
+            is_main=is_main,
+            yieldable=yieldable,
             function_name=function_name,
             last_resume_args=list(last_resume_args or []),
             registers=dict(registers) if registers is not None else None,
@@ -214,6 +221,9 @@ class BytecodeVM:
 
     def remove_coroutine_snapshot(self, coroutine_id: int) -> None:
         self._coroutine_snapshots.pop(coroutine_id, None)
+
+    def get_coroutine_snapshot(self, coroutine_id: int) -> Optional[CoroutineSnapshot]:
+        return self._coroutine_snapshots.get(coroutine_id)
 
     def snapshot_state(self) -> VMStateSnapshot:
         return VMStateSnapshot(
@@ -276,6 +286,22 @@ class BytecodeVM:
     @property
     def last_traceback(self) -> Optional[List[TraceFrame]]:
         return self._last_traceback
+
+    @property
+    def is_yieldable(self) -> bool:
+        if self.current_coroutine is None:
+            return False
+        if self.awaiting_resume:
+            return False
+        return self._non_yieldable_depth == 0
+
+    @contextmanager
+    def _non_yieldable_context(self):
+        self._non_yieldable_depth += 1
+        try:
+            yield
+        finally:
+            self._non_yieldable_depth = max(0, self._non_yieldable_depth - 1)
 
     def step(self):
         """Executes a single instruction."""
@@ -385,7 +411,10 @@ class BytecodeVM:
         if invoked:
             self.registers[dst] = result
         else:
-            self.registers[dst] = left / right
+            if isinstance(left, int) and isinstance(right, int):
+                self.registers[dst] = left // right
+            else:
+                self.registers[dst] = left / right
 
 
     def _op_MOD(self, args):
@@ -557,9 +586,16 @@ class BytecodeVM:
             self.pc = self.labels[callee["label"]]
             return "jump"
         if getattr(callee, "__lua_builtin__", False):
-            result = callee(args_to_pass, self)
+            allow_yield = getattr(callee, "allow_yield", False)
+            yield_probe = getattr(callee, "yield_probe", False)
+            if allow_yield or yield_probe:
+                result = callee(args_to_pass, self)
+            else:
+                with self._non_yieldable_context():
+                    result = callee(args_to_pass, self)
         elif callable(callee):
-            result = callee(*args_to_pass)
+            with self._non_yieldable_context():
+                result = callee(*args_to_pass)
         else:
             raise self._wrap_runtime_error(
                 RuntimeError(f"CALL_VALUE expects callable or closure in {callee_reg}")
@@ -916,17 +952,18 @@ class BytecodeVM:
             self.pc = self.labels[func["label"]]
             result: List[object] = []
             try:
-                while True:
-                    status = self.step()
-                    if status == "yield":
-                        raise self._wrap_runtime_error(
-                            RuntimeError("cannot yield from builtin helper call")
-                        )
-                    if status == "halt":
-                        break
-                    if len(self.call_stack) <= target_depth:
-                        break
-                result = list(self.last_return)
+                with self._non_yieldable_context():
+                    while True:
+                        status = self.step()
+                        if status == "yield":
+                            raise self._wrap_runtime_error(
+                                RuntimeError("attempt to yield across a C-call boundary")
+                            )
+                        if status == "halt":
+                            break
+                        if len(self.call_stack) <= target_depth:
+                            break
+                    result = list(self.last_return)
             finally:
                 self.pc = saved_pc
                 self.registers = saved_registers
@@ -939,11 +976,19 @@ class BytecodeVM:
                 self.awaiting_resume = saved_awaiting
             return result
         if getattr(func, "__lua_builtin__", False):
-            result = func(args_list, self)
-            values = self._coerce_call_result(result)
+            allow_yield = getattr(func, "allow_yield", False)
+            yield_probe = getattr(func, "yield_probe", False)
+            if allow_yield or yield_probe:
+                result = func(args_list, self)
+                values = self._coerce_call_result(result)
+            else:
+                with self._non_yieldable_context():
+                    result = func(args_list, self)
+                    values = self._coerce_call_result(result)
         elif callable(func):
-            result = func(*args_list)
-            values = self._coerce_call_result(result)
+            with self._non_yieldable_context():
+                result = func(*args_list)
+                values = self._coerce_call_result(result)
         else:
             raise self._wrap_runtime_error(RuntimeError("expected callable"))
         self.last_return = saved_last_return
