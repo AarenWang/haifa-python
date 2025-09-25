@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 from .ast import (
     Assignment,
     BreakStmt,
+    GotoStmt,
     BinaryOp,
     Block,
     BooleanLiteral,
@@ -24,6 +25,7 @@ from .ast import (
     IndexExpr,
     MethodCallExpr,
     NilLiteral,
+    LabelStmt,
     NumberLiteral,
     RepeatStmt,
     ReturnStmt,
@@ -109,6 +111,10 @@ class LuaParser:
             return self._parse_break()
         if token.kind == "return":
             return self._parse_return()
+        if token.kind == "goto":
+            return self._parse_goto()
+        if token.kind == ":" and self._peek_kind(1) == ":":
+            return self._parse_label()
         if token.kind == "function":
             return self._parse_function()
         if token.kind == "local":
@@ -203,6 +209,19 @@ class LuaParser:
         tok = self._expect("break")
         return BreakStmt(tok.line, tok.column)
 
+    def _parse_goto(self) -> GotoStmt:
+        tok = self._expect("goto")
+        target = self._expect("IDENT")
+        return GotoStmt(tok.line, tok.column, target.value)
+
+    def _parse_label(self) -> LabelStmt:
+        start = self._expect(":")
+        self._expect(":")
+        name_tok = self._expect("IDENT")
+        self._expect(":")
+        self._expect(":")
+        return LabelStmt(start.line, start.column, name_tok.value)
+
     def _parse_return(self) -> ReturnStmt:
         tok = self._expect("return")
         values: List[Expr] = []
@@ -213,13 +232,38 @@ class LuaParser:
                 values.append(self._parse_expression())
         return ReturnStmt(tok.line, tok.column, values)
 
-    def _parse_function(self) -> FunctionStmt:
+    def _parse_function(self):
         tok = self._expect("function")
-        name_tok = self._expect("IDENT")
+        target, is_method = self._parse_function_name()
         params, vararg = self._parse_param_list()
+        if is_method:
+            params = ["self", *params]
         body = self._parse_block(["end"])
         self._expect("end")
-        return FunctionStmt(tok.line, tok.column, Identifier(name_tok.line, name_tok.column, name_tok.value), params, body, vararg)
+        if isinstance(target, Identifier):
+            return FunctionStmt(tok.line, tok.column, target, params, body, vararg)
+        func_expr = FunctionExpr(tok.line, tok.column, params, vararg, body)
+        return Assignment(tok.line, tok.column, [target], [func_expr], False)
+
+    def _parse_function_name(self) -> Tuple[Expr, bool]:
+        name_tok = self._expect("IDENT")
+        expr: Expr = self._make_identifier_expr(name_tok)
+        is_method = False
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == ".":
+                self._advance()
+                part_tok = self._expect("IDENT")
+                expr = FieldAccess(part_tok.line, part_tok.column, expr, part_tok.value)
+                continue
+            if token.kind == ":":
+                self._advance()
+                method_tok = self._expect("IDENT")
+                expr = FieldAccess(method_tok.line, method_tok.column, expr, method_tok.value)
+                is_method = True
+                break
+            break
+        return expr, is_method
 
     def _parse_param_list(self) -> Tuple[List[str], bool]:
         params: List[str] = []
@@ -315,10 +359,58 @@ class LuaParser:
         return expr
 
     def _parse_comparison(self) -> Expr:
-        expr = self._parse_concat()
+        expr = self._parse_bitor()
         while True:
             token = self._current()
             if token.kind == "OP" and token.value in {"==", "~=", "<", ">", "<=", ">="}:
+                op_tok = self._advance()
+                right = self._parse_bitor()
+                expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
+            else:
+                break
+        return expr
+
+    def _parse_bitor(self) -> Expr:
+        expr = self._parse_bitxor()
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == "|":
+                op_tok = self._advance()
+                right = self._parse_bitxor()
+                expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
+            else:
+                break
+        return expr
+
+    def _parse_bitxor(self) -> Expr:
+        expr = self._parse_bitand()
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == "~":
+                op_tok = self._advance()
+                right = self._parse_bitand()
+                expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
+            else:
+                break
+        return expr
+
+    def _parse_bitand(self) -> Expr:
+        expr = self._parse_shift()
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value == "&":
+                op_tok = self._advance()
+                right = self._parse_shift()
+                expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
+            else:
+                break
+        return expr
+
+    def _parse_shift(self) -> Expr:
+        expr = self._parse_concat()
+        while True:
+            token = self._current()
+            if token.kind == "OP" and token.value in {"<<", ">>"}:
                 op_tok = self._advance()
                 right = self._parse_concat()
                 expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
@@ -348,15 +440,24 @@ class LuaParser:
         return expr
 
     def _parse_factor(self) -> Expr:
-        expr = self._parse_unary()
+        expr = self._parse_power()
         while True:
             token = self._current()
-            if token.kind == "OP" and token.value in {"*", "/", "%"}:
+            if token.kind == "OP" and token.value in {"*", "/", "%", "//"}:
                 op_tok = self._advance()
-                right = self._parse_unary()
+                right = self._parse_power()
                 expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
             else:
                 break
+        return expr
+
+    def _parse_power(self) -> Expr:
+        expr = self._parse_unary()
+        token = self._current()
+        if token.kind == "OP" and token.value == "^":
+            op_tok = self._advance()
+            right = self._parse_power()
+            expr = BinaryOp(op_tok.line, op_tok.column, expr, op_tok.value, right)
         return expr
 
     def _parse_unary(self) -> Expr:
@@ -366,6 +467,10 @@ class LuaParser:
             operand = self._parse_unary()
             return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
         if token.kind == "OP" and token.value == "#":
+            op_tok = self._advance()
+            operand = self._parse_unary()
+            return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
+        if token.kind == "OP" and token.value == "~":
             op_tok = self._advance()
             operand = self._parse_unary()
             return UnaryOp(op_tok.line, op_tok.column, op_tok.value, operand)
@@ -435,6 +540,8 @@ class LuaParser:
                 expr = IndexExpr(bracket_tok.line, bracket_tok.column, expr, index_expr)
                 continue
             if token.kind == ":":
+                if self._peek_kind(1) == ":":
+                    break
                 colon_tok = self._advance()
                 name_tok = self._expect("IDENT")
                 args = self._parse_call_arguments()

@@ -1,4 +1,5 @@
 import copy
+import math
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence
@@ -81,6 +82,8 @@ class BytecodeVM:
             Opcode.MUL: self._op_MUL,
             Opcode.DIV: self._op_DIV,
             Opcode.MOD: self._op_MOD,
+            Opcode.POW: self._op_POW,
+            Opcode.IDIV: self._op_IDIV,
             Opcode.CONCAT: self._op_CONCAT,
             Opcode.NEG: self._op_NEG,
             Opcode.EQ: self._op_EQ,
@@ -345,20 +348,74 @@ class BytecodeVM:
         self.registers[args[0]] = value
 
     def _op_ADD(self, args):
-        self.registers[args[0]] = self.val(args[1]) + self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__add", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left + right
 
     def _op_SUB(self, args):
-        self.registers[args[0]] = self.val(args[1]) - self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__sub", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left - right
 
     def _op_MUL(self, args):
-        self.registers[args[0]] = self.val(args[1]) * self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__mul", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left * right
 
     def _op_DIV(self, args):
-        # 整数整除，保持兼容
-        self.registers[args[0]] = self.val(args[1]) // self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__div", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left / right
 
     def _op_MOD(self, args):
-        self.registers[args[0]] = self.val(args[1]) % self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__mod", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left % right
+
+    def _op_POW(self, args):
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__pow", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = left ** right
+
+    def _op_IDIV(self, args):
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__idiv", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = math.floor(left / right)
 
     def _op_CONCAT(self, args):
         dst, left_reg, right_reg = args
@@ -377,17 +434,44 @@ class BytecodeVM:
         self.registers[dst] = _coerce(left) + _coerce(right)
 
     def _op_NEG(self, args):
-        self.registers[args[0]] = -self.val(args[1])
+        dst, operand_reg = args
+        operand = self.val(operand_reg)
+        invoked, result = self._invoke_unary_metamethod(operand, "__unm")
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = -operand
 
     # 逻辑运算
     def _op_EQ(self, args):
-        self.registers[args[0]] = self.val(args[1]) == self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_eq_metamethod(left, right)
+        if invoked:
+            self.registers[dst] = bool(result)
+        else:
+            self.registers[dst] = left == right
 
     def _op_GT(self, args):
-        self.registers[args[0]] = self.val(args[1]) > self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_compare_metamethod("__lt", right, left)
+        if invoked:
+            self.registers[dst] = bool(result)
+        else:
+            self.registers[dst] = left > right
 
     def _op_LT(self, args):
-        self.registers[args[0]] = self.val(args[1]) < self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_compare_metamethod("__lt", left, right)
+        if invoked:
+            self.registers[dst] = bool(result)
+        else:
+            self.registers[dst] = left < right
 
     def _op_AND(self, args):
         self.registers[args[0]] = bool(self.val(args[1])) and bool(self.val(args[2]))
@@ -554,6 +638,158 @@ class BytecodeVM:
                 LuaTable = _LuaTable
         return LuaTable
 
+    def _is_callable_value(self, value) -> bool:
+        if isinstance(value, dict) and "label" in value:
+            return True
+        if getattr(value, "__lua_builtin__", False):
+            return True
+        return callable(value)
+
+    def _find_metamethod(self, value, name: str, *, allow_table: bool = False):
+        table_cls = self._resolve_lua_table()
+        if table_cls is None or not isinstance(value, table_cls):
+            return None
+
+        def enqueue(candidate, stack, seen):
+            if isinstance(candidate, table_cls):
+                ident = id(candidate)
+                if ident not in seen:
+                    seen.add(ident)
+                    stack.append(candidate)
+
+        seen: set[int] = set()
+        stack: list = []
+        metatable = value.get_metatable() if hasattr(value, "get_metatable") else getattr(value, "metatable", None)
+        enqueue(metatable, stack, seen)
+
+        while stack:
+            current = stack.pop()
+            handler = current.raw_get(name)
+            if handler is not None:
+                if allow_table:
+                    return handler
+                if self._is_callable_value(handler):
+                    return handler
+                return None
+
+            # Follow chained metatables (prototype-style inheritance).
+            next_meta = current.get_metatable() if hasattr(current, "get_metatable") else getattr(current, "metatable", None)
+            enqueue(next_meta, stack, seen)
+
+            # If __index points to another table, treat it as part of the lookup chain.
+            index_target = current.raw_get("__index")
+            enqueue(index_target, stack, seen)
+
+        return None
+
+    def _invoke_binary_metamethod(self, name: str, left, right):
+        handler = self._find_metamethod(left, name)
+        if handler is None:
+            handler = self._find_metamethod(right, name)
+        if handler is None or not self._is_callable_value(handler):
+            return False, None
+        result = self.call_callable(handler, [left, right])
+        value = result[0] if result else None
+        return True, value
+
+    def _invoke_unary_metamethod(self, operand, name: str):
+        handler = self._find_metamethod(operand, name)
+        if handler is None or not self._is_callable_value(handler):
+            return False, None
+        result = self.call_callable(handler, [operand])
+        value = result[0] if result else None
+        return True, value
+
+    def _invoke_compare_metamethod(self, name: str, left, right):
+        handler = self._find_metamethod(left, name)
+        if handler is None:
+            handler = self._find_metamethod(right, name)
+        if handler is None or not self._is_callable_value(handler):
+            return False, None
+        result = self.call_callable(handler, [left, right])
+        value = result[0] if result else None
+        return True, value
+
+    def _invoke_eq_metamethod(self, left, right):
+        left_handler = self._find_metamethod(left, "__eq")
+        right_handler = self._find_metamethod(right, "__eq")
+        handler = None
+        if left_handler is not None and right_handler is not None:
+            if left_handler is right_handler and self._is_callable_value(left_handler):
+                handler = left_handler
+        elif left_handler is not None and self._is_callable_value(left_handler):
+            handler = left_handler
+        elif right_handler is not None and self._is_callable_value(right_handler):
+            handler = right_handler
+        if handler is None:
+            return False, None
+        result = self.call_callable(handler, [left, right])
+        value = result[0] if result else None
+        return True, value
+
+    def _table_index_via_metatable(self, table, key):
+        table_cls = self._resolve_lua_table()
+        if table_cls is None:
+            return None
+        original = table
+        current = table
+        seen: set[int] = set()
+        while True:
+            value = current.raw_get(key)
+            if value is not None:
+                return value
+            metatable = current.get_metatable() if hasattr(current, "get_metatable") else getattr(current, "metatable", None)
+            if metatable is None or not isinstance(metatable, table_cls):
+                return None
+            handler = metatable.raw_get("__index")
+            if handler is None:
+                return None
+            if self._is_callable_value(handler):
+                result = self.call_callable(handler, [original, key])
+                return result[0] if result else None
+            if isinstance(handler, table_cls):
+                ident = id(handler)
+                if ident in seen:
+                    return None
+                seen.add(ident)
+                current = handler
+                continue
+            return None
+
+    def _apply_newindex(self, table, key, value) -> bool:
+        table_cls = self._resolve_lua_table()
+        if table_cls is None:
+            return False
+        original = table
+        current = table
+        seen: set[int] = set()
+        while True:
+            metatable = current.get_metatable() if hasattr(current, "get_metatable") else getattr(current, "metatable", None)
+            if metatable is None or not isinstance(metatable, table_cls):
+                if current is original:
+                    return False
+                current.raw_set(key, value)
+                return True
+            handler = metatable.raw_get("__newindex")
+            if handler is None:
+                if current is original:
+                    return False
+                current.raw_set(key, value)
+                return True
+            if self._is_callable_value(handler):
+                self.call_callable(handler, [current, key, value])
+                return True
+            if isinstance(handler, table_cls):
+                ident = id(handler)
+                if ident in seen:
+                    current.raw_set(key, value)
+                    return True
+                seen.add(ident)
+                current = handler
+                continue
+            current.raw_set(key, value)
+            return True
+
     def _ensure_table(self, value, reg_name: object):
         table_cls = self._resolve_lua_table()
         if table_cls is None or not isinstance(value, table_cls):
@@ -575,13 +811,22 @@ class BytecodeVM:
         table = self._ensure_table(self.val(table_reg), table_reg)
         key = self.val(key_arg)
         value = self.val(value_arg)
+        current = table.raw_get(key)
+        if current is not None:
+            table.raw_set(key, value)
+            return
+        if self._apply_newindex(table, key, value):
+            return
         table.raw_set(key, value)
 
     def _op_TABLE_GET(self, args):
         dst, table_reg, key_arg = args
         table = self._ensure_table(self.val(table_reg), table_reg)
         key = self.val(key_arg)
-        self.registers[dst] = table.raw_get(key)
+        value = table.raw_get(key)
+        if value is None:
+            value = self._table_index_via_metatable(table, key)
+        self.registers[dst] = value
 
     def _op_TABLE_APPEND(self, args):
         table_reg, value_arg = args
@@ -705,25 +950,73 @@ class BytecodeVM:
 
     # 位运算
     def _op_AND_BIT(self, args):
-        self.registers[args[0]] = self.val(args[1]) & self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__band", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) & int(right)
 
     def _op_OR_BIT(self, args):
-        self.registers[args[0]] = self.val(args[1]) | self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__bor", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) | int(right)
 
     def _op_XOR(self, args):
-        self.registers[args[0]] = self.val(args[1]) ^ self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__bxor", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) ^ int(right)
 
     def _op_NOT_BIT(self, args):
-        self.registers[args[0]] = ~self.val(args[1])
+        dst, operand_reg = args
+        operand = self.val(operand_reg)
+        invoked, result = self._invoke_unary_metamethod(operand, "__bnot")
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = ~int(operand)
 
     def _op_SHL(self, args):
-        self.registers[args[0]] = self.val(args[1]) << self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shl", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) << int(right)
 
     def _op_SHR(self, args):
-        self.registers[args[0]] = (self.val(args[1]) % (1 << 32)) >> self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shr", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = (int(left) % (1 << 32)) >> int(right)
 
     def _op_SAR(self, args):
-        self.registers[args[0]] = self.val(args[1]) >> self.val(args[2])
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+        invoked, result = self._invoke_binary_metamethod("__shr", left, right)
+        if invoked:
+            self.registers[dst] = result
+        else:
+            self.registers[dst] = int(left) >> int(right)
 
     # 控制流
     def _op_JMP(self, args):
