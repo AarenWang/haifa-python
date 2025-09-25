@@ -122,3 +122,24 @@ def test_newindex_and_raw_access_helpers():
     """
     result = run_source(src)
     assert result == ["bar!", "raw", 42, True, False]
+
+
+def test_call_and_len_metamethods():
+    src = """
+    local callable = {}
+    setmetatable(callable, {
+        __call = function(self, value)
+            return value * 2
+        end
+    })
+    local container = {}
+    setmetatable(container, {
+        __len = function(self)
+            return 42
+        end
+    })
+    local result = callable(5)
+    return result, #container, type(callable)
+    """
+    result = run_source(src)
+    assert result == [10.0, 42, "table"]
