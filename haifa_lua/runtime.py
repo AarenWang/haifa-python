@@ -23,12 +23,12 @@ def _prepare_environment(globals: Optional[object], load_stdlib: bool) -> LuaEnv
     if globals is None:
         return create_default_environment() if load_stdlib else LuaEnvironment()
     if isinstance(globals, LuaEnvironment):
-        if load_stdlib and not globals.snapshot():
+        if load_stdlib and not globals.stdlib_ready:
             install_core_stdlib(globals)
         return globals
     if isinstance(globals, Mapping):
         env = LuaEnvironment()
-        if load_stdlib:
+        if load_stdlib and not env.stdlib_ready:
             install_core_stdlib(env)
         env.merge(globals)
         return env
@@ -47,10 +47,16 @@ def run_source(
     vm = BytecodeVM(instructions)
     vm.lua_env = env
     vm.registers.update(env.to_vm_registers())
+    module_system = getattr(env, "module_system", None)
+    if module_system is not None and source_name and not source_name.startswith("<"):
+        module_system.set_base_path(pathlib.Path(source_name))
+    env.bind_vm(vm)
     try:
         output = vm.run()
     except VMRuntimeError as exc:
         raise as_lua_error(exc) from exc
+    finally:
+        env.unbind_vm()
     env.sync_from_vm(vm.registers)
     if not output and vm.last_return:
         return list(vm.last_return)

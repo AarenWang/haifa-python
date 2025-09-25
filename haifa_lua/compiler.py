@@ -279,8 +279,8 @@ class LuaCompiler:
         return regs
 
     def _eval_assignment_expr(self, expr: Expr) -> str:
-        if isinstance(expr, CallExpr):
-            return self._compile_call(expr)
+        if isinstance(expr, (CallExpr, MethodCallExpr)):
+            return self._compile_call_like(expr)
         if isinstance(expr, VarargExpr):
             return self._compile_vararg_expr(multi=False, node=expr)
         return self._compile_expr(expr)
@@ -289,10 +289,10 @@ class LuaCompiler:
         if needed <= 0:
             self._eval_assignment_expr(expr)
             return []
-        if isinstance(expr, CallExpr):
+        if isinstance(expr, (CallExpr, MethodCallExpr)):
             if needed == 1:
-                return [self._compile_call(expr)]
-            list_reg = self._compile_call(expr, want_list=True)
+                return [self._compile_call_like(expr)]
+            list_reg = self._compile_call_like(expr, want_list=True)
             return self._unpack_list(list_reg, needed, expr)
         if isinstance(expr, VarargExpr):
             if needed == 1:
@@ -546,14 +546,14 @@ class LuaCompiler:
             total = len(stmt.values)
             for idx, expr in enumerate(stmt.values):
                 last = idx == total - 1
-                if isinstance(expr, CallExpr) and last:
-                    reg = self._compile_call(expr, want_list=True)
+                if isinstance(expr, (CallExpr, MethodCallExpr)) and last:
+                    reg = self._compile_call_like(expr, want_list=True)
                 elif isinstance(expr, VarargExpr):
                     reg = self._compile_vararg_expr(multi=last, node=expr)
                 else:
                     reg = self._compile_expr(expr)
                 regs.append(reg)
-            if len(regs) == 1 and not isinstance(stmt.values[0], (CallExpr, VarargExpr)):
+            if len(regs) == 1 and not isinstance(stmt.values[0], (CallExpr, MethodCallExpr, VarargExpr)):
                 self._emit(Opcode.RETURN, [regs[0]], node=stmt)
             else:
                 self._emit(Opcode.RETURN_MULTI, regs, node=stmt)
@@ -620,7 +620,7 @@ class LuaCompiler:
         if isinstance(expr, TableConstructor):
             return self._compile_table_constructor(expr)
         if isinstance(expr, MethodCallExpr):
-            raise CompileError("Unsupported expression: method calls are not implemented yet")
+            return self._compile_method_call(expr)
         raise CompileError(f"Unsupported expression: {expr}")
 
     def _compile_binary(self, expr: BinaryOp) -> str:
@@ -674,14 +674,21 @@ class LuaCompiler:
             return dst
         raise CompileError(f"Unsupported binary operator {op}")
 
+    def _compile_call_like(self, expr: Expr, want_list: bool = False) -> str:
+        if isinstance(expr, CallExpr):
+            return self._compile_call(expr, want_list=want_list)
+        if isinstance(expr, MethodCallExpr):
+            return self._compile_method_call(expr, want_list=want_list)
+        raise CompileError("Expected call expression")
+
     def _compile_call(self, expr: CallExpr, want_list: bool = False) -> str:
         callee_reg = self._compile_expr(expr.callee)
         total_args = len(expr.args)
         prepared_args = []
         for idx, arg in enumerate(expr.args):
             last = idx == total_args - 1
-            if last and isinstance(arg, CallExpr):
-                arg_reg = self._compile_call(arg, want_list=True)
+            if last and isinstance(arg, (CallExpr, MethodCallExpr)):
+                arg_reg = self._compile_call_like(arg, want_list=True)
                 prepared_args.append((arg_reg, True))
             elif last and isinstance(arg, VarargExpr):
                 arg_reg = self._compile_vararg_expr(multi=True, node=arg)
@@ -689,6 +696,48 @@ class LuaCompiler:
             else:
                 if isinstance(arg, VarargExpr):
                     arg_reg = self._compile_vararg_expr(multi=False, node=arg)
+                elif isinstance(arg, MethodCallExpr):
+                    arg_reg = self._compile_method_call(arg)
+                elif isinstance(arg, CallExpr):
+                    arg_reg = self._compile_call(arg)
+                else:
+                    arg_reg = self._compile_expr(arg)
+                prepared_args.append((arg_reg, False))
+        for reg, expand in prepared_args:
+            opcode = Opcode.PARAM_EXPAND if expand else Opcode.PARAM
+            self._emit(opcode, [reg], node=expr)
+        self._emit(Opcode.CALL_VALUE, [callee_reg], node=expr)
+        if want_list:
+            dst = self._new_temp()
+            self._emit(Opcode.RESULT_LIST, [dst], node=expr)
+            return dst
+        dst = self._new_temp()
+        self._emit(Opcode.RESULT, [dst], node=expr)
+        return dst
+
+    def _compile_method_call(self, expr: MethodCallExpr, want_list: bool = False) -> str:
+        receiver_reg = self._compile_expr(expr.receiver)
+        key_reg = self._emit_literal(expr.method, expr, hint=self._new_temp())
+        callee_reg = self._new_temp()
+        self._emit(Opcode.TABLE_GET, [callee_reg, receiver_reg, key_reg], node=expr)
+
+        prepared_args: List[tuple[str, bool]] = [(receiver_reg, False)]
+        total_args = len(expr.args)
+        for idx, arg in enumerate(expr.args):
+            last = idx == total_args - 1
+            if last and isinstance(arg, (CallExpr, MethodCallExpr)):
+                arg_reg = self._compile_call_like(arg, want_list=True)
+                prepared_args.append((arg_reg, True))
+            elif last and isinstance(arg, VarargExpr):
+                arg_reg = self._compile_vararg_expr(multi=True, node=arg)
+                prepared_args.append((arg_reg, True))
+            else:
+                if isinstance(arg, VarargExpr):
+                    arg_reg = self._compile_vararg_expr(multi=False, node=arg)
+                elif isinstance(arg, MethodCallExpr):
+                    arg_reg = self._compile_method_call(arg)
+                elif isinstance(arg, CallExpr):
+                    arg_reg = self._compile_call(arg)
                 else:
                     arg_reg = self._compile_expr(arg)
                 prepared_args.append((arg_reg, False))
@@ -817,16 +866,16 @@ class LuaCompiler:
                 self._emit(Opcode.TABLE_SET, [table_reg, key_reg, value_reg], node=value_node)
                 continue
             is_last = idx == total - 1
-            if is_last and isinstance(field.value, CallExpr):
-                list_reg = self._compile_call(field.value, want_list=True)
+            if is_last and isinstance(field.value, (CallExpr, MethodCallExpr)):
+                list_reg = self._compile_call_like(field.value, want_list=True)
                 self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
                 continue
             if is_last and isinstance(field.value, VarargExpr):
                 list_reg = self._compile_vararg_expr(multi=True, node=field.value)
                 self._emit(Opcode.TABLE_EXTEND, [table_reg, list_reg], node=value_node)
                 continue
-            if isinstance(field.value, CallExpr):
-                value_reg = self._compile_call(field.value)
+            if isinstance(field.value, (CallExpr, MethodCallExpr)):
+                value_reg = self._compile_call_like(field.value)
             elif isinstance(field.value, VarargExpr):
                 value_reg = self._compile_vararg_expr(multi=False, node=field.value)
             else:

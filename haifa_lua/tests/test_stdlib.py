@@ -1,3 +1,4 @@
+import math
 import pathlib
 import sys
 
@@ -130,6 +131,7 @@ def test_error_and_assertions():
     with pytest.raises(LuaRuntimeError) as excinfo:
         run_source("error('boom')")
     assert "boom" in str(excinfo.value)
+    assert excinfo.value.traceback.startswith("stack traceback")
 
     src = """
     local ok, msg, extra = assert(true, "ok", 5)
@@ -140,6 +142,7 @@ def test_error_and_assertions():
     with pytest.raises(LuaRuntimeError) as excinfo2:
         run_source("assert(false, 'fail')")
     assert "fail" in str(excinfo2.value)
+    assert excinfo2.value.traceback.startswith("stack traceback")
 
 
 def test_error_default_message_and_assert_varargs():
@@ -427,3 +430,120 @@ def test_coroutine_snapshot_contains_runtime_state():
     assert coro_snapshot.call_stack, "call stack should contain at least the current frame"
     assert coro_snapshot.upvalues is not None
     assert coro_snapshot.current_pc is not None
+
+
+def test_string_pattern_and_formatting():
+    src = """
+    local text = "haifa 2024!"
+    local start_idx, end_idx, digits = string.find(text, "(%d+)")
+    local replaced, count = string.gsub(text, "%d", "#")
+    local word = string.match("user:abc42", "user:(%w+)")
+    local formatted = string.format("Hello %s #%02d %.2f %%", "Lua", 7, 3.14159)
+    local plain_start, plain_end = string.find("abcabc", "bc", 3, true)
+    local upper = string.gsub("mixed case", "%w+", function(value)
+        return string.upper(value)
+    end)
+    return start_idx, end_idx, digits, replaced, count, word, formatted, plain_start, plain_end, upper
+    """
+    result = run_source(src)
+    assert result == [
+        7,
+        10,
+        "2024",
+        "haifa ####!",
+        4,
+        "abc42",
+        "Hello Lua #07 3.14 %",
+        5,
+        6,
+        "MIXED CASE",
+    ]
+
+
+def test_table_pack_unpack_and_move():
+    src = """
+    local packed = table.pack(10, 20, 30)
+    local first, second, third = table.unpack(packed)
+    local target = {0, 0, 0, 0}
+    table.move(packed, 1, packed.n, 2, target)
+    table.move(target, 2, 4, 1)
+    return packed.n, first, second, third, target[1], target[2], target[3], target[4]
+    """
+    result = run_source(src)
+    assert result == [3, 10, 20, 30, 10, 20, 30, 30]
+
+
+def test_math_trig_random_and_modf():
+    src = """
+    math.randomseed(42)
+    local r1 = math.random()
+    local r2 = math.random(5)
+    local r3 = math.random(2, 4)
+    local sinv = math.sin(math.rad(90))
+    local degv = math.deg(math.pi)
+    local radv = math.rad(180)
+    local atanv = math.atan(1, 1)
+    local int_part, frac_part = math.modf(3.25)
+    return r1, r2, r3, sinv, degv, radv, atanv, int_part, frac_part, math.huge > 1e308
+    """
+    result = run_source(src)
+    assert result[0] == pytest.approx(0.6394267984578837)
+    assert result[1:] == [
+        1.0,
+        4.0,
+        pytest.approx(1.0),
+        180.0,
+        pytest.approx(math.pi),
+        pytest.approx(math.pi / 4),
+        3.0,
+        pytest.approx(0.25),
+        True,
+    ]
+
+
+def test_os_date_time_and_difftime():
+    src = """
+    local stamp = os.time({ year = 2024, month = 1, day = 2, hour = 12, min = 34, sec = 56, isdst = false })
+    local t = os.date("*t", stamp)
+    local iso = os.date("!%Y-%m-%d", stamp)
+    local diff = os.difftime(stamp + 10, stamp)
+    local clk = os.clock()
+    return t.year, t.month, t.day, t.hour, t.min, t.sec, t.isdst, iso, diff, type(clk), clk >= 0
+    """
+    result = run_source(src)
+    assert result[0:7] == [2024, 1, 2, 12, 34, 56, False]
+    assert result[7] == "2024-01-02"
+    assert result[8] == pytest.approx(10.0)
+    assert result[9] == "number"
+    assert result[10] is True
+
+
+def test_io_streams_and_debug_traceback():
+    env = create_default_environment()
+    script = """
+    local handle = io.write("hi")
+    local again = handle:write(" there")
+    io.stderr:write("err")
+    result_stream = handle == io.stdout
+    chained_stream = again == io.stdout
+    stream_type = io.type(io.stdout)
+    """
+    output = run_source(script, env)
+    assert output == ["hi", " there", "err"]
+    assert env["result_stream"] is True
+    assert env["chained_stream"] is True
+    assert env["stream_type"] == "file"
+
+
+def test_debug_traceback_returns_message_and_stack():
+    src = """
+    local function inner()
+        return debug.traceback("marker")
+    end
+    return inner()
+    """
+    result = run_source(src)
+    trace = result[0]
+    assert "marker" in trace
+    assert "stack traceback" in trace
+

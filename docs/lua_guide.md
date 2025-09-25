@@ -433,6 +433,42 @@ person.greet()
 
 ## 深入理解
 
+### 模块系统与动态加载
+
+Core VM 现已支持 Lua 风格的模块加载机制。标准库在全局环境中注册了以下入口：
+
+* `require(name)`：按照 `package.searchers` 顺序查找并加载模块，同时缓存到 `package.loaded`，重复调用不会重复执行模块文件。
+* `dofile(path)` / `loadfile(path [, env])`：从文件系统读取 Lua 脚本并执行或返回可调用 chunk，可指定自定义环境实现沙箱。
+* `load(chunk [, chunkname [, env]])`：从字符串创建可执行的 chunk，支持传入新的全局环境。
+
+默认的 `package.searchers` 包含 `package.preload` 与基于 `package.path` 的文件查找逻辑（兼容 `?.lua` / `?/init.lua`），可以按需扩展。`package.sandbox(name, env, inherit)` 允许为指定模块注册隔离环境：
+
+```lua
+-- 在脚本入口设置搜索路径根目录
+package.path = "./?.lua;./?/init.lua"
+
+local sandbox = { print = print, value = 42 }
+package.sandbox("secure.module", sandbox, false)
+
+local m = require("secure.module")
+print(m.answer)
+```
+
+当 CLI 以 `pylua some/main.lua` 执行脚本时，模块查找会以脚本所在目录为基准，错误信息同样会定位到具体模块源文件，便于调试。
+
+### 标准库扩展与运行时服务
+
+最新版标准库在原有基础上补齐了大量常用 API，覆盖字符串模式匹配、表打包与移动、数学函数、系统时间以及调试辅助：
+
+* **字符串库**：`string.find`/`match`/`gsub` 支持 Lua 模式语法与捕获组替换，`string.format` 可格式化数字、字符串并处理 `%q` 转义。
+* **表工具**：新增 `table.pack`、`table.unpack`、`table.move`，方便在多返回值与稀疏数组之间转换，同时保持 `n` 字段与移动语义兼容。
+* **数学库**：补充三角函数 `sin`/`cos`/`tan` 及其反函数、角度转换 `deg`/`rad`、指数/对数、`math.modf`，并提供 `math.random`/`randomseed` 与 `math.huge` 常量。
+* **系统库**：`os.clock`/`os.time`/`os.date`/`os.difftime` 支持当前时间与时间戳转换，遵循沙箱策略不会暴露文件系统。
+* **IO 库**：提供受控的 `io.write`、`io.stdout`、`io.stderr` 与 `io.type`，输出仍写入虚拟机缓冲区，便于在 CLI 或沙箱中收集。
+* **调试库**：`debug.traceback([message[, level]])` 可在脚本内部生成 Lua 风格的调用栈文本，与 CLI 的 `--stack` 输出保持一致。
+
+所有扩展均遵守模块沙箱规则，若通过 `package.sandbox` 构建自定义环境，可按需暴露或替换这些库函数。
+
 ### 字节码指令集详解
 
 我们的虚拟机使用基于寄存器的指令集，主要指令包括：
