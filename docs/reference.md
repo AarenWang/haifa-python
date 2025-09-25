@@ -28,6 +28,13 @@
 | `--visualize [mode]` | 启动 VM 可视化器；`mode` 为 `gui` (默认) 或 `curses` |
 | `--debug` | 输出完整堆栈调试信息 |
 
+### 1.4 Lua REPL
+
+- `pylua` 在 TTY 中默认进入交互式 REPL，使用 `pylua --repl` 可在任何环境强制启用。
+- 主提示符为 `>`，多行语句时使用 `...` 续行，`=` 前缀会自动补全为 `return`。
+- 内置命令：`:help`、`:quit`/`:q`、`:trace none|instructions|coroutine|all`、`:env`。
+- `--trace`、`--stack`、`--break-on-error` 选项在 REPL 中同样生效，可结合 `:trace` 动态调整。
+
 ## 2. 支持的 jq 语法元素
 
 ### 2.1 基础表达式

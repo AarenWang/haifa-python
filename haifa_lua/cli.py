@@ -6,14 +6,9 @@ import sys
 from typing import Optional
 
 from compiler.vm_errors import VMRuntimeError
-from compiler.vm_events import (
-    CoroutineCompleted,
-    CoroutineCreated,
-    CoroutineResumed,
-    CoroutineYielded,
-)
-
 from .debug import as_lua_error, format_traceback
+from .event_format import format_coroutine_event
+from .repl import ReplSession
 from .runtime import compile_source, run_source
 from .stdlib import create_default_environment
 from compiler.bytecode_vm import BytecodeVM
@@ -31,6 +26,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Pause for confirmation when an error occurs",
     )
+    parser.add_argument("--repl", action="store_true", help="Start an interactive REPL session")
     args = parser.parse_args(argv)
 
     try:
@@ -39,7 +35,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.inline and args.script:
             parser.error("cannot use script path and --execute together")
             return 1
-
+        if args.repl and (args.inline or args.script):
+            parser.error("--repl cannot be combined with script or --execute")
+            return 1
+        if args.repl or (not args.inline and not args.script and sys.stdin.isatty()):
+            session = ReplSession(
+                trace_filter=trace_filter,
+                show_stack=args.stack,
+                break_on_error=args.break_on_error,
+            )
+            session.run()
+            return 0
         if debug_enabled:
             if args.inline:
                 source = args.inline
@@ -110,22 +116,7 @@ def _print_events(events: list) -> None:
         return
     print("Coroutine events:")
     for event in events:
-        print(f"  - {_format_event(event)}")
-
-
-def _format_event(event: object) -> str:
-    if isinstance(event, (CoroutineCreated,)):
-        name = event.function_name or "<function>"
-        return f"created #{event.coroutine_id} ({name})"
-    if isinstance(event, CoroutineResumed):
-        return f"resume #{event.coroutine_id} args={list(event.args)}"
-    if isinstance(event, CoroutineYielded):
-        return f"yield #{event.coroutine_id} values={list(event.values)} pc={event.pc}"
-    if isinstance(event, CoroutineCompleted):
-        if event.error:
-            return f"#{event.coroutine_id} error: {event.error}"
-        return f"#{event.coroutine_id} completed values={list(event.values)}"
-    return str(event)
+        print(f"  - {format_coroutine_event(event)}")
 
 
 if __name__ == "__main__":  # pragma: no cover
