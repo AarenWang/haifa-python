@@ -3,7 +3,7 @@ import math
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .bytecode import Instruction, InstructionDebug, Opcode
 from .vm_errors import VMRuntimeError
@@ -60,6 +60,7 @@ class BytecodeVM:
         self.pending_params = []
         self.return_value = None
         self.emit_stack = []
+        self.try_stack: List[Tuple[str, str, int, Optional[str]]] = []
         self.pc = 0
         self.output = []
         self.current_upvalues = []
@@ -318,9 +319,13 @@ class BytecodeVM:
 
         try:
             control = handler(args)
-        except VMRuntimeError:
+        except VMRuntimeError as exc:
+            if self._handle_exception(exc):
+                return None
             raise
         except Exception as exc:
+            if self._handle_exception(exc):
+                return None
             raise self._wrap_runtime_error(exc) from exc
         if control == "jump":
             return None  # PC is already updated
@@ -332,6 +337,24 @@ class BytecodeVM:
 
         self.pc += 1
         return None
+
+    def _handle_exception(self, exc: Exception) -> bool:
+        if not self.try_stack:
+            return False
+        catch_label, error_reg, emit_depth, buffer_reg = self.try_stack.pop()
+        while len(self.emit_stack) > emit_depth:
+            self.emit_stack.pop()
+        if buffer_reg is not None:
+            self.registers[buffer_reg] = []
+        self.registers[error_reg] = self._format_exception_message(exc)
+        self.pc = self.labels[catch_label]
+        return True
+
+    def _format_exception_message(self, exc: Exception) -> str:
+        message = str(exc)
+        if not message:
+            message = repr(exc)
+        return message
 
     def run(self, debug=False, stop_on_yield=False):
         self.index_labels()

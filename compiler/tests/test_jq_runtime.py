@@ -99,6 +99,26 @@ class TestJQRuntime(unittest.TestCase):
             next(stream)
         self.assertIn("input #1", str(ctx.exception))
 
+    def test_comma_union_outputs_each_branch(self):
+        data = {"a": 1, "b": 2}
+        self.assertEqual(run_filter(".a, .b", data), [1, 2])
+
+    def test_if_else_filters(self):
+        data_true = {"flag": True, "value": 10, "alt": 5}
+        data_false = {"flag": False, "value": 10, "alt": 5}
+        self.assertEqual(run_filter("if .flag then .value else .alt end", data_true), [10])
+        self.assertEqual(run_filter("if .flag then .value else .alt end", data_false), [5])
+
+    def test_try_catch_captures_runtime_errors(self):
+        data = {"num": 1, "den": 0}
+        result = run_filter("try (.num / .den) catch .", data)
+        self.assertEqual(len(result), 1)
+        self.assertIn("zero", result[0])
+
+    def test_def_creates_custom_function(self):
+        data = {"name": "Alice"}
+        self.assertEqual(run_filter("def greet: {greeting: .name}; greet", data), [{"greeting": "Alice"}])
+
 
 if __name__ == "__main__":
     unittest.main()
