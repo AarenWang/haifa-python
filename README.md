@@ -157,6 +157,9 @@ printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
 
 ### Lua 命令行示例
 ```bash
+# 启动交互式 REPL
+pylua --repl
+
 # 直接执行代码
 pylua --execute 'x = 1; y = 2; return x + y'
 
