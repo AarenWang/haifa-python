@@ -81,6 +81,7 @@ class BytecodeVM:
             Opcode.MUL: self._op_MUL,
             Opcode.DIV: self._op_DIV,
             Opcode.MOD: self._op_MOD,
+            Opcode.CONCAT: self._op_CONCAT,
             Opcode.NEG: self._op_NEG,
             Opcode.EQ: self._op_EQ,
             Opcode.GT: self._op_GT,
@@ -358,6 +359,22 @@ class BytecodeVM:
 
     def _op_MOD(self, args):
         self.registers[args[0]] = self.val(args[1]) % self.val(args[2])
+
+    def _op_CONCAT(self, args):
+        dst, left_reg, right_reg = args
+        left = self.val(left_reg)
+        right = self.val(right_reg)
+
+        def _coerce(value):
+            if isinstance(value, (int, float)):
+                return ("%s" % value)
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if value is None:
+                return "nil"
+            return str(value)
+
+        self.registers[dst] = _coerce(left) + _coerce(right)
 
     def _op_NEG(self, args):
         self.registers[args[0]] = -self.val(args[1])
