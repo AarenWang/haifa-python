@@ -96,9 +96,24 @@ def test_string_library_functions():
     assert result == ["ello", "lo World", "World", "HELLO WORLD", "hello world"]
 
 
+def test_tonumber_base_conversion_and_invalid_digits():
+    src = """
+    local invalid = tonumber("7", 2)
+    return tonumber("ff", 16), invalid == nil
+    """
+    result = run_source(src)
+    assert result == [255.0, True]
+
+
+def test_tonumber_rejects_base_out_of_range():
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source("tonumber('10', 1)")
+    assert "base out of range" in str(excinfo.value)
+
+
 def test_table_concat_and_sort():
     src = """
-    local letters = {"a", "b", "c"}
+    local letters = {"a", 7, "c"}
     local joined = table.concat(letters)
     local sliced = table.concat(letters, "-", 2, 3)
     local numbers = {5, 1, 3}
@@ -108,7 +123,7 @@ def test_table_concat_and_sort():
     return joined, sliced, numbers[1], numbers[2], numbers[3], words[1], words[2], words[3]
     """
     result = run_source(src)
-    assert result == ["abc", "b-c", 1, 3, 5, "bbbb", "aa", "c"]
+    assert result == ["a7c", "7-c", 1, 3, 5, "bbbb", "aa", "c"]
 
 
 def test_error_and_assertions():
@@ -125,6 +140,40 @@ def test_error_and_assertions():
     with pytest.raises(LuaRuntimeError) as excinfo2:
         run_source("assert(false, 'fail')")
     assert "fail" in str(excinfo2.value)
+
+
+def test_error_default_message_and_assert_varargs():
+    with pytest.raises(LuaRuntimeError) as excinfo:
+        run_source("error()")
+    assert "error" in str(excinfo.value)
+
+    src = """
+    local a, b, c = assert(5, "keep", nil)
+    return a, b, c
+    """
+    result = run_source(src)
+    assert result == [5, "keep", None]
+
+
+def test_pairs_and_ipairs_return_protocol():
+    src = """
+    local iter, tbl, seed = ipairs({10, 20})
+    local first_index, first_value = iter(tbl, seed)
+    local next_fn, next_tbl, start_key = pairs({x = 1})
+    return type(iter), type(tbl), seed, first_index, first_value,
+        type(next_fn), type(next_tbl), start_key
+    """
+    result = run_source(src)
+    assert result == [
+        "function",
+        "table",
+        0,
+        1,
+        10,
+        "function",
+        "table",
+        None,
+    ]
 
 
 def test_table_insert_and_remove_roundtrip():
@@ -171,6 +220,60 @@ def test_builtin_with_closure_and_multi_return():
     """
     result = run_source(src)
     assert result == [17.0, 2]
+
+
+def test_pcall_wraps_errors_with_metadata():
+    src = """
+    local function safe_add(a, b)
+        return a + b
+    end
+
+    local function explode()
+        local function inner()
+            error(\"kaboom\")
+        end
+        inner()
+    end
+
+    local ok1, sum = pcall(safe_add, 2, 3)
+    local ok2, err = pcall(explode)
+    local frame = err.frames[1]
+    local top_name = nil
+    if frame ~= nil then
+        top_name = frame[\"function\"]
+    end
+    return ok1, sum, ok2, err.message, err.traceback, top_name, err[\"type\"]
+    """
+    result = run_source(src)
+    assert result[0:2] == [True, 5]
+    assert result[2] is False
+    assert "kaboom" in result[3]
+    assert result[4].startswith("stack traceback")
+    assert isinstance(result[5], str) and result[5]
+    assert result[6] == "VMRuntimeError"
+
+
+def test_xpcall_invokes_handler_on_failure():
+    src = """
+    local function join(a, b)
+        return a .. b
+    end
+
+    local function explode()
+        error(\"kapow\")
+    end
+
+    local function handler(err)
+        return \"handled:\" .. err.message
+    end
+
+    local ok1, value = xpcall(join, handler, \"ha\", \"ifa\")
+    local ok2, handled = xpcall(explode, handler)
+    local prefix = string.sub(handled, 1, string.len(\"handled:\"))
+    return ok1, value, ok2, prefix
+    """
+    result = run_source(src)
+    assert result == [True, "haifa", False, "handled:"]
 
 
 def test_print_handles_multi_return():

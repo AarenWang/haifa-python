@@ -78,6 +78,7 @@ class LuaCompiler:
         self.source_name = source_name
         self.function_name = function_name
         self._last_debug: InstructionDebug | None = None
+        self.loop_stack: List[str] = []
 
     # ------------------------------------------------------------------
     @classmethod
@@ -190,11 +191,15 @@ class LuaCompiler:
     # ------------------------------------------------------------------ Statements
     def _compile_block(self, block: Block, top_level: bool = False):
         prev_top = self.is_top_level
-        if top_level:
-            self.is_top_level = True
-        else:
-            self.is_top_level = False
+        self.is_top_level = bool(top_level)
         self._push_scope()
+        try:
+            self._compile_block_statements(block)
+        finally:
+            self._pop_scope()
+            self.is_top_level = prev_top
+
+    def _compile_block_statements(self, block: Block) -> None:
         for stmt in block.statements:
             if isinstance(stmt, Assignment):
                 self._compile_assignment(stmt)
@@ -207,11 +212,11 @@ class LuaCompiler:
             elif isinstance(stmt, ForGenericStmt):
                 self._compile_generic_for(stmt)
             elif isinstance(stmt, RepeatStmt):
-                raise CompileError("repeat-until is not supported yet")
+                self._compile_repeat(stmt)
             elif isinstance(stmt, DoStmt):
                 self._compile_block(stmt.body)
             elif isinstance(stmt, BreakStmt):
-                raise CompileError("break is not supported yet")
+                self._compile_break(stmt)
             elif isinstance(stmt, ReturnStmt):
                 self._compile_return(stmt)
             elif isinstance(stmt, FunctionStmt):
@@ -220,8 +225,6 @@ class LuaCompiler:
                 self._compile_expr(stmt.expr)
             else:
                 raise CompileError(f"Unsupported statement: {stmt}")
-        self._pop_scope()
-        self.is_top_level = prev_top
 
     def _compile_assignment(self, stmt: Assignment):
         target_count = len(stmt.targets)
@@ -359,7 +362,9 @@ class LuaCompiler:
         self._emit(Opcode.LABEL, [start_label], node=stmt)
         cond_reg = self._compile_expr(stmt.condition)
         self._emit(Opcode.JZ, [cond_reg, end_label], node=stmt)
+        self.loop_stack.append(end_label)
         self._compile_block(stmt.body)
+        self.loop_stack.pop()
         self._emit(Opcode.JMP, [start_label], node=stmt)
         self._emit(Opcode.LABEL, [end_label], node=stmt)
 
@@ -418,7 +423,9 @@ class LuaCompiler:
         self._emit(Opcode.JZ, [cond_reg, end_label], node=stmt)
 
         self._emit(Opcode.LABEL, [loop_label], node=stmt)
+        self.loop_stack.append(end_label)
         self._compile_block(stmt.body)
+        self.loop_stack.pop()
         current_val = self._binding_read(var_binding, stmt)
         next_val = self._new_temp()
         self._emit(Opcode.ADD, [next_val, current_val, step_reg], node=stmt)
@@ -498,11 +505,38 @@ class LuaCompiler:
                 self._emit(Opcode.LIST_GET, [value_reg, result_list, idx], node=stmt)
             self._binding_write(binding, value_reg, stmt)
 
+        self.loop_stack.append(end_label)
         self._compile_block(stmt.body)
+        self.loop_stack.pop()
         self._emit(Opcode.JMP, [loop_label], node=stmt)
 
         self._emit(Opcode.LABEL, [end_label], node=stmt)
         self._pop_scope()
+
+    def _compile_repeat(self, stmt: RepeatStmt):
+        start_label = f"__repeat_start_{self._new_temp()}"
+        end_label = f"__repeat_end_{self._new_temp()}"
+        self._emit(Opcode.LABEL, [start_label], node=stmt)
+        self.loop_stack.append(end_label)
+        self._push_scope()
+        prev_top = self.is_top_level
+        self.is_top_level = False
+        cond_reg = None
+        try:
+            self._compile_block_statements(stmt.body)
+            cond_reg = self._compile_expr(stmt.condition)
+            self._emit(Opcode.JZ, [cond_reg, start_label], node=stmt)
+        finally:
+            self.is_top_level = prev_top
+            self._pop_scope()
+            self.loop_stack.pop()
+        self._emit(Opcode.LABEL, [end_label], node=stmt)
+
+    def _compile_break(self, stmt: BreakStmt):
+        if not self.loop_stack:
+            raise CompileError("`break` used outside of a loop")
+        target = self.loop_stack[-1]
+        self._emit(Opcode.JMP, [target], node=stmt)
 
     def _compile_return(self, stmt: ReturnStmt):
         if not stmt.values:
@@ -600,6 +634,7 @@ class LuaCompiler:
             "*": Opcode.MUL,
             "/": Opcode.DIV,
             "%": Opcode.MOD,
+            "..": Opcode.CONCAT,
         }
         if op in table:
             self._emit(table[op], [dst, left, right], node=expr)
