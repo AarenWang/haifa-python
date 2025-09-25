@@ -9,6 +9,7 @@ from compiler.vm_errors import VMRuntimeError
 from .coroutines import CoroutineError, LuaCoroutine
 from .environment import BuiltinFunction, LuaEnvironment, LuaMultiReturn
 from .debug import format_lua_error, format_traceback
+from .module_system import LuaModuleSystem
 from .table import LuaTable
 
 
@@ -548,6 +549,12 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
         "yield": BuiltinFunction("coroutine.yield", _coroutine_yield),
     }
     env.register_library("coroutine", coroutine_members)
+
+    module_system = getattr(env, "module_system", None)
+    if not isinstance(module_system, LuaModuleSystem):
+        module_system = LuaModuleSystem(env)
+    module_system.attach_environment(env)
+    env.mark_stdlib_ready()
 
     return env
 
