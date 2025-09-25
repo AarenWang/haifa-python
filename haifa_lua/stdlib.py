@@ -4,9 +4,11 @@ import math
 from typing import Any, Sequence
 
 from compiler.bytecode_vm import LuaYield
+from compiler.vm_errors import VMRuntimeError
 
 from .coroutines import CoroutineError, LuaCoroutine
 from .environment import BuiltinFunction, LuaEnvironment, LuaMultiReturn
+from .debug import format_lua_error, format_traceback
 from .table import LuaTable
 
 
@@ -46,6 +48,36 @@ def _ensure_string(value: Any) -> str:
     if isinstance(value, str):
         return value
     raise RuntimeError("expected string")
+
+
+def _wrap_frames(frames) -> LuaTable:
+    table = LuaTable()
+    for index, frame in enumerate(frames, start=1):
+        entry = LuaTable()
+        entry.raw_set("function", frame.function_name)
+        entry.raw_set("file", frame.file)
+        entry.raw_set("line", frame.line)
+        entry.raw_set("pc", frame.pc)
+        if frame.coroutine_id is not None:
+            entry.raw_set("coroutine", frame.coroutine_id)
+        table.raw_set(index, entry)
+    return table
+
+
+def _create_error_object(error: Exception) -> LuaTable:
+    table = LuaTable()
+    if isinstance(error, VMRuntimeError):
+        frames = error.frames
+        message = format_lua_error(str(error), frames[0] if frames else None)
+        table.raw_set("traceback", format_traceback(frames) if frames else "")
+        table.raw_set("frames", _wrap_frames(frames))
+    else:
+        message = str(error) or error.__class__.__name__
+        table.raw_set("traceback", "")
+        table.raw_set("frames", LuaTable())
+    table.raw_set("message", message)
+    table.raw_set("type", error.__class__.__name__)
+    return table
 
 
 def _is_lua_truthy(value: Any) -> bool:
@@ -216,6 +248,32 @@ def _lua_assert(args: Sequence[Any], vm: Any) -> LuaMultiReturn | Any:  # noqa: 
     return LuaMultiReturn(list(args))
 
 
+def _lua_pcall(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 1)
+    func = args[0]
+    call_args = list(args[1:])
+    try:
+        result = vm.call_callable(func, call_args)
+    except Exception as exc:  # noqa: BLE001 - needs to catch VMRuntimeError and RuntimeError
+        error_obj = _create_error_object(exc)
+        return LuaMultiReturn([False, error_obj])
+    return LuaMultiReturn([True, *result])
+
+
+def _lua_xpcall(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 2)
+    func = args[0]
+    handler = args[1]
+    call_args = list(args[2:])
+    try:
+        result = vm.call_callable(func, call_args)
+        return LuaMultiReturn([True, *result])
+    except Exception as exc:  # noqa: BLE001 - needs to catch VMRuntimeError and RuntimeError
+        error_obj = _create_error_object(exc)
+        handler_result = vm.call_callable(handler, [error_obj])
+        return LuaMultiReturn([False, *handler_result])
+
+
 def _string_sub(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     _ensure_args(args, 2, 3)
     value = _ensure_string(args[0])
@@ -278,7 +336,7 @@ def _table_concat(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
         value = table.raw_get(index)
         if value is None:
             raise RuntimeError("table element is nil")
-        parts.append(_ensure_string(value))
+        parts.append(_lua_tostring(value))
     return separator.join(parts)
 
 
@@ -390,6 +448,8 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     tostring_builtin = BuiltinFunction("tostring", _lua_tostring_builtin, "Convert a value to a string.")
     error_builtin = BuiltinFunction("error", _lua_error, "Raise a Lua error.")
     assert_builtin = BuiltinFunction("assert", _lua_assert, "Assert that a value is truthy.")
+    pcall_builtin = BuiltinFunction("pcall", _lua_pcall, "Call a function in protected mode.")
+    xpcall_builtin = BuiltinFunction("xpcall", _lua_xpcall, "Protected call with custom handler.")
     ipairs_iterator = BuiltinFunction("ipairs_iterator", _ipairs_iter)
 
     env.register("type", type_builtin)
@@ -400,6 +460,8 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     env.register("tostring", tostring_builtin)
     env.register("error", error_builtin)
     env.register("assert", assert_builtin)
+    env.register("pcall", pcall_builtin)
+    env.register("xpcall", xpcall_builtin)
 
     math_members = {
         "abs": BuiltinFunction("math.abs", _math_unary(lambda x: abs(x))),

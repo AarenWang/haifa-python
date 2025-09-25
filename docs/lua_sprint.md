@@ -70,7 +70,7 @@
 ### Milestone 5：表与表达式扩展
 - [x] AST/Parser：支持表构造器（数组部分、键值对）、字段访问/索引表达式、方法调用语法。
 - [X] 赋值语义：允许多目标赋值、`local` 批量声明，并与多返回值/vararg 对齐。
-- [X] 运算符补全：实现字符串拼接 `..`、长度运算 `#`、必要的比较/算术扩展。
+- [x] 运算符补全：实现字符串拼接 `..`、长度运算 `#`、必要的比较/算术扩展。
 - [ ] 编译器/VM：为表读写、`#` 运算等生成字节码，实现运行时的 Lua 表模型（dict/list 混合）。
 - [ ] 标准库/测试：更新 `table` 库 API，补充表构造、字段更新、赋值语义的单元与集成测试。
 
@@ -82,8 +82,8 @@
 
 ### Milestone 7：标准库与错误处理增强
 - [x] 内置函数：增加 `type`、`next`、`pairs`/`ipairs`、`tonumber`、`tostring`、`error`、`assert` 等核心能力。
-- [ ] 字符串/表扩展：实现 `string.sub/upper/lower`、`table.concat/sort` 等高频 API。
-- [ ] 错误与保护调用：支持 `pcall`/`xpcall`、改进异常对象，补充错误传播测试。
+- [x] 字符串/表扩展：实现 `string.sub/upper/lower`、`table.concat/sort` 等高频 API。
+- [x] 错误与保护调用：支持 `pcall`/`xpcall`、改进异常对象，补充错误传播测试。
 - [ ] 文档：更新 `docs/lua_guide.md` 与 CLI 帮助，列出标准库覆盖范围与示例。
 
 ## 开发原则
