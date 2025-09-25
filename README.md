@@ -1,267 +1,97 @@
 # Haifa Python 编译器与虚拟机
 
-Haifa Python 提供了一个教学友好的编译器与虚拟机实验平台：
-从类汇编脚本解析成抽象语法树（AST），再编译为字节码并在虚拟机上运行。
-在此基础上，我们扩展出 jq 风格的 JSON 处理运行时，形成“Core VM + jq 工具层”的分层架构。
 
-## 项目亮点
-- **完整流水线**：类汇编 → AST → 字节码 → 字节码虚拟机，配套解释器与可视化工具。
-- **分层设计**：核心指令集保持精简通用；jq 功能通过独立的 `JQOpcode` 与 `JQVM` 扩展。
-- **JSON 友好**：支持对象/数组/字符串/布尔/Null 等值类型，兼容 jq 常用过滤器、排序、聚合与字符串处理。
-- **CLI 体验**：`python -m compiler.jq_cli` 提供 jq 风格命令行，覆盖变量、输入模式、输出格式等选项。
-- **流式运行**：jq 运行时缓存编译结果并按需流式输出，适合处理大规模输入。
-- **测试齐备**：`pytest` 覆盖核心指令、jq 解析与运行时、端到端 CLI 等 100+ 用例。
-- **Lua 模块化**：新增 `pylua` 解释器（Milestone 1），在 Core VM 上执行 Lua 子集脚本。
-- **闭包与多返回**：Milestone 2A/2B 提供 Lua 闭包、Upvalue、可变参数与多返回值语义。
+Haifa Python 是一个教学友好、可视化友好的“字节码编译器 + 虚拟机”实验平台。在统一的 Core VM 上，项目同时承载：
+- jq 风格 JSON 处理运行时（JQ）
+- Lua 子集解释执行（Lua）
 
-## 目录结构速览
-| 路径 | 说明 |
-| --- | --- |
-| `compiler/parser.py` | 类汇编脚本解析器，生成 AST 节点序列 |
-| `compiler/ast_nodes.py` | AST 节点定义，覆盖算术、控制流、函数、数组、位运算等 |
-| `compiler/compiler.py` | 将 AST 翻译为仅包含 Core `Opcode` 的字节码 |
-| `compiler/bytecode.py` | Core 指令枚举与 `Instruction` 数据结构 |
-| `compiler/bytecode_vm.py` | Core 字节码虚拟机，执行通用指令并提供调试状态 |
-| `compiler/jq_parser.py` / `compiler/jq_ast.py` | jq 语法解析与 AST 定义 |
-| `compiler/jq_compiler.py` | jq AST → `Opcode` + `JQOpcode` 字节码编译器 |
-| `compiler/jq_vm.py` | 基于 Core VM 的 jq 虚拟机，注册 jq 专属指令处理器 |
-| `compiler/jq_cli.py` | jq 命令行入口，负责参数解析、输入输出管线 |
-| `docs/jq_design.md` | jq 功能路线图、指令分层对照表、设计笔记 |
-| `vm/` | 早期寄存器/栈 VM 实验实现与测试 |
+你可以从“源代码/脚本 → AST → 字节码 → 虚拟机执行”的完整链路中学习、实验和扩展，并用 GUI/终端可视化器实时观察执行过程。
 
-## 指令分层概览
-- **Core Opcode**：由 `Opcode` 枚举定义，负责算术逻辑、跳转、数组、函数调用等通用操作。
-- **JQ Opcode**：由 `JQOpcode` 描述 jq 专属语义（对象访问、迭代、聚合、字符串工具等）。
-- **执行单元**：`BytecodeVM` 仅实现 Core 指令；`JQVM` 在其基础上扩展 jq 指令处理。
-- 详见 `docs/jq_design.md` 的“指令分层对照表”。
+## 1. 项目快速入手
 
-## 快速上手
-1. 准备 Python 3.11+ 环境（推荐使用虚拟环境）。
-2. 安装依赖：
-   ```bash
-   # 仅运行时依赖
-   pip install .
-   
-   # 或安装开发依赖（包含构建工具）
-   pip install ".[dev]"
-   ```
-3. 运行测试验证环境：
-   ```bash
-   pytest
-   ```
+- 环境准备
+  - Python 3.11+（推荐虚拟环境）
+  - 一键创建/激活并安装依赖：
+    ```bash
+    source scripts/activate_venv.sh
+    # 如需 GUI 可视化，请额外安装 pygame
+    pip install pygame
+    ```
+  - 运行测试：`pytest`
 
-## Core 指令概览
-- **运算/赋值**：`MOV`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `CLR`, `CMP_IMM`
-- **逻辑/跳转**：`EQ`, `GT`, `LT`, `AND`, `OR`, `NOT`, `JMP`, `JZ`, `JNZ`, `JMP_REL`, `LABEL`
-- **位操作**：`AND_BIT`, `OR_BIT`, `XOR`, `NOT_BIT`, `SHL`, `SHR`, `SAR`
-- **栈与调用**：`CALL`, `RETURN`, `PARAM`, `ARG`, `RESULT`, `PUSH`, `POP`
-- **数组**：`ARR_INIT`, `ARR_SET`, `ARR_GET`, `ARR_COPY`, `LEN`
-- **类型/空值工具**：`IS_OBJ`, `IS_ARR`, `IS_NULL`, `COALESCE`
-- **输出/辅助**：`PRINT`, `HALT`
+- 体验 Lua（pylua）
+  - 运行脚本：`pylua examples/hello.lua`
+  - 单行执行：`pylua -e 'x=1; y=2; return x+y' --print-output`
+  - REPL：`pylua --repl`
+  - 可视化执行：
+    - GUI：`pylua examples/coroutines.lua --visualize`
+    - 终端：`pylua examples/coroutines.lua --visualize curses`
 
-### 运行类汇编脚本
-- 编写汇编风格脚本，例如：
-  ```
-  MOV a, 5
-  ADD b, a, 3
-  PRINT b
-  HALT
-  ```
-- 使用解析器与编译器执行：
+- 体验 jq（pyjq）
+  - 从文件：`pyjq '.items | map(.name)' --input data.json`
+  - 从标准输入：`cat data.json | pyjq '.items[] | .price'`
+  - 可视化（终端）：`python -m compiler.jq_cli '.[]' --input data.json --visualize curses`
+
+提示：GUI 可视化器依赖 pygame；若没有图形环境或导入失败，会自动回退到 curses 终端模式。
+
+## 2. 本项目快速介绍
+
+- 完整流水线：源/脚本 → 词法/语法 → AST → 字节码 → Core VM → 可视化
+- 分层设计：核心指令集精简通用；JQ/Lua 分别在其上提供语义与标准库
+- 可视化调试：pygame GUI 与 curses 终端两种形态；支持协程事件时间线、寄存器变更高亮、指令搜索、执行轨迹导出
+- 测试与样例：200+ 测试与多份示例脚本，覆盖从指令到 CLI 的端到端路径
+
+## 3. 项目架构概览
+
+- Core 层（`compiler/`）
+  - `bytecode.py`：指令与调试元信息
+  - `bytecode_vm.py`：字节码虚拟机（寄存器模型、调用栈、事件/快照）
+  - 可视化：`vm_visualizer.py`（GUI）、`vm_visualizer_headless.py`（curses）
+
+- JQ 层（`compiler/`）
+  - `jq_parser.py` / `jq_ast.py` / `jq_compiler.py`：jq 解析与编译
+  - `jq_vm.py`：JQVM（在 Core VM 上扩展）
+  - `jq_cli.py`：命令行入口（`pyjq`）
+
+- Lua 层（`haifa_lua/`）
+  - 前端：`lexer.py`、`parser.py`、`compiler.py`
+  - 运行时：`runtime.py`、`environment.py`、`stdlib.py`、`coroutines.py`
+  - 命令行：`cli.py`（`pylua`）
+
+## 4. 代码层次与常用入口
+
+- 指令分层
+  - Core Opcode：算术/逻辑/跳转/表/闭包/多返回等通用操作（`compiler/bytecode.py`）
+  - JQ Opcode：对象访问、迭代、聚合、字符串等（`compiler/jq_*`）
+  - 执行单元：`BytecodeVM` 仅实现 Core；`JQVM` 在其上扩展 JQ 指令
+
+- CLI 与示例
+  - CLI：`pylua` 与 `pyjq`
+  - 示例：`examples/*.lua`；基准：`benchmark/scripts/*.lua`
+  - 可视化：`--visualize [gui|curses]`（Lua 与 jq 均支持）
+
+## 5. 相关文档索引
+
+- 语言/运行时与计划
+  - `docs/lua_sprint.md`：Lua 解释器里程碑与计划（含协程 API 完备）
+  - `docs/lua_guide.md`：Lua 实践指南与示例
+  - `docs/jq_design.md`：jq 设计与指令分层
+
+- 可视化与调试
+  - `knowledge/07-debugger-architecture.md`：调试器架构与原则
+  - `knowledge/09-coroutine-visualizer-and-error-plan.md`：协程事件与错误展示计划
+
+- 性能与基准
+  - `docs/performance_benchmark.md`：Lua 解释器性能基准方案
+  - `benchmark/`：脚本、运行器与报告示例
+
+---
+
+附注
+- GUI 中文显示：若 pygame GUI 无法显示中文，可在 `compiler/vm_visualizer.py` 中改用指定字体文件，例如：
   ```python
-  from compiler import parser, compiler, bytecode_vm
-
-  program = """\nMOV a, 5\nADD b, a, 3\nPRINT b\nHALT\n"""
-  nodes = parser.parse(program)
-  bytecode = compiler.ASTCompiler().compile(nodes)
-  vm = bytecode_vm.BytecodeVM(bytecode)
-  vm.run()
-  print(vm.output)  # [8]
+  # 替换 SysFont 为系统字体文件（示例）
+  self.font = pygame.font.Font('/System/Library/Fonts/PingFang.ttc', FONT_SIZE)
   ```
-
-- 查看包含函数调用的汇编脚本并在可视化器中观察调用栈：
-  ```python
-  from compiler.parser import parse
-  from compiler.compiler import ASTCompiler
-  from compiler.vm_visualizer import VMVisualizer
-  from compiler.bytecode_vm import BytecodeVM
-
-  script = [
-      "FUNC max2",
-      "ARG a",
-      "ARG b",
-      "GT cond a b",
-      "IF cond",
-      "RETURN a",
-      "ELSE",
-      "RETURN b",
-      "ENDIF",
-      "ENDFUNC",
-
-      "ARR_INIT arr 5",
-      "ARR_SET arr 0 5",
-      "ARR_SET arr 1 12",
-      "ARR_SET arr 2 7",
-      "ARR_SET arr 3 3",
-      "ARR_SET arr 4 9",
-      "MOV i 0",
-      "MOV len 5",
-      "ARR_GET max arr 0",
-
-      "LABEL loop",
-      "LT cond i len",
-      "JZ cond end",
-      "ARR_GET val arr i",
-      "PARAM max",
-      "PARAM val",
-      "CALL max2",
-      "RESULT max",
-      "ADD i i 1",
-      "JMP loop",
-      "LABEL end",
-      "PRINT max"
-  ]
-bytecode = ASTCompiler().compile(parse(script))
-vm = BytecodeVM(bytecode)
-VMVisualizer(vm).run()
-```
-
-### 可视化调试器
-
-项目提供两种可视化模式，均支持中文显示：
-
-**GUI 模式（需要安装 `pip install ".[gui]"`）：**
-```bash
-pylua --visualize gui examples/chinese_test.lua
-```
-- 支持中文字符显示，自动检测系统字体
-- 协程列表、事件时间线与参数详情
-- `SPACE` 单步执行，`P` 自动运行/暂停，`Q` 退出
-- `/` 搜索指令，寄存器变更高亮
-- `L` 导出执行轨迹（JSONL）
-
-**Curses 模式（无需额外依赖）：**
-```bash
-pylua --visualize curses examples/chinese_test.lua
-```
-- 终端内文本界面，原生支持中文
-- 基本的执行控制和状态显示
-
-### jq 命令行示例 
-```bash
-# 从 stdin 读取 JSON，输出对象的键
-cat data.json | python -m compiler.jq_cli 'keys'
-# 或使用安装后的 pyjq 命令
-cat data.json | pyjq 'keys'
-
-# 示例 data.json
-{
-  "items": [
-    {"name": "apple", "price": 12},
-    {"name": "pear", "price": 15}
-  ]
-}
-
-# 使用变量并启用紧凑输出
-python -m compiler.jq_cli '.items[] | {name, price}' \
-  --argjson items '[{"name": "apple", "price": 12}]' \
-  -n -c
-
-# 处理原始文本输入
-printf "a\nb\n" | python -m compiler.jq_cli '.' -R -r
-```
-
-常用选项：
-- `--arg/--argjson` 注入变量，`$var` 与 `expr as $x` 绑定。
-- `-n/--null-input`、`-R/--raw-input`、`--slurp` 控制输入模式。
-- `-r/--raw-output`、`-c/--compact-output` 控制输出格式。
-- `-f/--filter-file` 从文件加载过滤器。
-- `--debug` 输出完整堆栈，便于定位编译/执行错误。
-- `--visualize [gui|curses]` 选择可视化模式（默认 `gui`，可回退到 `curses`）。
-
-### Lua 命令行示例
-```bash
-# 启动交互式 REPL
-pylua --repl
-
-# 直接执行代码
-pylua --execute 'x = 1; y = 2; return x + y'
-
-# 运行脚本文件
-pylua examples/hello.lua
-
-# 查看 VM 输出
-pylua --execute 'function add(a,b) return a+b end return add(3,4)' --print-output
-```
-
-## 安装与分发
-
-### 通过 pip 安装 `pyjq` 和 `pylua`
-项目提供了标准的 `pyproject.toml`，安装后会自动注册 `pyjq` 和 `pylua` 命令：
-
-```bash
-# 安装运行时依赖
-pip install .
-
-# 安装开发依赖（包含构建工具）
-pip install ".[dev]"
-
-# 仅安装构建依赖
-pip install ".[build]"
-
-# 使用安装的命令
-pyjq '.foo' --input sample.json
-pylua examples/hello.lua
-```
-
-安装时会拉取 `compiler` 和 `haifa_lua` 包，`pyjq` 实际调用 `compiler.jq_cli:main`，`pylua` 调用 `haifa_lua.cli:main`。
-
-### 构建独立可执行文件
-若希望在无 Python 环境的机器上运行，可使用 PyInstaller 打包：
-
-```bash
-# 安装构建依赖
-pip install ".[build]"
-
-# 构建 pyjq 可执行文件
-pyinstaller --onefile --name pyjq compiler/jq_cli.py
-
-# 构建 pylua 可执行文件  
-pyinstaller --onefile --name pylua haifa_lua/cli.py
-
-# 生成的二进制位于 dist/ 目录（Windows 下为 .exe）
-```
-
-## 依赖管理
-项目使用 `pyproject.toml` 管理依赖：
-- **运行时依赖**：`pytest`（用于内置测试功能）
-- **GUI 依赖**：`pygame`（GUI 可视化器，支持中文显示）
-- **开发依赖**：`pyinstaller` + `pygame`（构建工具和GUI）
-- **构建依赖**：`pyinstaller`（仅构建工具，适用于 CI/CD）
-
-开发者可按需选择依赖组合：
-```bash
-pip install .              # 仅运行时依赖
-pip install ".[gui]"       # 包含GUI可视化器
-pip install ".[dev]"       # 包含所有开发工具
-pip install ".[build]"     # 仅构建工具（CI/CD 使用）
-```
-
-## CI/CD：PyInstaller 构建流水线
-- `.github/workflows/pyjq-build.yml` 定义了跨平台流水线，在推送 `v*` 标签或手动触发时运行。
-- 流水线会在 Ubuntu / macOS / Windows 上运行 PyInstaller，产出 `pyjq-linux`、`pyjq-macos`、`pyjq-windows.exe` 以及对应的 `pylua` 制品并自动上传为构建产物。
-- 可结合 GitHub Releases，将这些制品发布给终端用户。
-
-## 测试与开发
-- 单元与集成测试：`pytest`（覆盖 Core 指令、jq 编译/运行、CLI 等场景）。
-- 新增指令时请同步更新：
-  - `compiler/bytecode.py`（枚举与文档字符串）
-  - 对应编译器 / VM 处理逻辑
-  - `docs/jq_design.md` 中的指令分层表
-- 若需调试执行流程，可使用 `compiler/vm_visualizer.py` 或配套测试中的可视化帮助。
-
-## 相关文档
-- `docs/jq_design.md`：阶段性里程碑、设计原则、指令分层对照表。
-- `compiler/README.md`（如有）和测试文件中的示例，提供更多 API 使用方式。
-
-欢迎在实验、教学或探索虚拟机与编译器实现时使用与扩展本项目。
+  也可以将字体文件放入项目并用相对路径加载。
+- 在非图形环境下，使用 `--visualize curses` 进入终端可视化模式。
