@@ -353,6 +353,134 @@ def test_coroutine_resume_reports_lua_style_error_message():
     assert result[1].startswith("<string>:4:")
 
 
+def test_coroutine_status_running_and_isyieldable():
+    src = """
+    local co
+    local info = {}
+    local function worker(value)
+        local thread, is_main_thread = coroutine.running()
+        info.running_equals = thread == co
+        info.running_is_main = is_main_thread
+        info.yieldable_inside = coroutine.isyieldable()
+        coroutine.yield(value + 1)
+        return coroutine.status(co)
+    end
+
+    co = coroutine.create(worker)
+    local main_thread, main_is_main = coroutine.running()
+    local main_status = coroutine.status(main_thread)
+    local main_yieldable_before = coroutine.isyieldable()
+    local initial_status = coroutine.status(co)
+    local ok, yielded = coroutine.resume(co, 10)
+    local status_after_yield = coroutine.status(co)
+    local main_yieldable_after = coroutine.isyieldable()
+    local ok2, inner_status = coroutine.resume(co, 99)
+    local final_status = coroutine.status(co)
+    local main_status_after = coroutine.status(main_thread)
+    return main_is_main,
+        main_status,
+        main_yieldable_before,
+        initial_status,
+        ok,
+        yielded,
+        status_after_yield,
+        info.running_equals,
+        info.running_is_main,
+        info.yieldable_inside,
+        main_yieldable_after,
+        ok2,
+        inner_status,
+        final_status,
+        main_status_after
+    """
+    result = run_source(src)
+    assert result == [
+        True,
+        "running",
+        False,
+        "suspended",
+        True,
+        11,
+        "suspended",
+        True,
+        False,
+        True,
+        False,
+        True,
+        "running",
+        "dead",
+        "running",
+    ]
+
+
+def test_coroutine_wrap_handles_values_and_errors():
+    src = """
+    local wrapped = coroutine.wrap(function(a, b)
+        local x, y = coroutine.yield(a + b, a - b)
+        return "done", x, y
+    end)
+
+    local first_a, first_b = wrapped(5, 3)
+    local second_a, second_b, second_c = wrapped(9, 4)
+
+    local ok, err = pcall(function()
+        local failing = coroutine.wrap(function()
+            error("boom")
+        end)
+        failing()
+    end)
+
+    local err_text = err
+    if type(err) == "table" then
+        err_text = err.message
+    end
+
+    return first_a,
+        first_b,
+        second_a,
+        second_b,
+        second_c,
+        ok,
+        type(err_text),
+        err_text and string.find(err_text, "boom", 1, true) ~= nil
+    """
+    result = run_source(src)
+    assert result == [8, 2, "done", 9, 4, False, "string", True]
+
+
+def test_coroutine_yield_across_pcall_reports_error():
+    src = """
+    local info = {}
+    local function attempt()
+        info.inside = coroutine.isyieldable()
+        coroutine.yield("blocked")
+    end
+
+    local co = coroutine.create(function()
+        local ok, err = pcall(attempt)
+        return ok, err, info.inside, coroutine.isyieldable()
+    end)
+
+    local ok, protected_ok, message, inside_flag, after_flag = coroutine.resume(co)
+    local text = message
+    if type(message) == "table" then
+        text = message.message
+    end
+    local has_marker = false
+    if type(text) == "string" then
+        has_marker = string.find(text, "C-call", 1, true) ~= nil
+    end
+    return ok, protected_ok, text, has_marker, inside_flag, after_flag
+    """
+    ok, protected_ok, message, contains_marker, inside_flag, after_flag = run_source(src)
+    assert ok is True
+    assert protected_ok is False
+    assert inside_flag is False
+    assert after_flag is False
+    assert contains_marker is True
+    assert "attempt to yield across a C-call boundary" in message
+
+
 def test_coroutine_event_sequence():
     source = """
     function worker(a)
@@ -430,6 +558,8 @@ def test_coroutine_snapshot_contains_runtime_state():
     assert coro_snapshot.call_stack, "call stack should contain at least the current frame"
     assert coro_snapshot.upvalues is not None
     assert coro_snapshot.current_pc is not None
+    assert coro_snapshot.is_main is False
+    assert coro_snapshot.yieldable is False
 
 
 def test_string_pattern_and_formatting():
@@ -546,4 +676,38 @@ def test_debug_traceback_returns_message_and_stack():
     trace = result[0]
     assert "marker" in trace
     assert "stack traceback" in trace
+
+
+def test_debug_traceback_supports_coroutines():
+    src = """
+    local trace_main = debug.traceback("main")
+    local co
+    local function inner()
+        return debug.traceback("inner")
+    end
+    co = coroutine.create(function()
+        local trace = inner()
+        coroutine.yield(trace)
+        error("boom")
+    end)
+
+    local ok, inner_trace = coroutine.resume(co)
+    local suspended_trace = debug.traceback(co)
+    local ok2, err = coroutine.resume(co)
+    return trace_main,
+        ok,
+        inner_trace,
+        suspended_trace,
+        ok2,
+        err
+    """
+    trace_main, ok, inner_trace, suspended_trace, ok2, err = run_source(src)
+    assert "main" in trace_main
+    assert "stack traceback" in trace_main
+    assert ok is True
+    assert "inner" in inner_trace
+    assert "stack traceback" in inner_trace
+    assert "stack traceback" in suspended_trace
+    assert ok2 is False
+    assert err.startswith("<string>:")
 

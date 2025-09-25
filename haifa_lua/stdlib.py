@@ -900,8 +900,10 @@ def _string_len(args: Sequence[Any], vm: Any) -> int:  # noqa: ANN401
     return len(_ensure_string(args[0]))
 
 
-def _ensure_coroutine(value: Any) -> LuaCoroutine:
+def _ensure_coroutine(value: Any, *, allow_main: bool = False) -> LuaCoroutine:
     if isinstance(value, LuaCoroutine):
+        if value.is_main and not allow_main:
+            raise RuntimeError("expected coroutine")
         return value
     raise RuntimeError("expected coroutine")
 
@@ -993,6 +995,60 @@ def _coroutine_resume(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: 
 
 def _coroutine_yield(args: Sequence[Any], vm: Any) -> LuaYield:  # noqa: ANN401
     return LuaYield(args)
+
+
+def _coroutine_status(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    coroutine = _ensure_coroutine(args[0], allow_main=True)
+    return coroutine.status_string()
+
+
+def _coroutine_wrap(args: Sequence[Any], vm: Any):  # noqa: ANN401
+    _ensure_args(args, 1, 1)
+    try:
+        coroutine = LuaCoroutine(args[0], vm)
+    except CoroutineError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    def _wrapped(*values):
+        result = coroutine.resume(values)
+        if not result.success:
+            message = result.values[0] if result.values else ""
+            raise RuntimeError(message)
+        count = len(result.values)
+        if count == 0:
+            return None
+        if count == 1:
+            return result.values[0]
+        return LuaMultiReturn(result.values)
+
+    return _wrapped
+
+
+def _coroutine_running(args: Sequence[Any], vm: Any) -> LuaMultiReturn:  # noqa: ANN401
+    _ensure_args(args, 0, 0)
+    current = getattr(vm, "current_coroutine", None)
+    if current is None:
+        main = getattr(vm, "main_coroutine", None)
+        if not isinstance(main, LuaCoroutine):
+            main = LuaCoroutine(None, vm, is_main=True)
+            vm.main_coroutine = main
+        return LuaMultiReturn([main, True])
+    return LuaMultiReturn([current, False])
+
+
+def _coroutine_isyieldable(args: Sequence[Any], vm: Any) -> bool:  # noqa: ANN401
+    _ensure_args(args, 0, 0)
+    current = getattr(vm, "current_coroutine", None)
+    if not isinstance(current, LuaCoroutine):
+        return False
+    if current.status != "running":
+        return False
+    inner_vm = current.vm if current.vm is not None else vm
+    depth = getattr(inner_vm, "_non_yieldable_depth", 0)
+    if depth > 0:
+        depth -= 1
+    return depth == 0
 
 
 
@@ -1103,16 +1159,38 @@ def _io_read_disabled(args: Sequence[Any], vm: Any):  # noqa: ANN401
 
 def _debug_traceback(args: Sequence[Any], vm: Any) -> str:  # noqa: ANN401
     arg_index = 0
+    thread: LuaCoroutine | None = None
     if args and isinstance(args[0], LuaCoroutine):
-        raise RuntimeError("debug.traceback does not support thread arguments yet")
+        thread = _ensure_coroutine(args[0], allow_main=True)
+        arg_index = 1
     message = ""
-    level = 1
     if arg_index < len(args) and args[arg_index] is not None:
         message = _lua_tostring(args[arg_index])
         arg_index += 1
-    if arg_index < len(args):
+    level = 1
+    if arg_index < len(args) and args[arg_index] is not None:
         level = int(_ensure_number(args[arg_index]))
-    frames = vm.snapshot_state().call_stack
+
+    frames: list = []
+    if thread is None:
+        frames = list(vm.snapshot_state().call_stack)
+    else:
+        coroutine = thread
+        if coroutine.is_main:
+            frames = list(coroutine.base_vm.snapshot_state().call_stack)
+        else:
+            coroutine_vm = coroutine.vm
+            if coroutine_vm is vm:
+                frames = list(vm.snapshot_state().call_stack)
+            elif coroutine_vm is not None:
+                try:
+                    frames = list(coroutine_vm.snapshot_state().call_stack)
+                except Exception:  # pragma: no cover - defensive
+                    frames = []
+            if not frames:
+                snapshot = coroutine.base_vm.get_coroutine_snapshot(coroutine.coroutine_id)
+                if snapshot is not None:
+                    frames = list(snapshot.call_stack)
     skip = max(level - 1, 0)
     if skip:
         frames = frames[skip:]
@@ -1237,7 +1315,13 @@ def install_core_stdlib(env: LuaEnvironment) -> LuaEnvironment:
     coroutine_members = {
         "create": BuiltinFunction("coroutine.create", _coroutine_create),
         "resume": BuiltinFunction("coroutine.resume", _coroutine_resume),
-        "yield": BuiltinFunction("coroutine.yield", _coroutine_yield),
+        "yield": BuiltinFunction("coroutine.yield", _coroutine_yield, allow_yield=True),
+        "status": BuiltinFunction("coroutine.status", _coroutine_status),
+        "wrap": BuiltinFunction("coroutine.wrap", _coroutine_wrap),
+        "running": BuiltinFunction("coroutine.running", _coroutine_running),
+        "isyieldable": BuiltinFunction(
+            "coroutine.isyieldable", _coroutine_isyieldable, yield_probe=True
+        ),
     }
     env.register_library("coroutine", coroutine_members)
 
