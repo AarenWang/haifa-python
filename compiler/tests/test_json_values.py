@@ -1,9 +1,9 @@
 import unittest
 
-from .parser import parse
-from .compiler import ASTCompiler
-from .executor import Executor
-from .bytecode_vm import BytecodeVM
+from ..parser import parse
+from ..compiler import ASTCompiler
+from ..executor import Executor
+from ..bytecode_vm import BytecodeVM
 
 
 class TestJsonValueSupport(unittest.TestCase):

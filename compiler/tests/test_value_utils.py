@@ -1,6 +1,6 @@
 import unittest
 
-from .value_utils import resolve_value, try_parse_literal
+from ..value_utils import resolve_value, try_parse_literal
 
 
 class TestValueUtils(unittest.TestCase):

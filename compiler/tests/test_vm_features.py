@@ -1,7 +1,7 @@
-from .parser import parse
-from .compiler import ASTCompiler
-from .bytecode_vm import BytecodeVM
-from .bytecode import Opcode, Instruction
+from ..parser import parse
+from ..compiler import ASTCompiler
+from ..bytecode_vm import BytecodeVM
+from ..bytecode import Opcode, Instruction
 
 import unittest
 

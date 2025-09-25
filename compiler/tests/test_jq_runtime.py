@@ -1,6 +1,6 @@
 import unittest
 
-from .jq_runtime import (
+from ..jq_runtime import (
     JQRuntimeError,
     run_filter,
     run_filter_many,

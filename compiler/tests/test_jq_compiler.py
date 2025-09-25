@@ -1,9 +1,9 @@
 import unittest
 
-from .jq_compiler import CURRENT_REGISTER, INPUT_REGISTER, JQCompiler
-from .jq_parser import parse_jq_program
-from .bytecode import Opcode
-from .jq_bytecode import JQOpcode
+from ..jq_compiler import CURRENT_REGISTER, INPUT_REGISTER, JQCompiler
+from ..jq_parser import parse_jq_program
+from ..bytecode import Opcode
+from ..jq_bytecode import JQOpcode
 
 
 class TestJQCompiler(unittest.TestCase):
