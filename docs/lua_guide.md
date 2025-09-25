@@ -22,7 +22,13 @@
 ```bash
 cd haifa-python
 # 确保你在正确的环境中
-python --version  # 应该是 Python 3.8+
+python --version  # 应该是 Python 3.11+
+
+# 安装项目依赖
+pip install .
+
+# 或安装开发依赖（包含构建工具）
+pip install ".[dev]"
 ```
 
 ### 第一个 Lua 程序
@@ -40,7 +46,11 @@ print(a + b)
 
 **运行程序：**
 ```bash
+# 使用模块方式运行
 python -m haifa_lua.cli examples/hello.lua
+
+# 或使用安装后的命令
+pylua examples/hello.lua
 ```
 
 **期望输出：**
@@ -75,7 +85,11 @@ REPL 会使用 `>` 作为主提示符，遇到多行语句（例如 `if`/`functi
 如果你想看到程序是如何一步步执行的，可以使用可视化模式：
 
 ```bash
+# 使用模块方式运行
 python -m haifa_lua.cli --visualize examples/hello.lua
+
+# 或使用安装后的命令
+pylua --visualize examples/hello.lua
 ```
 
 这会打开一个图形界面，你可以：
@@ -417,9 +431,11 @@ print("5的平方是:", result)
 ```bash
 # 普通运行
 python -m haifa_lua.cli examples/compile_demo.lua
+# 或: pylua examples/compile_demo.lua
 
 # 可视化运行（观察每一步执行）
 python -m haifa_lua.cli --visualize examples/compile_demo.lua
+# 或: pylua --visualize examples/compile_demo.lua
 ```
 
 **思考问题**：
@@ -693,7 +709,11 @@ print(math_utils.add(1, 2))
 可视化调试器是理解程序执行的最佳工具：
 
 ```bash
+# 使用模块方式运行
 python -m haifa_lua.cli --visualize your_program.lua
+
+# 或使用安装后的命令
+pylua --visualize your_program.lua
 ```
 
 **界面说明**：

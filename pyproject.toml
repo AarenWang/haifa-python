@@ -3,20 +3,31 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "haifa-jq"
+name = "haifa-python"
 version = "0.1.0"
-description = "Hybrid core VM and jq runtime implemented in Python"
+description = "Haifa Python 编译器与虚拟机实验平台"
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "pytest>=7.0.0",
+]
 authors = [{name = "Haifa Python"}]
 license = {text = "MIT"}
-keywords = ["virtual-machine", "jq", "bytecode", "compiler"]
+keywords = ["virtual-machine", "jq", "lua", "bytecode", "compiler"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Topic :: Software Development :: Compilers",
     "Topic :: Software Development :: Interpreters",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=5.0.0",
+]
+build = [
+    "pyinstaller>=5.0.0",
 ]
 
 [project.urls]
@@ -27,4 +38,4 @@ pyjq = "compiler.jq_cli:main"
 pylua = "haifa_lua.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["compiler", "vm", "haifa_lua"]
+include = ["compiler*", "haifa_lua*"]
