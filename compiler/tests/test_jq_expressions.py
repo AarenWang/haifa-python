@@ -36,6 +36,37 @@ class TestJQExpressions(unittest.TestCase):
         data2 = {"a": 1, "b": 7}
         self.assertEqual(run_filter(".a // .b", data2), [1])
 
+    def test_update_assignment_pipe(self):
+        data = {"value": 3}
+        self.assertEqual(run_filter(".value |= . + 1", data), [{"value": 4}])
+
+    def test_update_compound_plus(self):
+        data = {"count": 5}
+        self.assertEqual(run_filter(".count += 7", data), [{"count": 12}])
+
+    def test_update_nested_index(self):
+        data = {"items": [1, 2, 3]}
+        result = run_filter(".items[1] += 5", data)
+        self.assertEqual(result, [{"items": [1, 7, 3]}])
+
+    def test_reduce_general(self):
+        expr = "reduce .nums[] as $n (0; . + $n)"
+        data = {"nums": [1, 2, 3]}
+        self.assertEqual(run_filter(expr, data), [6])
+
+    def test_foreach_with_extract(self):
+        expr = "foreach .nums[] as $n (0; . + $n; .)"
+        data = {"nums": [1, 2, 3]}
+        self.assertEqual(run_filter(expr, data), [1, 3, 6])
+
+    def test_while_loop(self):
+        result = run_filter("while(. < 10; . + 3)", 1)
+        self.assertEqual(result, [1, 4, 7])
+
+    def test_until_loop(self):
+        result = run_filter("until(. > 5; . + 2)", 1)
+        self.assertEqual(result, [1, 3, 5, 7])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,13 @@ class BinaryOp(JQNode):
 
 
 @dataclass(frozen=True)
+class UpdateAssignment(JQNode):
+    target: JQNode
+    op: str  # currently "|=" for generic form
+    expr: JQNode
+
+
+@dataclass(frozen=True)
 class Index(JQNode):
     source: JQNode
     index: JQNode
@@ -101,6 +108,23 @@ class AsBinding(JQNode):
     name: str       # variable name without leading '$'
 
 
+@dataclass(frozen=True)
+class Reduce(JQNode):
+    source: JQNode
+    var_name: str
+    init: JQNode
+    update: JQNode
+
+
+@dataclass(frozen=True)
+class Foreach(JQNode):
+    source: JQNode
+    var_name: str
+    init: JQNode
+    update: JQNode
+    extract: Optional[JQNode]
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -122,9 +146,12 @@ __all__ = [
     "ObjectLiteral",
     "UnaryOp",
     "BinaryOp",
+    "UpdateAssignment",
     "Index",
     "Slice",
     "VarRef",
     "AsBinding",
+    "Reduce",
+    "Foreach",
     "flatten_pipe",
 ]
