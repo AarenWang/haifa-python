@@ -2,6 +2,8 @@
 
 # 📘 RegisterVM 指令集说明文档
 
+> 📎 **提示**：项目所有虚拟机（BytecodeVM、RegisterVM、StackVM）的完整指令对照表已整理于《[Haifa VM 指令集参考手册](../docs/vm_instruction_set.md)》。若需交叉对比或查阅其它 VM，请参考该文档。
+
 本虚拟机采用寄存器架构，支持整数运算、数组、流程控制、函数调用等功能。
 
 ---
