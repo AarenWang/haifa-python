@@ -91,14 +91,22 @@ python -m compiler.jq_cli '.items | unique_by(.id)' --input people.json
 
 ### 5.4 聚合与 reduce
 ```bash
-python -m compiler.jq_cli '.values | reduce("sum")' --input numbers.json
+python -m compiler.jq_cli 'reduce .values[] as $n (0; . + $n)' --input numbers.json
 pyjq 'reduce(.items, "product")' --input numbers.json
+pyjq 'foreach .values[] as $n (0; . + $n; .)' --input numbers.json
 ```
 
 ### 5.5 字符串处理
 ```bash
 python -m compiler.jq_cli '.message | tostring' --input payload.json
 pyjq '.items | join(", ")' --input list.json
+```
+
+### 5.6 更新与循环组合子
+```bash
+python -m compiler.jq_cli '.counter += 1' --input counter.json
+pyjq 'while(. < 100; . * 2)' --input numbers.json
+pyjq 'until(. > 10; . + 3)' --input numbers.json
 ```
 
 ## 6. 类汇编脚本与可视化

@@ -122,19 +122,34 @@
 
 ### 3.2 `reduce` 语义
 
+通用形式：
+
+```jq
+reduce stream_expr as $item (init; update)
+```
+
+- `stream_expr`：生成要遍历的值，可为任意 jq 过滤器；
+- `init`：初始状态表达式，在外层输入上下文中求值；
+- `update`：更新表达式，`.` 绑定为累加器，`$item` 绑定为当前元素。
+
+兼容原有聚合器字符串形式：
+
 ```jq
 reduce(array_expr; op_string; init?)
 ```
 
-- `array_expr`：可选，若省略则使用当前输入。
-- `op_string`：`sum`, `product`, `min`, `max`, `concat` 等。
-- `init`：可选初始值。
-
 示例：
+
 ```bash
+pyjq 'reduce .items[] as $n (0; . + $n)' --input numbers.json
 pyjq 'reduce(.items; "sum")' --input numbers.json
 pyjq 'reduce(.items; "concat"; [])' --input arrays.json
 ```
+
+### 3.3 更新赋值与循环
+
+- 支持 `.path |= expr` 以及 `.path +=/-=/… expr` 等复合更新写法；
+- 新增 `foreach stream as $item (init; update; extract?)`，`while(cond; update)` 与 `until(cond; update)` 组合子。
 
 ## 4. 运行时行为
 
@@ -182,7 +197,6 @@ pyjq 'reduce(.items; "concat"; [])' --input arrays.json
 
 ## 9. 常见陷阱
 
-- `reduce` 的 aggregator 参数必须是字符串字面量；
 - `map` 和 `select` 内部表达式仍可使用管道；
 - 当输入为空数组，部分聚合返回 `None`（保持 jq 行为一致）。
 
