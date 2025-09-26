@@ -12,6 +12,7 @@ from haifa_jq.jq_ast import (
     JQNode,
     Literal,
     FunctionCall,
+    Sequence,
     ObjectLiteral,
     UnaryOp,
     BinaryOp,
@@ -19,6 +20,8 @@ from haifa_jq.jq_ast import (
     Slice,
     VarRef,
     AsBinding,
+    IfElse,
+    TryCatch,
     flatten_pipe,
 )
 
@@ -79,6 +82,62 @@ class JQCompiler:
             var_reg = self._var_reg(stage.name)
             self.instructions.append(Instruction(Opcode.MOV, [var_reg, value_reg]))
             self._compile_pipeline(rest, current_reg)
+            return
+        if isinstance(stage, Sequence):
+            for expr in stage.expressions:
+                expr_stages = flatten_pipe(expr)
+                self._compile_pipeline(expr_stages + rest, current_reg)
+            return
+        if isinstance(stage, IfElse):
+            cond_reg = self._eval_expression(stage.condition, current_reg)
+            false_label = self._new_label("jq_if_false")
+            done_label = self._new_label("jq_if_done")
+            self.instructions.append(Instruction(Opcode.JZ, [cond_reg, false_label]))
+            then_stages = flatten_pipe(stage.then_branch)
+            self._compile_pipeline(then_stages + rest, current_reg)
+            self.instructions.append(Instruction(Opcode.JMP, [done_label]))
+            self.instructions.append(Instruction(Opcode.LABEL, [false_label]))
+            if stage.else_branch is not None:
+                else_stages = flatten_pipe(stage.else_branch)
+                self._compile_pipeline(else_stages + rest, current_reg)
+            self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
+            return
+        if isinstance(stage, TryCatch):
+            buffer_reg = self._new_temp()
+            error_reg = self._new_temp()
+            catch_label = self._new_label("jq_try_catch")
+            done_label = self._new_label("jq_try_done")
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [buffer_reg, []]))
+            self.instructions.append(Instruction(JQOpcode.PUSH_EMIT, [buffer_reg]))
+            self.instructions.append(Instruction(JQOpcode.TRY_BEGIN, [catch_label, error_reg, buffer_reg]))
+            try_stages = flatten_pipe(stage.try_expr)
+            self._compile_pipeline(try_stages, current_reg)
+            self.instructions.append(Instruction(JQOpcode.TRY_END, []))
+            self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+
+            index_reg = self._new_temp()
+            length_reg = self._new_temp()
+            cond_reg = self._new_temp()
+            item_reg = self._new_temp()
+            loop_label = self._new_label("jq_try_loop")
+            loop_end = self._new_label("jq_try_loop_end")
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+            self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [length_reg, buffer_reg]))
+            self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+            self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, length_reg]))
+            self.instructions.append(Instruction(Opcode.JZ, [cond_reg, loop_end]))
+            self.instructions.append(Instruction(JQOpcode.GET_INDEX, [item_reg, buffer_reg, index_reg]))
+            self._compile_pipeline(rest, item_reg)
+            self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+            self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+            self.instructions.append(Instruction(Opcode.LABEL, [loop_end]))
+            self.instructions.append(Instruction(Opcode.JMP, [done_label]))
+            self.instructions.append(Instruction(Opcode.LABEL, [catch_label]))
+            self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+            if stage.catch_expr is not None:
+                catch_stages = flatten_pipe(stage.catch_expr)
+                self._compile_pipeline(catch_stages + rest, error_reg)
+            self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
             return
         # Generic expression stage limited to expression nodes
         if isinstance(stage, (UnaryOp, BinaryOp, Index, Slice, VarRef)):

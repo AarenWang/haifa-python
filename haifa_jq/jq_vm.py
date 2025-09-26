@@ -26,6 +26,8 @@ class JQVM(BytecodeVM):
                 JQOpcode.PUSH_EMIT: self._op_PUSH_EMIT,
                 JQOpcode.POP_EMIT: self._op_POP_EMIT,
                 JQOpcode.EMIT: self._op_EMIT,
+                JQOpcode.TRY_BEGIN: self._op_TRY_BEGIN,
+                JQOpcode.TRY_END: self._op_TRY_END,
                 JQOpcode.FLATTEN: self._op_FLATTEN,
                 JQOpcode.REDUCE: self._op_REDUCE,
                 JQOpcode.KEYS: self._op_KEYS,
@@ -126,6 +128,16 @@ class JQVM(BytecodeVM):
             self.registers[target] = container
         else:
             self.output.append(value)
+
+    def _op_TRY_BEGIN(self, args):
+        catch_label, error_reg, buffer_reg = args
+        emit_depth = max(len(self.emit_stack) - 1, 0)
+        self.try_stack.append((catch_label, error_reg, emit_depth, buffer_reg))
+
+    def _op_TRY_END(self, args):
+        if self.try_stack:
+            self.try_stack.pop()
+
 
     def _op_FLATTEN(self, args):
         value = self.val(args[1])
