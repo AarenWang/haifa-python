@@ -135,6 +135,10 @@ class VMVisualizer:
         self._initial_env_snapshot, self._initial_global_registers = (
             self._ensure_vm_environment(self.vm)
         )
+        # Track instruction panel scrolling to keep large listings readable
+        self.instruction_scroll = 0
+        self._instruction_visible_lines = 0
+        self._instruction_total_lines = len(self._instructions)
 
     def _draw_text(self, text: str, x: int, y: int, color=FONT_COLOR, background=None):
         try:
@@ -225,22 +229,78 @@ class VMVisualizer:
         highlight_index: int = -1,
         secondary_highlights: Set[int] | None = None,
         secondary_color=SEARCH_HIGHLIGHT_COLOR,
+        scroll_offset: Optional[int] = None,
     ) -> None:
         pygame.draw.rect(self.screen, (220, 220, 220), (x, y, width, height), border_radius=5)
         pygame.draw.rect(self.screen, (180, 180, 180), (x, y, width, 30), border_radius=5)
         self._draw_text(title, x + 10, y + 5, color=(50, 50, 50))
-        
-        start_y = y + 40
-        for i, line in enumerate(data):
-            line_y = start_y + i * LINE_HEIGHT
-            if line_y > y + height - LINE_HEIGHT:
-                self._draw_text("...", x + 10, line_y)
-                break
 
+        inner_height = max(0, height - 40)
+        if inner_height <= 0:
+            return
+
+        max_lines = inner_height // LINE_HEIGHT
+        if max_lines <= 0:
+            max_lines = 1
+
+        total_items = len(data)
+        if total_items == 0 or max_lines <= 0:
+            return
+
+        if scroll_offset is None:
+            start_y = y + 40
+            for i, line in enumerate(data):
+                line_y = start_y + i * LINE_HEIGHT
+                if i >= max_lines:
+                    self._draw_text("...", x + 10, line_y)
+                    break
+
+                bg = None
+                if i == highlight_index:
+                    bg = PC_COLOR
+                elif secondary_highlights and i in secondary_highlights:
+                    bg = secondary_color
+                self._draw_text(line, x + 10, line_y, background=bg)
+            return
+
+        max_scroll = max(0, total_items - max_lines)
+        scroll_offset = max(0, min(scroll_offset, max_scroll))
+        end_index = min(total_items, scroll_offset + max_lines)
+        visible_data = data[scroll_offset:end_index]
+
+        if total_items > max_lines:
+            info_text = f"{scroll_offset + 1}-{end_index}/{total_items}"
+            try:
+                info_surface = self.font.render(info_text, True, (90, 90, 90))
+            except (pygame.error, UnicodeEncodeError):
+                safe_text = info_text.encode("ascii", "replace").decode("ascii")
+                info_surface = self.font.render(safe_text, True, (90, 90, 90))
+            info_width = info_surface.get_width()
+            self.screen.blit(info_surface, (x + width - info_width - 12, y + 5))
+
+            track_height = max(1, height - 60)
+            track_rect = (x + width - 18, y + 40, 6, track_height)
+            pygame.draw.rect(self.screen, (205, 205, 205), track_rect, border_radius=3)
+            if total_items > 0:
+                bar_height = max(20, int(track_height * (max_lines / total_items)))
+                max_scroll_px = max(1, max_scroll)
+                bar_offset = int((scroll_offset / max_scroll_px) * (track_height - bar_height))
+                bar_rect = (
+                    x + width - 18,
+                    y + 40 + bar_offset,
+                    6,
+                    bar_height,
+                )
+                pygame.draw.rect(self.screen, (150, 150, 150), bar_rect, border_radius=3)
+
+        start_y = y + 40
+        for idx, line in enumerate(visible_data):
+            line_index = scroll_offset + idx
+            line_y = start_y + idx * LINE_HEIGHT
             bg = None
-            if i == highlight_index:
+            if line_index == highlight_index:
                 bg = PC_COLOR
-            elif secondary_highlights and i in secondary_highlights:
+            elif secondary_highlights and line_index in secondary_highlights:
                 bg = secondary_color
             self._draw_text(line, x + 10, line_y, background=bg)
 
@@ -567,6 +627,19 @@ class VMVisualizer:
 
         return instructions_data, highlight_idx, match_highlights
 
+    def _scroll_instructions(
+        self, delta: int = 0, absolute: Optional[int] = None
+    ) -> None:
+        if self._instruction_total_lines <= 0 or self._instruction_visible_lines <= 0:
+            return
+        max_scroll = max(0, self._instruction_total_lines - self._instruction_visible_lines)
+        if absolute is not None:
+            self.instruction_scroll = max(0, min(max_scroll, absolute))
+        else:
+            self.instruction_scroll = max(
+                0, min(max_scroll, self.instruction_scroll + delta)
+            )
+
     def _prepare_register_display(self, registers: Mapping[str, Any]) -> Tuple[List[str], Set[int]]:
         registers_data: List[str] = []
         changed_indices: Set[int] = set()
@@ -611,16 +684,36 @@ class VMVisualizer:
         footer_height = footer_lines * LINE_HEIGHT + 20
 
         # Instructions (respect footer reserve; never exceed available area)
+        instructions_height = max(0, SCREEN_HEIGHT - 2 * MARGIN - footer_height)
+        inner_instruction_height = max(0, instructions_height - 40)
+        if inner_instruction_height <= 0:
+            visible_lines = 0
+        else:
+            visible_lines = inner_instruction_height // LINE_HEIGHT
+            if visible_lines <= 0:
+                visible_lines = 1
+        self._instruction_visible_lines = visible_lines
+        self._instruction_total_lines = len(instructions_data)
+        max_scroll = max(0, len(instructions_data) - max(visible_lines, 0))
+        self.instruction_scroll = max(0, min(self.instruction_scroll, max_scroll))
+        if highlight_idx != -1 and visible_lines > 0:
+            if highlight_idx < self.instruction_scroll:
+                self.instruction_scroll = highlight_idx
+            elif highlight_idx >= self.instruction_scroll + visible_lines:
+                self.instruction_scroll = highlight_idx - visible_lines + 1
+                self.instruction_scroll = max(0, self.instruction_scroll)
+
         self._draw_section(
             "Instructions",
             instructions_data,
             MARGIN,
             MARGIN,
             600,
-            max(0, SCREEN_HEIGHT - 2 * MARGIN - footer_height),
+            instructions_height,
             highlight_index=highlight_idx,
             secondary_highlights=match_highlights,
             secondary_color=HIGHLIGHT_COLOR,
+            scroll_offset=self.instruction_scroll,
         )
 
         # VM Registers
@@ -732,7 +825,7 @@ class VMVisualizer:
         follow_text = "ON" if self.auto_follow_coroutine else "OFF"
         help_text = (
             "[SPACE] step [P] run/pause [Q] quit [F] follow "
-            "[ARROWS] navigate [/] search [L] export"
+            "[ARROWS] navigate [/] search [L] export [PGUP/PGDN] scroll [HOME/END] jump"
         )
         # Position footer block within the reserved area
         msg_y = SCREEN_HEIGHT - MARGIN - (footer_height - 10)
@@ -798,6 +891,24 @@ class VMVisualizer:
                     self._move_timeline_selection(-1)
                 elif event.key == pygame.K_RIGHT:
                     self._move_timeline_selection(1)
+                elif event.key == pygame.K_PAGEUP:
+                    self._scroll_instructions(
+                        -max(1, self._instruction_visible_lines)
+                    )
+                elif event.key == pygame.K_PAGEDOWN:
+                    self._scroll_instructions(
+                        max(1, self._instruction_visible_lines)
+                    )
+                elif event.key == pygame.K_HOME:
+                    self._scroll_instructions(absolute=0)
+                elif event.key == pygame.K_END:
+                    self._scroll_instructions(
+                        absolute=max(
+                            0,
+                            self._instruction_total_lines
+                            - max(0, self._instruction_visible_lines),
+                        )
+                    )
                 elif event.key == pygame.K_l:
                     self._export_trace()
                 elif event.key == pygame.K_r:
