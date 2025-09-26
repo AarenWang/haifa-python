@@ -2,9 +2,138 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Iterable, List
 
 from compiler.bytecode_vm import BytecodeVM
 from haifa_jq.jq_bytecode import JQOpcode
+
+
+def _iter_paths(value, path=None):
+    if path is None:
+        path = []
+    yield list(path)
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path.append(key)
+            yield from _iter_paths(child, path)
+            path.pop()
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            path.append(index)
+            yield from _iter_paths(child, path)
+            path.pop()
+
+
+def _coerce_index(component, length):
+    if isinstance(component, bool):
+        component = int(component)
+    if isinstance(component, int):
+        idx = component
+    else:
+        try:
+            idx = int(component)
+        except Exception:
+            return None
+    if idx < 0:
+        idx += length
+    return idx
+
+
+def _normalize_path_list(value) -> List[List[object]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        if all(isinstance(item, (list, tuple)) for item in value):
+            return [list(item) for item in value]
+        return [list(value)]
+    return [[value]]
+
+
+def _get_path_value(value, path):
+    current = value
+    for component in path:
+        if isinstance(current, dict):
+            if component in current:
+                current = current[component]
+            elif isinstance(component, str) and component in current:
+                current = current[component]
+            else:
+                return None
+        elif isinstance(current, list):
+            idx = _coerce_index(component, len(current))
+            if idx is None or not (0 <= idx < len(current)):
+                return None
+            current = current[idx]
+        else:
+            return None
+    return current
+
+
+def _set_by_path(value, path, new_value):
+    if not path:
+        return new_value
+    head, *tail = path
+    if isinstance(head, str):
+        base = {} if not isinstance(value, dict) else dict(value)
+        base[head] = _set_by_path(base.get(head), tail, new_value)
+        return base
+    else:
+        base_list = [] if not isinstance(value, list) else list(value)
+        idx = _coerce_index(head, len(base_list))
+        if idx is None:
+            return value
+        if idx < 0:
+            return value
+        while idx >= len(base_list):
+            base_list.append(None)
+        if tail:
+            base_list[idx] = _set_by_path(base_list[idx], tail, new_value)
+        else:
+            base_list[idx] = new_value
+        return base_list
+
+
+def _delete_path(value, path):
+    if not path:
+        return None
+    head, *tail = path
+    if isinstance(head, str):
+        if not isinstance(value, dict) or head not in value:
+            return value
+        new_obj = dict(value)
+        if tail:
+            new_obj[head] = _delete_path(new_obj[head], tail)
+        else:
+            new_obj.pop(head, None)
+        return new_obj
+    else:
+        if not isinstance(value, list):
+            return value
+        idx = _coerce_index(head, len(value))
+        if idx is None or not (0 <= idx < len(value)):
+            return value
+        new_arr = list(value)
+        if tail:
+            new_arr[idx] = _delete_path(new_arr[idx], tail)
+        else:
+            new_arr.pop(idx)
+        return new_arr
+
+
+def _paths_matching(value, targets: Iterable[object]) -> List[List[object]]:
+    target_list = list(targets)
+    if not target_list:
+        return []
+    matches: List[List[object]] = []
+    remaining = list(target_list)
+    for path in _iter_paths(value):
+        path_value = _get_path_value(value, path)
+        for index, candidate in enumerate(remaining):
+            if path_value == candidate:
+                matches.append(list(path))
+                remaining.pop(index)
+                break
+    return matches
 
 
 class JQVM(BytecodeVM):
@@ -16,6 +145,8 @@ class JQVM(BytecodeVM):
 
     def __init__(self, instructions):
         super().__init__(instructions)
+        self.input_iterator = iter(())
+        self._jq_force_stop = False
         # Override/extend handlers for jq-only opcodes
         self._handlers.update(
             {
@@ -54,6 +185,15 @@ class JQVM(BytecodeVM):
                 JQOpcode.TONUMBER: self._op_TONUMBER,
                 JQOpcode.SPLIT: self._op_SPLIT,
                 JQOpcode.GSUB: self._op_GSUB,
+                JQOpcode.PATHS_ALL: self._op_PATHS_ALL,
+                JQOpcode.PATHS_MATCH: self._op_PATHS_MATCH,
+                JQOpcode.SET_PATHS: self._op_SET_PATHS,
+                JQOpcode.DEL_PATHS: self._op_DEL_PATHS,
+                JQOpcode.GET_PATH_VALUE: self._op_GET_PATH_VALUE,
+                JQOpcode.INPUT: self._op_INPUT,
+                JQOpcode.INPUTS: self._op_INPUTS,
+                JQOpcode.HALT_NOW: self._op_HALT_NOW,
+                JQOpcode.HALT_ERROR: self._op_HALT_ERROR,
             }
         )
 
@@ -171,6 +311,67 @@ class JQVM(BytecodeVM):
         else:
             flattened = value
         self.registers[args[0]] = flattened
+
+    def _op_PATHS_ALL(self, args):
+        dest, source_reg = args
+        source = self.val(source_reg)
+        self.registers[dest] = [list(path) for path in _iter_paths(source)]
+
+    def _op_PATHS_MATCH(self, args):
+        dest, source_reg, targets_reg = args
+        source = self.val(source_reg)
+        targets_value = self.val(targets_reg)
+        if targets_value is None:
+            targets: List[object] = []
+        elif isinstance(targets_value, list):
+            targets = list(targets_value)
+        else:
+            targets = [targets_value]
+        self.registers[dest] = _paths_matching(source, targets)
+
+    def _op_SET_PATHS(self, args):
+        target_reg, paths_reg, value_reg = args
+        root = self.registers.get(target_reg)
+        paths_value = self.val(paths_reg)
+        paths = _normalize_path_list(paths_value)
+        replacement = self.val(value_reg)
+        if paths and isinstance(replacement, list) and len(replacement) == len(paths):
+            values_iter = iter(replacement)
+        else:
+            values_iter = None
+        new_root = root
+        for path in paths:
+            if values_iter is not None:
+                try:
+                    value_to_set = next(values_iter)
+                except StopIteration:
+                    value_to_set = replacement
+            else:
+                value_to_set = replacement
+            new_root = _set_by_path(new_root, path, value_to_set)
+        self.registers[target_reg] = new_root
+
+    def _op_DEL_PATHS(self, args):
+        target_reg, paths_reg = args
+        root = self.registers.get(target_reg)
+        paths_value = self.val(paths_reg)
+        paths = _normalize_path_list(paths_value)
+        new_root = root
+        for path in paths:
+            new_root = _delete_path(new_root, path)
+        self.registers[target_reg] = new_root
+
+    def _op_GET_PATH_VALUE(self, args):
+        dest, source_reg, path_reg = args
+        source = self.val(source_reg)
+        path_value = self.val(path_reg)
+        if isinstance(path_value, list) and path_value and isinstance(path_value[0], list):
+            path = list(path_value[0])
+        elif isinstance(path_value, list):
+            path = list(path_value)
+        else:
+            path = [path_value]
+        self.registers[dest] = _get_path_value(source, path)
 
     def _op_REDUCE(self, args):
         items_source = self.val(args[1])
@@ -502,6 +703,41 @@ class JQVM(BytecodeVM):
         else:
             out = s
         self.registers[args[0]] = out
+
+    def _op_HALT_NOW(self, args):
+        self._jq_force_stop = True
+        return "halt"
+
+    def _op_INPUT(self, args):
+        dest = args[0]
+        iterator = getattr(self, "input_iterator", None)
+        if iterator is None:
+            self.registers[dest] = None
+            return
+        try:
+            value = next(iterator)
+        except StopIteration:
+            self.registers[dest] = None
+        else:
+            self.registers[dest] = value
+
+    def _op_INPUTS(self, args):
+        dest = args[0]
+        iterator = getattr(self, "input_iterator", None)
+        if iterator is None:
+            self.registers[dest] = []
+            return
+        remaining = list(iterator)
+        self.registers[dest] = remaining
+
+    def _op_HALT_ERROR(self, args):
+        message_reg = args[0]
+        if message_reg is None:
+            raise RuntimeError("halt_error")
+        message = self.val(message_reg)
+        if message is None:
+            raise RuntimeError("halt_error")
+        raise RuntimeError(str(message))
 
 
 __all__ = ["JQVM"]

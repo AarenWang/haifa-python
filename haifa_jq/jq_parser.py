@@ -30,6 +30,8 @@ from haifa_jq.jq_ast import (
     TryCatch,
     Reduce,
     Foreach,
+    Label,
+    Break,
 )
 
 # Order matters: multi-char operators first
@@ -492,6 +494,10 @@ class JQParser:
             return self._parse_if()
         if token.type == "IDENT" and token.value == "try":
             return self._parse_try()
+        if token.type == "IDENT" and token.value == "label":
+            return self._parse_label()
+        if token.type == "IDENT" and token.value == "break":
+            return self._parse_break()
         if token.type == "IDENT" and token.value == "reduce" and self._peek().type != "LPAREN":
             return self._parse_reduce()
         if token.type == "IDENT" and token.value == "foreach":
@@ -573,6 +579,18 @@ class JQParser:
             self._advance()
             catch_expr = self._parse_expression()
         return TryCatch(expr, catch_expr)
+
+    def _parse_label(self) -> JQNode:
+        self._expect_keyword("label")
+        var_tok = self._expect("VAR")
+        self._expect("PIPE")
+        body = self._parse_pipe()
+        return Label(var_tok.value[1:], body)
+
+    def _parse_break(self) -> JQNode:
+        self._expect_keyword("break")
+        var_tok = self._expect("VAR")
+        return Break(var_tok.value[1:], None)
 
 
     def _parse_arguments(self) -> List[JQNode]:
