@@ -125,6 +125,18 @@ class Foreach(JQNode):
     extract: Optional[JQNode]
 
 
+@dataclass(frozen=True)
+class Label(JQNode):
+    name: str
+    body: JQNode
+
+
+@dataclass(frozen=True)
+class Break(JQNode):
+    name: str
+    value: Optional[JQNode]
+
+
 def flatten_pipe(expr: JQNode) -> List[JQNode]:
     """Expand a pipe tree into a flat left-to-right list."""
     if isinstance(expr, Pipe):
@@ -153,5 +165,7 @@ __all__ = [
     "AsBinding",
     "Reduce",
     "Foreach",
+    "Label",
+    "Break",
     "flatten_pipe",
 ]

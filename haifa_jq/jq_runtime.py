@@ -37,9 +37,16 @@ def run_filter_stream(
     except Exception as exc:  # pragma: no cover - defensive
         raise JQRuntimeError(f"Failed to compile jq expression: {exc}") from exc
 
-    for index, item in enumerate(inputs):
+    inputs_iter = iter(inputs)
+    index = 0
+    while True:
+        try:
+            item = next(inputs_iter)
+        except StopIteration:
+            break
         vm = _VM(instructions)
         vm.registers[INPUT_REGISTER] = item
+        vm.input_iterator = inputs_iter
         if env:
             for k, v in env.items():
                 vm.registers[_var_reg(k)] = v
@@ -51,6 +58,9 @@ def run_filter_stream(
             ) from exc
         for value in results:
             yield value
+        if getattr(vm, "_jq_force_stop", False):
+            break
+        index += 1
 
 
 def run_filter(expression: str, data: Any, env: Optional[Dict[str, Any]] = None) -> List[Any]:

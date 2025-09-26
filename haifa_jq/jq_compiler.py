@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
 # Core 指令使用 Opcode（算术/逻辑/跳转等），jq 专属语义使用 JQOpcode。
 from haifa_jq.jq_bytecode import Instruction, JQOpcode
@@ -25,6 +25,8 @@ from haifa_jq.jq_ast import (
     TryCatch,
     Reduce,
     Foreach,
+    Label,
+    Break,
     flatten_pipe,
 )
 
@@ -39,11 +41,13 @@ class JQCompiler:
         self.instructions: List[Instruction] = []
         self._temp_counter = 0
         self._label_counter = 0
+        self._label_stack: List[Tuple[str, str]] = []
 
     def compile(self, node: JQNode) -> List[Instruction]:
         self.instructions.clear()
         self._temp_counter = 0
         self._label_counter = 0
+        self._label_stack.clear()
 
         # Seed the current register with the input JSON.
         # Core 控制/算术逻辑继续使用 Opcode.*，jq 语义改以 JQOpcode.* 表达。
@@ -90,6 +94,23 @@ class JQCompiler:
             for expr in stage.expressions:
                 expr_stages = flatten_pipe(expr)
                 self._compile_pipeline(expr_stages + rest, current_reg)
+            return
+        if isinstance(stage, Label):
+            break_label = self._new_label("jq_label_break")
+            self._label_stack.append((stage.name, break_label))
+            body_stages = flatten_pipe(stage.body)
+            self._compile_pipeline(body_stages + rest, current_reg)
+            self._label_stack.pop()
+            self.instructions.append(Instruction(Opcode.LABEL, [break_label]))
+            return
+        if isinstance(stage, Break):
+            target = self._find_label(stage.name)
+            if target is None:
+                raise NotImplementedError(f"break to unknown label ${stage.name}")
+            if stage.value is not None:
+                value_reg = self._eval_expression(stage.value, current_reg)
+                self.instructions.append(Instruction(Opcode.MOV, [current_reg, value_reg]))
+            self.instructions.append(Instruction(Opcode.JMP, [target]))
             return
         if isinstance(stage, UpdateAssignment):
             self._compile_update(stage, current_reg, rest)
@@ -181,6 +202,98 @@ class JQCompiler:
             return
 
         if isinstance(stage, FunctionCall):
+            if stage.name == "path" and len(stage.args) == 1:
+                values_reg = self._collect_values(stage.args[0], current_reg)
+                paths_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.PATHS_MATCH, [paths_reg, current_reg, values_reg]))
+                self._emit_buffer(paths_reg, rest)
+                return
+            if stage.name == "paths" and len(stage.args) == 0:
+                paths_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.PATHS_ALL, [paths_reg, current_reg]))
+                self._emit_buffer(paths_reg, rest)
+                return
+            if stage.name == "paths" and len(stage.args) == 1:
+                values_reg = self._collect_values(stage.args[0], current_reg)
+                paths_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.PATHS_MATCH, [paths_reg, current_reg, values_reg]))
+                self._emit_buffer(paths_reg, rest)
+                return
+            if stage.name == "setpath" and len(stage.args) == 2:
+                paths_reg = self._collect_values(stage.args[0], current_reg)
+                value_reg = self._eval_expression(stage.args[1], current_reg)
+                self.instructions.append(Instruction(JQOpcode.SET_PATHS, [current_reg, paths_reg, value_reg]))
+                self._compile_pipeline(rest, current_reg)
+                return
+            if stage.name == "del" and len(stage.args) == 1:
+                values_reg = self._collect_values(stage.args[0], current_reg)
+                paths_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.PATHS_MATCH, [paths_reg, current_reg, values_reg]))
+                self.instructions.append(Instruction(JQOpcode.DEL_PATHS, [current_reg, paths_reg]))
+                self._compile_pipeline(rest, current_reg)
+                return
+            if stage.name == "walk" and len(stage.args) == 1:
+                paths_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.PATHS_ALL, [paths_reg, current_reg]))
+                index_reg = self._new_temp()
+                length_reg = self._new_temp()
+                cond_reg = self._new_temp()
+                path_reg = self._new_temp()
+                value_reg = self._new_temp()
+                result_buffer = self._new_temp()
+                zero_reg = self._new_temp()
+                new_value_reg = self._new_temp()
+                single_path_reg = self._new_temp()
+
+                loop_label = self._new_label("jq_walk_loop")
+                end_label = self._new_label("jq_walk_end")
+
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+                self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [length_reg, paths_reg]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [zero_reg, 0]))
+                self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, length_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+                self.instructions.append(Instruction(JQOpcode.GET_INDEX, [path_reg, paths_reg, index_reg]))
+                self.instructions.append(Instruction(JQOpcode.GET_PATH_VALUE, [value_reg, current_reg, path_reg]))
+
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [result_buffer, []]))
+                self.instructions.append(Instruction(JQOpcode.PUSH_EMIT, [result_buffer]))
+                expr_stages = flatten_pipe(stage.args[0])
+                self._compile_pipeline(expr_stages, value_reg)
+                self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+                self.instructions.append(Instruction(JQOpcode.GET_INDEX, [new_value_reg, result_buffer, zero_reg]))
+
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [single_path_reg, []]))
+                self.instructions.append(Instruction(JQOpcode.PUSH_EMIT, [single_path_reg]))
+                self.instructions.append(Instruction(JQOpcode.EMIT, [path_reg]))
+                self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+                self.instructions.append(Instruction(JQOpcode.SET_PATHS, [current_reg, single_path_reg, new_value_reg]))
+
+                self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+                self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+                self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+                self._compile_pipeline(rest, current_reg)
+                return
+            if stage.name == "input" and len(stage.args) == 0:
+                dest = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.INPUT, [dest]))
+                self._compile_pipeline(rest, dest)
+                return
+            if stage.name == "inputs" and len(stage.args) == 0:
+                buffer_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.INPUTS, [buffer_reg]))
+                self._emit_buffer(buffer_reg, rest)
+                return
+            if stage.name == "halt" and len(stage.args) == 0:
+                self.instructions.append(Instruction(JQOpcode.HALT_NOW, []))
+                return
+            if stage.name == "halt_error" and len(stage.args) <= 1:
+                message_reg: Optional[str] = None
+                if stage.args:
+                    message_reg = self._eval_expression(stage.args[0], current_reg)
+                self.instructions.append(Instruction(JQOpcode.HALT_ERROR, [message_reg]))
+                return
             if stage.name == "while" and len(stage.args) == 2:
                 self._compile_while(stage.args[0], stage.args[1], current_reg, rest)
                 return
@@ -644,6 +757,24 @@ class JQCompiler:
         self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
         return buffer_reg
 
+    def _emit_buffer(self, buffer_reg: str, rest: List[JQNode]) -> None:
+        index_reg = self._new_temp()
+        length_reg = self._new_temp()
+        cond_reg = self._new_temp()
+        item_reg = self._new_temp()
+        loop_label = self._new_label("jq_iter_loop")
+        end_label = self._new_label("jq_iter_end")
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+        self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [length_reg, buffer_reg]))
+        self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, length_reg]))
+        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+        self.instructions.append(Instruction(JQOpcode.GET_INDEX, [item_reg, buffer_reg, index_reg]))
+        self._compile_pipeline(rest, item_reg)
+        self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+        self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+
     def _compile_reduce(self, stage: Reduce, current_reg: str, rest: List[JQNode]) -> None:
         values_buffer = self._collect_values(stage.source, current_reg)
         acc_reg = self._eval_expression(stage.init, current_reg)
@@ -750,6 +881,12 @@ class JQCompiler:
         name = f"__{prefix}_{self._label_counter}"
         self._label_counter += 1
         return name
+
+    def _find_label(self, name: str) -> Optional[str]:
+        for label_name, target in reversed(self._label_stack):
+            if label_name == name:
+                return target
+        return None
 
     def _var_reg(self, name: str) -> str:
         return f"__jq_var_{name}"

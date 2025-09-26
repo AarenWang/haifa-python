@@ -55,4 +55,19 @@ class JQOpcode(Enum):
     SPLIT = auto()
     GSUB = auto()
 
+    # Path helpers and mutation tools
+    PATHS_ALL = auto()
+    PATHS_MATCH = auto()
+    SET_PATHS = auto()
+    DEL_PATHS = auto()
+    GET_PATH_VALUE = auto()
+
+    # Stream/input helpers
+    INPUT = auto()
+    INPUTS = auto()
+
+    # Control helpers
+    HALT_NOW = auto()
+    HALT_ERROR = auto()
+
 __all__ = ["JQOpcode", "Instruction"]
