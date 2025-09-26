@@ -118,6 +118,10 @@ K_UP = 273
 K_DOWN = 274
 K_LEFT = 276
 K_RIGHT = 275
+K_PAGEUP = 266
+K_PAGEDOWN = 267
+K_HOME = 278
+K_END = 279
 K_l = ord("l")
 K_r = ord("r")
 K_RETURN = 13
@@ -149,6 +153,10 @@ __all__ = [
     "K_DOWN",
     "K_LEFT",
     "K_RIGHT",
+    "K_PAGEUP",
+    "K_PAGEDOWN",
+    "K_HOME",
+    "K_END",
     "K_l",
     "K_r",
     "K_RETURN",
