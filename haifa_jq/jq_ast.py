@@ -47,6 +47,19 @@ class Sequence(JQNode):
 
 
 @dataclass(frozen=True)
+class IfElse(JQNode):
+    condition: JQNode
+    then_branch: JQNode
+    else_branch: Optional[JQNode]
+
+
+@dataclass(frozen=True)
+class TryCatch(JQNode):
+    try_expr: JQNode
+    catch_expr: Optional[JQNode]
+
+
+@dataclass(frozen=True)
 class ObjectLiteral(JQNode):
     pairs: List[Tuple[str, JQNode]]
 
@@ -104,6 +117,8 @@ __all__ = [
     "FunctionCall",
     "Pipe",
     "Sequence",
+    "IfElse",
+    "TryCatch",
     "ObjectLiteral",
     "UnaryOp",
     "BinaryOp",

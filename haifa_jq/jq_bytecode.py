@@ -19,7 +19,8 @@ class JQOpcode(Enum):
     PUSH_EMIT = auto()
     POP_EMIT = auto()
     EMIT = auto()
-
+    TRY_BEGIN = auto()
+    TRY_END = auto()
     OBJ_SET = auto()
     FLATTEN = auto()
     REDUCE = auto()
