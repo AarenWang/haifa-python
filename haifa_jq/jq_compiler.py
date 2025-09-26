@@ -16,12 +16,15 @@ from haifa_jq.jq_ast import (
     ObjectLiteral,
     UnaryOp,
     BinaryOp,
+    UpdateAssignment,
     Index,
     Slice,
     VarRef,
     AsBinding,
     IfElse,
     TryCatch,
+    Reduce,
+    Foreach,
     flatten_pipe,
 )
 
@@ -88,6 +91,9 @@ class JQCompiler:
                 expr_stages = flatten_pipe(expr)
                 self._compile_pipeline(expr_stages + rest, current_reg)
             return
+        if isinstance(stage, UpdateAssignment):
+            self._compile_update(stage, current_reg, rest)
+            return
         if isinstance(stage, IfElse):
             cond_reg = self._eval_expression(stage.condition, current_reg)
             false_label = self._new_label("jq_if_false")
@@ -144,6 +150,12 @@ class JQCompiler:
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
+        if isinstance(stage, Reduce):
+            self._compile_reduce(stage, current_reg, rest)
+            return
+        if isinstance(stage, Foreach):
+            self._compile_foreach(stage, current_reg, rest)
+            return
 
         if isinstance(stage, IndexAll):
             source_reg = self._eval_expression(stage.source, current_reg)
@@ -169,6 +181,12 @@ class JQCompiler:
             return
 
         if isinstance(stage, FunctionCall):
+            if stage.name == "while" and len(stage.args) == 2:
+                self._compile_while(stage.args[0], stage.args[1], current_reg, rest)
+                return
+            if stage.name == "until" and len(stage.args) == 2:
+                self._compile_until(stage.args[0], stage.args[1], current_reg, rest)
+                return
             # Milestone 6: string/regex tools
             if stage.name == "tostring" and len(stage.args) == 0:
                 dest = self._new_temp()
@@ -535,6 +553,193 @@ class JQCompiler:
             raise NotImplementedError(f"Unsupported jq function: {stage.name}")
 
         raise NotImplementedError(f"Unsupported jq construct: {type(stage).__name__}")
+
+    def _decompose_path(self, node: JQNode) -> tuple[JQNode, List[tuple[str, object]]]:
+        steps: List[tuple[str, object]] = []
+        current = node
+        while True:
+            if isinstance(current, Field):
+                steps.append(("field", current.name))
+                current = current.source
+                continue
+            if isinstance(current, Index):
+                steps.append(("index", current.index))
+                current = current.source
+                continue
+            break
+        steps.reverse()
+        return current, steps
+
+    def _compile_update(self, stage: UpdateAssignment, current_reg: str, rest: List[JQNode]) -> None:
+        base, steps = self._decompose_path(stage.target)
+        if not isinstance(base, Identity):
+            raise NotImplementedError("update assignment currently supports paths starting from .")
+
+        parent_links: List[tuple[str, str, object]] = []
+        container_reg = current_reg
+        for kind, data in steps[:-1]:
+            if kind == "field":
+                child_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.OBJ_GET, [child_reg, container_reg, data]))
+                parent_links.append(("field", container_reg, data))
+                container_reg = child_reg
+            else:
+                index_reg = self._eval_expression(data, current_reg)
+                child_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.GET_INDEX, [child_reg, container_reg, index_reg]))
+                parent_links.append(("index", container_reg, index_reg))
+                container_reg = child_reg
+
+        assign_kind = "identity"
+        assign_target = current_reg
+        assign_key: object | None = None
+        if steps:
+            last_kind, last_data = steps[-1]
+            if last_kind == "field":
+                old_value_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.OBJ_GET, [old_value_reg, container_reg, last_data]))
+                assign_kind = "field"
+                assign_target = container_reg
+                assign_key = last_data
+            else:
+                index_reg = self._eval_expression(last_data, current_reg)
+                old_value_reg = self._new_temp()
+                self.instructions.append(Instruction(JQOpcode.GET_INDEX, [old_value_reg, container_reg, index_reg]))
+                assign_kind = "index"
+                assign_target = container_reg
+                assign_key = index_reg
+        else:
+            old_value_reg = current_reg
+
+        new_value_reg = self._eval_expression(stage.expr, old_value_reg)
+
+        if assign_kind == "identity":
+            self.instructions.append(Instruction(Opcode.MOV, [current_reg, new_value_reg]))
+            updated_reg = current_reg
+        elif assign_kind == "field":
+            assert assign_key is not None
+            self.instructions.append(Instruction(JQOpcode.OBJ_SET, [assign_target, assign_key, new_value_reg]))
+            updated_reg = assign_target
+        else:
+            assert assign_key is not None
+            self.instructions.append(Instruction(JQOpcode.SET_INDEX, [assign_target, assign_key, new_value_reg]))
+            updated_reg = assign_target
+
+        child_reg = updated_reg
+        for kind, parent_reg, key in reversed(parent_links):
+            if kind == "field":
+                self.instructions.append(Instruction(JQOpcode.OBJ_SET, [parent_reg, key, child_reg]))
+            else:
+                self.instructions.append(Instruction(JQOpcode.SET_INDEX, [parent_reg, key, child_reg]))
+            child_reg = parent_reg
+
+        self._compile_pipeline(rest, current_reg)
+
+    def _collect_values(self, node: JQNode, input_reg: str) -> str:
+        buffer_reg = self._new_temp()
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [buffer_reg, []]))
+        self.instructions.append(Instruction(JQOpcode.PUSH_EMIT, [buffer_reg]))
+        stages = flatten_pipe(node)
+        self._compile_pipeline(stages, input_reg)
+        self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+        return buffer_reg
+
+    def _compile_reduce(self, stage: Reduce, current_reg: str, rest: List[JQNode]) -> None:
+        values_buffer = self._collect_values(stage.source, current_reg)
+        acc_reg = self._eval_expression(stage.init, current_reg)
+        len_reg = self._new_temp()
+        index_reg = self._new_temp()
+        cond_reg = self._new_temp()
+        item_reg = self._new_temp()
+        loop_label = self._new_label("jq_reduce_loop")
+        end_label = self._new_label("jq_reduce_end")
+
+        self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [len_reg, values_buffer]))
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+        self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, len_reg]))
+        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+        self.instructions.append(Instruction(JQOpcode.GET_INDEX, [item_reg, values_buffer, index_reg]))
+        var_reg = self._var_reg(stage.var_name)
+        self.instructions.append(Instruction(Opcode.MOV, [var_reg, item_reg]))
+        new_acc = self._eval_expression(stage.update, acc_reg)
+        self.instructions.append(Instruction(Opcode.MOV, [acc_reg, new_acc]))
+        self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+        self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+
+        self._compile_pipeline(rest, acc_reg)
+
+    def _compile_foreach(self, stage: Foreach, current_reg: str, rest: List[JQNode]) -> None:
+        values_buffer = self._collect_values(stage.source, current_reg)
+        state_reg = self._eval_expression(stage.init, current_reg)
+        len_reg = self._new_temp()
+        index_reg = self._new_temp()
+        cond_reg = self._new_temp()
+        item_reg = self._new_temp()
+        loop_label = self._new_label("jq_foreach_loop")
+        end_label = self._new_label("jq_foreach_end")
+
+        self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [len_reg, values_buffer]))
+        self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
+        self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, len_reg]))
+        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, end_label]))
+        self.instructions.append(Instruction(JQOpcode.GET_INDEX, [item_reg, values_buffer, index_reg]))
+        var_reg = self._var_reg(stage.var_name)
+        self.instructions.append(Instruction(Opcode.MOV, [var_reg, item_reg]))
+        new_state = self._eval_expression(stage.update, state_reg)
+        self.instructions.append(Instruction(Opcode.MOV, [state_reg, new_state]))
+        if stage.extract is not None:
+            output_reg = self._eval_expression(stage.extract, state_reg)
+        else:
+            output_reg = self._new_temp()
+            self.instructions.append(Instruction(Opcode.MOV, [output_reg, state_reg]))
+        self._compile_pipeline(rest, output_reg)
+        self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
+        self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [end_label]))
+
+    def _compile_while(
+        self,
+        cond_expr: JQNode,
+        update_expr: JQNode,
+        current_reg: str,
+        rest: List[JQNode],
+    ) -> None:
+        value_reg = current_reg
+        loop_label = self._new_label("jq_while_loop")
+        done_label = self._new_label("jq_while_done")
+        self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+        cond_reg = self._eval_expression(cond_expr, value_reg)
+        self.instructions.append(Instruction(Opcode.JZ, [cond_reg, done_label]))
+        self._compile_pipeline(rest, value_reg)
+        new_value = self._eval_expression(update_expr, value_reg)
+        self.instructions.append(Instruction(Opcode.MOV, [value_reg, new_value]))
+        self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
+
+    def _compile_until(
+        self,
+        cond_expr: JQNode,
+        update_expr: JQNode,
+        current_reg: str,
+        rest: List[JQNode],
+    ) -> None:
+        value_reg = current_reg
+        loop_label = self._new_label("jq_until_loop")
+        exit_label = self._new_label("jq_until_exit")
+        done_label = self._new_label("jq_until_done")
+        self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
+        cond_reg = self._eval_expression(cond_expr, value_reg)
+        self.instructions.append(Instruction(Opcode.JNZ, [cond_reg, exit_label]))
+        self._compile_pipeline(rest, value_reg)
+        new_value = self._eval_expression(update_expr, value_reg)
+        self.instructions.append(Instruction(Opcode.MOV, [value_reg, new_value]))
+        self.instructions.append(Instruction(Opcode.JMP, [loop_label]))
+        self.instructions.append(Instruction(Opcode.LABEL, [exit_label]))
+        self._compile_pipeline(rest, value_reg)
+        self.instructions.append(Instruction(Opcode.LABEL, [done_label]))
 
     def _new_temp(self) -> str:
         name = f"__jq_tmp{self._temp_counter}"

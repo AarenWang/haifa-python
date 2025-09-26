@@ -21,23 +21,28 @@ from haifa_jq.jq_ast import (
     Pipe,
     UnaryOp,
     BinaryOp,
+    UpdateAssignment,
     Index,
     Slice,
     VarRef,
     AsBinding,
     IfElse,
     TryCatch,
+    Reduce,
+    Foreach,
 )
 
 # Order matters: multi-char operators first
 _TOKEN_REGEX = re.compile(
     r"""
     (?P<WS>\s+)
+  | (?P<COALESCE_ASSIGN>//=)
   | (?P<COALESCE>//)
   | (?P<EQEQ>==)
   | (?P<NEQ>!=)
   | (?P<GTE>>=)
   | (?P<LTE><=)
+  | (?P<PIPE_ASSIGN>\|=)
   | (?P<PIPE>\|)
   | (?P<DOT>\.)
   | (?P<LBRACKET>\[)
@@ -46,10 +51,15 @@ _TOKEN_REGEX = re.compile(
   | (?P<RPAREN>\))
   | (?P<COMMA>,)
   | (?P<VAR>\$[A-Za-z_][A-Za-z0-9_]*)
+  | (?P<PLUS_ASSIGN>\+=)
   | (?P<PLUS>\+)
+  | (?P<MINUS_ASSIGN>-=)
   | (?P<MINUS>-)
+  | (?P<STAR_ASSIGN>\*=)
   | (?P<STAR>\*)
+  | (?P<SLASH_ASSIGN>/=)
   | (?P<SLASH>/)
+  | (?P<PERCENT_ASSIGN>%=)
   | (?P<PERCENT>%)
   | (?P<GT>>)
   | (?P<LT><)
@@ -112,7 +122,9 @@ class JQParser:
         self.user_function_names: Set[str] = set()
         self._stop_ident_stack: List[Set[str]] = [set()]
         self._stop_type_stack: List[Set[str]] = [set()]
+        self._stop_same_depth_stack: List[Dict[str, Set[int]]] = [dict()]
         self._inlining_stack: List[str] = []
+        self._nesting_depth = 0
 
 
     @classmethod
@@ -145,17 +157,24 @@ class JQParser:
         body = self._parse_expression(stop_types={"SEMICOLON"})
         self._expect("SEMICOLON")
         self.definitions[name_token.value] = FunctionDefinition(name_token.value, params, body)
-        expr = parser._parse_expression()
-        parser._expect("EOF")
-        return expr
 
     # Parsing helpers -------------------------------------------------
     def _current(self) -> Token:
         return self.tokens[self.index]
 
+    def _peek(self, offset: int = 1) -> Token:
+        idx = self.index + offset
+        if idx >= len(self.tokens):
+            return self.tokens[-1]
+        return self.tokens[idx]
+
     def _advance(self) -> Token:
         token = self.tokens[self.index]
         self.index += 1
+        if token.type in {"LPAREN", "LBRACKET", "LBRACE"}:
+            self._nesting_depth += 1
+        elif token.type in {"RPAREN", "RBRACKET", "RBRACE"}:
+            self._nesting_depth = max(0, self._nesting_depth - 1)
         return token
 
     def _match(self, *types: str) -> Optional[Token]:
@@ -186,20 +205,32 @@ class JQParser:
         self,
         stop_idents: Optional[Set[str]] = None,
         stop_types: Optional[Set[str]] = None,
+        stop_same_depth_types: Optional[Set[str]] = None,
     ):
         new_idents = set(stop_idents or [])
         new_types = set(stop_types or [])
+        prev_same_depth = self._stop_same_depth_stack[-1]
+        new_same_depth = {tok: set(depths) for tok, depths in prev_same_depth.items()}
+        if stop_same_depth_types:
+            base_depth = self._nesting_depth
+            for tok in stop_same_depth_types:
+                new_same_depth.setdefault(tok, set()).add(base_depth)
         self._stop_ident_stack.append(self._stop_ident_stack[-1] | new_idents)
         self._stop_type_stack.append(self._stop_type_stack[-1] | new_types)
+        self._stop_same_depth_stack.append(new_same_depth)
         try:
             yield
         finally:
             self._stop_ident_stack.pop()
             self._stop_type_stack.pop()
+            self._stop_same_depth_stack.pop()
 
     def _should_stop(self) -> bool:
         token = self._current()
         if token.type in self._stop_type_stack[-1]:
+            return True
+        depths = self._stop_same_depth_stack[-1].get(token.type)
+        if depths is not None and self._nesting_depth in depths:
             return True
         if token.type == "IDENT" and token.value in self._stop_ident_stack[-1]:
             return True
@@ -210,8 +241,9 @@ class JQParser:
         self,
         stop_idents: Optional[Set[str]] = None,
         stop_types: Optional[Set[str]] = None,
+        stop_same_depth_types: Optional[Set[str]] = None,
     ) -> JQNode:
-        with self._with_stop(stop_idents, stop_types):
+        with self._with_stop(stop_idents, stop_types, stop_same_depth_types):
             return self._parse_union()
 
     def _parse_union(self) -> JQNode:
@@ -222,11 +254,6 @@ class JQParser:
         if len(expressions) == 1:
             return node
         return Sequence(expressions)
-    # Grammar ---------------------------------------------------------
-    def _parse_expression(self) -> JQNode:
-        # Highest-level: pipe chains
-        node = self._parse_pipe()
-        return node
 
     def _parse_pipe(self) -> JQNode:
         node = self._parse_term()
@@ -249,7 +276,43 @@ class JQParser:
 
     def _parse_term(self) -> JQNode:
         # Historically a placeholder; keep calling the lowest-precedence non-pipe
-        return self._parse_or()
+        return self._parse_update()
+
+    def _parse_update(self) -> JQNode:
+        node = self._parse_or()
+        while True:
+            if self._should_stop():
+                break
+            if self._match("PIPE_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", rhs)
+                continue
+            if self._match("PLUS_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("+", Identity(), rhs))
+                continue
+            if self._match("MINUS_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("-", Identity(), rhs))
+                continue
+            if self._match("STAR_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("*", Identity(), rhs))
+                continue
+            if self._match("SLASH_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("/", Identity(), rhs))
+                continue
+            if self._match("PERCENT_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("%", Identity(), rhs))
+                continue
+            if self._match("COALESCE_ASSIGN"):
+                rhs = self._parse_expression(stop_same_depth_types={"PIPE"})
+                node = UpdateAssignment(node, "|=", BinaryOp("//", Identity(), rhs))
+                continue
+            break
+        return node
 
     # Precedence climbing (low -> high)
     def _parse_or(self) -> JQNode:
@@ -429,6 +492,10 @@ class JQParser:
             return self._parse_if()
         if token.type == "IDENT" and token.value == "try":
             return self._parse_try()
+        if token.type == "IDENT" and token.value == "reduce" and self._peek().type != "LPAREN":
+            return self._parse_reduce()
+        if token.type == "IDENT" and token.value == "foreach":
+            return self._parse_foreach()
         if token.type == "IDENT" and token.value not in _KEYWORDS:
             ident = self._advance()
             if self._match("LPAREN"):
@@ -454,6 +521,34 @@ class JQParser:
     def _parse_if(self) -> JQNode:
         self._expect_keyword("if")
         return self._parse_if_chain(expect_end=True)
+
+    def _parse_reduce(self) -> JQNode:
+        self._expect_keyword("reduce")
+        source = self._parse_expression(stop_idents={"as"})
+        self._expect_keyword("as")
+        var_tok = self._expect("VAR")
+        self._expect("LPAREN")
+        init_expr = self._parse_expression(stop_same_depth_types={"SEMICOLON"})
+        self._expect("SEMICOLON")
+        update_expr = self._parse_expression(stop_same_depth_types={"RPAREN"})
+        self._expect("RPAREN")
+        return Reduce(source, var_tok.value[1:], init_expr, update_expr)
+
+    def _parse_foreach(self) -> JQNode:
+        self._expect_keyword("foreach")
+        source = self._parse_expression(stop_idents={"as"})
+        self._expect_keyword("as")
+        var_tok = self._expect("VAR")
+        self._expect("LPAREN")
+        init_expr = self._parse_expression(stop_same_depth_types={"SEMICOLON"})
+        self._expect("SEMICOLON")
+        update_expr = self._parse_expression(stop_same_depth_types={"SEMICOLON", "RPAREN"})
+        extract_expr = None
+        if self._current().type == "SEMICOLON":
+            self._advance()
+            extract_expr = self._parse_expression(stop_same_depth_types={"RPAREN"})
+        self._expect("RPAREN")
+        return Foreach(source, var_tok.value[1:], init_expr, update_expr, extract_expr)
 
     def _parse_if_chain(self, expect_end: bool) -> JQNode:
         condition = self._parse_expression(stop_idents={"then"})
@@ -540,6 +635,12 @@ class JQParser:
                 self._inline_node(node.left),
                 self._inline_node(node.right),
             )
+        if isinstance(node, UpdateAssignment):
+            return UpdateAssignment(
+                self._inline_node(node.target),
+                node.op,
+                self._inline_node(node.expr),
+            )
         if isinstance(node, Index):
             return Index(self._inline_node(node.source), self._inline_node(node.index))
         if isinstance(node, Slice):
@@ -550,6 +651,22 @@ class JQParser:
             return IndexAll(self._inline_node(node.source))
         if isinstance(node, AsBinding):
             return AsBinding(self._inline_node(node.source), node.name)
+        if isinstance(node, Reduce):
+            return Reduce(
+                self._inline_node(node.source),
+                node.var_name,
+                self._inline_node(node.init),
+                self._inline_node(node.update),
+            )
+        if isinstance(node, Foreach):
+            extract = self._inline_node(node.extract) if node.extract else None
+            return Foreach(
+                self._inline_node(node.source),
+                node.var_name,
+                self._inline_node(node.init),
+                self._inline_node(node.update),
+                extract,
+            )
         return node
 
     def _substitute(self, node: JQNode, mapping: Dict[str, JQNode]) -> JQNode:
@@ -587,6 +704,12 @@ class JQParser:
                 self._substitute(node.left, mapping),
                 self._substitute(node.right, mapping),
             )
+        if isinstance(node, UpdateAssignment):
+            return UpdateAssignment(
+                self._substitute(node.target, mapping),
+                node.op,
+                self._substitute(node.expr, mapping),
+            )
         if isinstance(node, Index):
             return Index(self._substitute(node.source, mapping), self._substitute(node.index, mapping))
         if isinstance(node, Slice):
@@ -597,6 +720,22 @@ class JQParser:
             return IndexAll(self._substitute(node.source, mapping))
         if isinstance(node, AsBinding):
             return AsBinding(self._substitute(node.source, mapping), node.name)
+        if isinstance(node, Reduce):
+            return Reduce(
+                self._substitute(node.source, mapping),
+                node.var_name,
+                self._substitute(node.init, mapping),
+                self._substitute(node.update, mapping),
+            )
+        if isinstance(node, Foreach):
+            extract = self._substitute(node.extract, mapping) if node.extract else None
+            return Foreach(
+                self._substitute(node.source, mapping),
+                node.var_name,
+                self._substitute(node.init, mapping),
+                self._substitute(node.update, mapping),
+                extract,
+            )
         return node
 
     def _parse_literal_value(self, token: Token):

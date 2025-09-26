@@ -21,6 +21,7 @@ class JQVM(BytecodeVM):
             {
                 JQOpcode.OBJ_GET: self._op_OBJ_GET,
                 JQOpcode.OBJ_SET: self._op_OBJ_SET,
+                JQOpcode.SET_INDEX: self._op_SET_INDEX,
                 JQOpcode.GET_INDEX: self._op_GET_INDEX,
                 JQOpcode.LEN_VALUE: self._op_LEN_VALUE,
                 JQOpcode.PUSH_EMIT: self._op_PUSH_EMIT,
@@ -94,6 +95,23 @@ class JQVM(BytecodeVM):
             obj = {}
             self.registers[args[0]] = obj
         obj[args[1]] = self.val(args[2])
+
+    def _op_SET_INDEX(self, args):
+        container = self.registers.get(args[0])
+        index_value = self.val(args[1])
+        value = self.val(args[2])
+        if isinstance(container, list):
+            try:
+                idx = int(index_value)
+            except Exception:
+                return
+            length = len(container)
+            if idx < 0:
+                idx += length
+            if 0 <= idx < length:
+                container[idx] = value
+            elif idx == length:
+                container.append(value)
 
     def _op_GET_INDEX(self, args):
         container = self.val(args[1])
