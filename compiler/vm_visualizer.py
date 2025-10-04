@@ -1,5 +1,6 @@
 import datetime
 import json
+import os
 import sys
 import platform
 import time
@@ -55,6 +56,39 @@ LINE_HEIGHT = 22
 MARGIN = 20
 
 
+def _font_supports_text(font: "pygame.font.Font", sample: str) -> bool:
+    """Return True when *font* can render *sample* with distinct glyphs."""
+
+    try:
+        surface = font.render(sample, True, (0, 0, 0))
+        fallback = font.render("?" * len(sample), True, (0, 0, 0))
+    except Exception:
+        return False
+
+    for candidate in (surface, fallback):
+        # Some pygame builds used in headless tests provide mock surfaces that
+        # do not expose image APIs. Guard against AttributeError so the helper
+        # gracefully reports lack of support without crashing.
+        if not hasattr(candidate, "get_size"):
+            return False
+
+    if surface.get_width() == 0 or surface.get_height() == 0:
+        return False
+
+    if surface.get_size() == fallback.get_size():
+        try:
+            if pygame.image.tostring(surface, "RGBA") == pygame.image.tostring(
+                fallback, "RGBA"
+            ):
+                return False
+        except Exception:
+            # If the SDL surface conversion fails we conservatively assume the
+            # font does not provide the glyphs we need.
+            return False
+
+    return True
+
+
 def _get_chinese_font(size: int) -> pygame.font.Font:
     """Get a font that supports Chinese characters."""
     # Try different font options based on platform
@@ -87,22 +121,51 @@ def _get_chinese_font(size: int) -> pygame.font.Font:
             "Courier New",
         ]
     
+    # Allow users to provide an explicit font path or family via environment
+    # variable. This helps in sandboxed environments where system fonts are not
+    # discoverable through pygame.
+    explicit_font = os.environ.get("HAIFA_VIS_FONT")
+    if explicit_font:
+        try:
+            if os.path.isfile(explicit_font):
+                font = pygame.font.Font(explicit_font, size)
+            else:
+                font = pygame.font.SysFont(explicit_font, size)
+            if _font_supports_text(font, "测试"):
+                return font
+        except (pygame.error, OSError):
+            pass
+
     # Try each font candidate
     for font_name in font_candidates:
         try:
             font = pygame.font.SysFont(font_name, size)
-            # Test if the font can render Chinese characters
-            test_surface = font.render("测试", False, (0, 0, 0))
-            if test_surface.get_width() > 0:
+            if _font_supports_text(font, "测试"):
                 return font
         except (pygame.error, OSError):
             continue
-    
-    # Fallback to default font
+
+    # Fallback to default font. We still prefer to use a monospace family when
+    # available, but validate it before returning. If the validation fails we
+    # drop all the way down to pygame's bundled default font.
     try:
-        return pygame.font.SysFont("monospace", size)
+        monospace_font = pygame.font.SysFont("monospace", size)
+        if _font_supports_text(monospace_font, "测试"):
+            return monospace_font
     except (pygame.error, OSError):
-        return pygame.font.Font(None, size)
+        pass
+
+    try:
+        final_font = pygame.font.Font(None, size)
+        if _font_supports_text(final_font, "测试"):
+            return final_font
+    except (pygame.error, OSError):
+        pass
+
+    # As a last resort return the default font even if it cannot render CJK
+    # glyphs so the visualizer remains usable. Missing glyphs will still be
+    # rendered as placeholders, but we avoid crashing the tool.
+    return pygame.font.Font(None, size)
 
 class VMVisualizer:
     def __init__(self, vm: BytecodeVM):
