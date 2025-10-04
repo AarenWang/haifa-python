@@ -2,6 +2,7 @@ import datetime
 import json
 import sys
 import platform
+import time
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import pygame
@@ -114,6 +115,8 @@ class VMVisualizer:
         self.running = True
         self.paused = True
         self.auto_run = False
+        self.auto_run_interval = 0.8
+        self._last_auto_step = 0.0
         self.prev_registers: Dict[str, Any] = {}
         self.search_mode = False
         self.search_query = ""
@@ -716,58 +719,162 @@ class VMVisualizer:
             scroll_offset=self.instruction_scroll,
         )
 
-        # VM Registers
+        # Center column layout (VM state + coroutine details + output)
+        center_x = 640
+        center_width = 450
+        center_top = MARGIN
+        center_bottom = SCREEN_HEIGHT - MARGIN - footer_height
+        center_available = max(0, center_bottom - center_top)
+        section_gap = 18
+        column_gap = 16
+        row_gap = 16
+
+        # Allocate vertical space between VM registers, Output, and coroutine detail grid
+        vm_min, vm_max = 150, 230
+        output_min, output_max = 190, 320
+        grid_min = 210
+
+        content_height = max(0, center_available - 2 * section_gap)
+        vm_height = int(content_height * 0.27)
+        output_height = int(content_height * 0.34)
+        grid_height = content_height - vm_height - output_height
+
+        vm_height = max(vm_min, min(vm_height, vm_max))
+        output_height = max(output_min, min(output_height, output_max))
+        grid_height = max(grid_min, grid_height)
+
+        used_height = vm_height + output_height + grid_height
+        if used_height > content_height:
+            overflow = used_height - content_height
+            reducible = max(0, grid_height - grid_min)
+            take = min(overflow, reducible)
+            grid_height -= take
+            overflow -= take
+            if overflow > 0:
+                reducible = max(0, output_height - output_min)
+                take = min(overflow, reducible)
+                output_height -= take
+                overflow -= take
+            if overflow > 0:
+                reducible = max(0, vm_height - vm_min)
+                take = min(overflow, reducible)
+                vm_height -= take
+                overflow -= take
+            if overflow > 0:
+                grid_height = max(40, grid_height - overflow)
+        else:
+            slack = content_height - used_height
+            if slack > 0 and output_height < output_max:
+                add = min(slack, output_max - output_height)
+                output_height += add
+                slack -= add
+            if slack > 0 and vm_height < vm_max:
+                add = min(slack, vm_max - vm_height)
+                vm_height += add
+                slack -= add
+            if slack > 0:
+                grid_height += slack
+
+        center_y = center_top
         self._draw_section(
             "VM Registers",
             registers_data,
-            640,
-            MARGIN,
-            450,
-            210,
+            center_x,
+            center_y,
+            center_width,
+            vm_height,
             secondary_highlights=changed_register_indices,
             secondary_color=CHANGE_COLOR,
         )
 
-        # Coroutine-specific panels
-        center_x = 640
-        center_width = 450
-        y = MARGIN + 210 + 20
+        center_y += vm_height + section_gap
+
         self._draw_section(
-            "Coroutine Registers",
-            coroutine_registers_data,
+            "Output",
+            output_data,
             center_x,
-            y,
+            center_y,
             center_width,
-            150,
+            output_height,
         )
 
-        y += 150 + 20
-        self._draw_section(
-            "Coroutine Upvalues",
-            coroutine_upvalues_data,
-            center_x,
-            y,
-            center_width,
-            110,
-        )
+        center_y += output_height + section_gap
+        grid_total_height = max(0, min(grid_height, center_bottom - center_y))
 
-        y += 110 + 20
-        self._draw_section(
-            "Coroutine Stack",
-            coroutine_stack_data,
-            center_x,
-            y,
-            center_width,
-            160,
-        )
+        if grid_total_height > 0 and grid_total_height < 180:
+            combined_lines: List[str] = []
+            for label, values in (
+                ("Registers", coroutine_registers_data),
+                ("Upvalues", coroutine_upvalues_data),
+                ("Stack", coroutine_stack_data),
+                ("Emit Stack", emit_stack_data),
+            ):
+                combined_lines.append(f"[{label}]")
+                if values:
+                    combined_lines.extend(values)
+                else:
+                    combined_lines.append("<empty>")
+            self._draw_section(
+                "Coroutine State",
+                combined_lines,
+                center_x,
+                center_y,
+                center_width,
+                grid_total_height,
+            )
+        elif grid_total_height > 0:
+            available_rows = max(0, grid_total_height - row_gap)
+            min_top, min_bottom = 120, 90
+            if available_rows < min_top + min_bottom:
+                scale = available_rows / (min_top + min_bottom) if (min_top + min_bottom) else 0
+                top_row_height = min(available_rows, max(70, int(min_top * scale)))
+                bottom_row_height = max(0, available_rows - top_row_height)
+            else:
+                top_row_height = max(min_top, int(available_rows * 0.58))
+                top_row_height = min(top_row_height, available_rows - min_bottom)
+                bottom_row_height = max(min_bottom, available_rows - top_row_height)
 
-        y += 160 + 20
-        self._draw_section("Emit Stack", emit_stack_data, center_x, y, center_width, 80)
+            column_width_left = max(120, (center_width - column_gap) // 2)
+            column_width_right = max(120, center_width - column_width_left - column_gap)
 
-        y += 80 + 20
-        # Clamp Output height to available space above footer to avoid overlap
-        output_height = max(0, SCREEN_HEIGHT - y - MARGIN - footer_height)
-        self._draw_section("Output", output_data, center_x, y, center_width, output_height)
+            row_y = center_y
+            if top_row_height > 0:
+                self._draw_section(
+                    "Coroutine Registers",
+                    coroutine_registers_data,
+                    center_x,
+                    row_y,
+                    column_width_left,
+                    top_row_height,
+                )
+                self._draw_section(
+                    "Coroutine Stack",
+                    coroutine_stack_data,
+                    center_x + column_width_left + column_gap,
+                    row_y,
+                    column_width_right,
+                    top_row_height,
+                )
+
+            row_y += top_row_height + row_gap
+            bottom_height = max(0, min(bottom_row_height, center_bottom - row_y))
+            if bottom_height > 0:
+                self._draw_section(
+                    "Coroutine Upvalues",
+                    coroutine_upvalues_data,
+                    center_x,
+                    row_y,
+                    column_width_left,
+                    bottom_height,
+                )
+                self._draw_section(
+                    "Emit Stack",
+                    emit_stack_data,
+                    center_x + column_width_left + column_gap,
+                    row_y,
+                    column_width_right,
+                    bottom_height,
+                )
 
         # Coroutines panel on right
         right_x = 1110
@@ -875,6 +982,8 @@ class VMVisualizer:
                 elif event.key == pygame.K_p:
                     self.paused = not self.paused
                     self.auto_run = not self.paused
+                    if self.auto_run:
+                        self._last_auto_step = time.monotonic() - self.auto_run_interval
                     self.message = "Running..." if not self.paused else "Paused."
                 elif event.key == pygame.K_f:
                     self.auto_follow_coroutine = not self.auto_follow_coroutine
@@ -920,9 +1029,12 @@ class VMVisualizer:
             self._handle_events()
 
             if not self.paused:
-                halted = self._step_once()
-                if halted:
-                    self.auto_run = False
+                now = time.monotonic()
+                if now - self._last_auto_step >= self.auto_run_interval:
+                    halted = self._step_once()
+                    self._last_auto_step = now
+                    if halted:
+                        self.auto_run = False
 
             self._draw_ui()
             self.clock.tick(10) # Limit frame rate
@@ -993,6 +1105,7 @@ class VMVisualizer:
         self.vm.index_labels()
         self.paused = True
         self.auto_run = False
+        self._last_auto_step = 0.0
         self.prev_registers = {}
         self.trace_log.clear()
         self.timeline_events.clear()
