@@ -19,6 +19,41 @@ Haifa Python 是一个教学友好、可视化友好的“字节码编译器 + �
     ```
   - 运行测试：`pytest`
 
+### 从源码编译安装 pylua / pyjq
+
+1. 创建并激活虚拟环境（示例为 Bash）：
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+   Windows PowerShell 用户可使用 `python -m venv .venv` 与 `.venv\Scripts\Activate.ps1`。
+
+2. 安装构建依赖并构建 CLI：
+   ```bash
+   pip install --upgrade pip setuptools wheel
+   pip install .
+   ```
+   - 该步骤会注册 `pylua` 与 `pyjq` 两个命令。
+   - 若在离线或受限网络环境，可在确认本地已具备 `setuptools`/`wheel` 时使用 `pip install --no-build-isolation .`，或通过 `python -m venv .venv --system-site-packages` 复用系统站点包。
+   - 需要 GUI 可视化时额外执行 `pip install haifa-python[gui]`（或手动安装 `pygame`）。
+
+3. 验证安装：
+   ```bash
+   pylua --help
+   pyjq --help
+   pylua examples/hello.lua --print-output
+   pyjq '.items[] | .name' --input compiler/sample.json
+   ```
+   - `pylua` 命令会输出帮助文本，并在运行示例脚本时打印 `Hello, Lua`。
+   - `pyjq` 命令同样会输出帮助文本，并针对 `compiler/sample.json` 打印示例数据中的 `"Alice"`、`"Bob"`、`"Cia"`。
+
+4. 如需卸载与清理：
+   ```bash
+   pip uninstall haifa-python -y
+   deactivate
+   rm -rf .venv
+   ```
+
 - 体验 Lua（pylua）
   - 运行脚本：`pylua examples/hello.lua`
   - 单行执行：`pylua -e 'x=1; y=2; return x+y' --print-output`
