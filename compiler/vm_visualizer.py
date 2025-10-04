@@ -2,6 +2,7 @@ import datetime
 import json
 import sys
 import platform
+import time
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import pygame
@@ -114,6 +115,8 @@ class VMVisualizer:
         self.running = True
         self.paused = True
         self.auto_run = False
+        self.auto_run_interval = 0.8
+        self._last_auto_step = 0.0
         self.prev_registers: Dict[str, Any] = {}
         self.search_mode = False
         self.search_query = ""
@@ -875,6 +878,8 @@ class VMVisualizer:
                 elif event.key == pygame.K_p:
                     self.paused = not self.paused
                     self.auto_run = not self.paused
+                    if self.auto_run:
+                        self._last_auto_step = time.monotonic() - self.auto_run_interval
                     self.message = "Running..." if not self.paused else "Paused."
                 elif event.key == pygame.K_f:
                     self.auto_follow_coroutine = not self.auto_follow_coroutine
@@ -920,9 +925,12 @@ class VMVisualizer:
             self._handle_events()
 
             if not self.paused:
-                halted = self._step_once()
-                if halted:
-                    self.auto_run = False
+                now = time.monotonic()
+                if now - self._last_auto_step >= self.auto_run_interval:
+                    halted = self._step_once()
+                    self._last_auto_step = now
+                    if halted:
+                        self.auto_run = False
 
             self._draw_ui()
             self.clock.tick(10) # Limit frame rate
@@ -993,6 +1001,7 @@ class VMVisualizer:
         self.vm.index_labels()
         self.paused = True
         self.auto_run = False
+        self._last_auto_step = 0.0
         self.prev_registers = {}
         self.trace_log.clear()
         self.timeline_events.clear()
