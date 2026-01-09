@@ -46,6 +46,7 @@ class VMVisualizer:
     Controls:
       - SPACE / p : toggle auto-run
       - n / →     : single-step
+      - b         : toggle breakpoint at current PC
       - r         : reset VM state
       - e         : toggle coroutine event log visibility
       - q         : quit
@@ -68,6 +69,9 @@ class VMVisualizer:
         self.event_log: List[str] = []
         self._event_entries: List[dict[str, Any]] = []
         self.show_events = True
+        self._prev_registers: Dict[str, Any] = {}
+        self._has_prev_registers = False
+        self.breakpoints: set[int] = set()
         # Color attributes will be initialized in _main
         self._attrs: Dict[str, int] = {
             "normal": 0,
@@ -140,6 +144,18 @@ class VMVisualizer:
             if key in (ord("r"), ord("R")):
                 self._reset()
                 continue
+            if key in (ord("b"), ord("B")):
+                if not self._program:
+                    self.message = "No instructions; breakpoint not set."
+                else:
+                    pc = min(self.state.vm.pc, len(self._program) - 1)
+                    if pc in self.breakpoints:
+                        self.breakpoints.remove(pc)
+                        self.message = f"Breakpoint cleared at pc={pc}."
+                    else:
+                        self.breakpoints.add(pc)
+                        self.message = f"Breakpoint set at pc={pc}."
+                continue
             if key in (ord("e"), ord("E")):
                 self.show_events = not self.show_events
                 self.message = "Events visible." if self.show_events else "Events hidden."
@@ -151,6 +167,13 @@ class VMVisualizer:
     def _advance(self, auto: bool) -> None:
         if self.state.halted:
             self.auto_run = False
+            return
+        if auto and self.state.vm.pc in self.breakpoints:
+            self.auto_run = False
+            self.message = (
+                f"Paused at breakpoint pc={self.state.vm.pc}. "
+                "Press n to step or SPACE to run."
+            )
             return
         if self.max_steps is not None and self.state.step >= self.max_steps:
             self.auto_run = False
@@ -206,6 +229,8 @@ class VMVisualizer:
         self.message = "Reset. Press SPACE to run or n to step."
         self.event_log.clear()
         self._event_entries.clear()
+        self._prev_registers.clear()
+        self._has_prev_registers = False
 
     def _ensure_vm_environment(
         self, vm: BytecodeVM
@@ -309,7 +334,8 @@ class VMVisualizer:
             for idx in range(start, end):
                 is_cursor = idx == cursor_index
                 prefix = "→" if is_cursor else " "
-                line = f"{prefix}{idx:03d} {self._program[idx]}"
+                marker = "B" if idx in self.breakpoints else " "
+                line = f"{prefix}{marker}{idx:03d} {self._program[idx]}"
                 attr = self._attrs.get("cursor", curses.A_REVERSE) if is_cursor else self._attrs.get("normal", curses.A_NORMAL)
                 self._write(stdscr, row, 0, line, attr)
                 row += 1
@@ -327,7 +353,19 @@ class VMVisualizer:
         self._write(stdscr, row, 0, "Registers:", self._attrs.get("heading", curses.A_BOLD))
         for i, (name, value) in enumerate(sorted(snapshot.registers.items())):
             display = self._fmt(value)
-            self._write(stdscr, row + 1 + i, 2, f"{name} = {display}")
+            is_changed = (
+                self._has_prev_registers
+                and self._prev_registers.get(name) != value
+            )
+            prefix = "*" if is_changed else " "
+            attr = self._attrs.get("warn", curses.A_BOLD) if is_changed else self._attrs.get("normal", curses.A_NORMAL)
+            self._write(
+                stdscr,
+                row + 1 + i,
+                2,
+                f"{prefix} {name} = {display}",
+                attr,
+            )
 
         row = min(height - 6, row + 3 + len(snapshot.registers))
         self._write(stdscr, row, 0, "Call stack:", self._attrs.get("heading", curses.A_BOLD))
@@ -432,6 +470,8 @@ class VMVisualizer:
         state_attr = self._attrs.get("ok", curses.A_BOLD) if not self.state.halted and self.auto_run else self._attrs.get("warn", curses.A_BOLD)
         self._write(stdscr, height - 2, 0, self.message[: width - 1], state_attr)
         stdscr.refresh()
+        self._prev_registers = dict(snapshot.registers)
+        self._has_prev_registers = True
 
     def _event_detail_lines(self) -> List[str]:
         if not self._event_entries:

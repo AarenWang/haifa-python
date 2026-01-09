@@ -196,6 +196,7 @@ class VMVisualizer:
         self._coroutine_index_map: Dict[int, int] = {}
         self._latest_snapshot: Optional[VMStateSnapshot] = None
         self._vm_cls = type(vm)
+        self.breakpoints: Set[int] = set()
         # Keep a frozen copy of instructions for resetting
         self._instructions = list(vm.instructions)
         self._initial_env_snapshot, self._initial_global_registers = (
@@ -658,7 +659,10 @@ class VMVisualizer:
         )
 
     def _prepare_instruction_display(self) -> Tuple[List[str], int, Set[int]]:
-        all_instructions = [f"{i:03d}: {str(inst)}" for i, inst in enumerate(self.vm.instructions)]
+        all_instructions = [
+            f"{i:03d} {'B' if i in self.breakpoints else ' '} {str(inst)}"
+            for i, inst in enumerate(self.vm.instructions)
+        ]
         indices = list(range(len(all_instructions)))
         match_indices: Set[int] = set()
 
@@ -994,7 +998,7 @@ class VMVisualizer:
         status_text = "PAUSED" if self.paused else "RUNNING"
         follow_text = "ON" if self.auto_follow_coroutine else "OFF"
         help_text = (
-            "[SPACE] step [P] run/pause [Q] quit [F] follow "
+            "[SPACE] step [P] run/pause [Q] quit [F] follow [B] breakpoint "
             "[ARROWS] navigate [/] search [L] export [PGUP/PGDN] scroll [HOME/END] jump"
         )
         # Position footer block within the reserved area
@@ -1085,6 +1089,17 @@ class VMVisualizer:
                     self._export_trace()
                 elif event.key == pygame.K_r:
                     self._reset_vm()
+                elif event.key == pygame.K_b:
+                    if not self.vm.instructions:
+                        self.message = "No instructions; breakpoint not set."
+                    else:
+                        pc = min(self.vm.pc, len(self.vm.instructions) - 1)
+                        if pc in self.breakpoints:
+                            self.breakpoints.remove(pc)
+                            self.message = f"Breakpoint cleared at pc={pc}."
+                        else:
+                            self.breakpoints.add(pc)
+                            self.message = f"Breakpoint set at pc={pc}."
 
     def run(self):
         self.vm.index_labels()
@@ -1092,12 +1107,17 @@ class VMVisualizer:
             self._handle_events()
 
             if not self.paused:
-                now = time.monotonic()
-                if now - self._last_auto_step >= self.auto_run_interval:
-                    halted = self._step_once()
-                    self._last_auto_step = now
-                    if halted:
-                        self.auto_run = False
+                if self.vm.pc in self.breakpoints:
+                    self.paused = True
+                    self.auto_run = False
+                    self.message = f"Paused at breakpoint pc={self.vm.pc}."
+                else:
+                    now = time.monotonic()
+                    if now - self._last_auto_step >= self.auto_run_interval:
+                        halted = self._step_once()
+                        self._last_auto_step = now
+                        if halted:
+                            self.auto_run = False
 
             self._draw_ui()
             self.clock.tick(10) # Limit frame rate
