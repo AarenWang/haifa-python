@@ -74,3 +74,5 @@ This file gives agents practical guidance for making changes in this repo. Follo
 - Search for similar patterns in the codebase and mirror them (e.g., how `table.*` or `string.*` functions validate and return values).
 - If a change touches coroutines or events, run through these checkpoints: event emission, snapshot content, visualizer formatting, CLI trace, tests, docs.
 
+## Local Run Rule
+- When running example scripts during development, prefer `python3 -m haifa_lua.cli ...` instead of `pylua ...` (so no install step is required).
