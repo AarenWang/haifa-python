@@ -47,6 +47,7 @@ class VMVisualizer:
       - SPACE / p : toggle auto-run
       - n / →     : single-step
       - b         : toggle breakpoint at current PC
+      - w         : toggle watched register by name
       - r         : reset VM state
       - e         : toggle coroutine event log visibility
       - q         : quit
@@ -64,7 +65,7 @@ class VMVisualizer:
         ) = self._ensure_vm_environment(self.state.vm)
         self.max_steps = max_steps
         self.auto_run = False
-        self.message = "Press SPACE to run/pause, n to step, q to quit."
+        self.message = "Press SPACE to run/pause, n to step, b/w to toggle, q to quit."
         self.state.vm.index_labels()
         self.event_log: List[str] = []
         self._event_entries: List[dict[str, Any]] = []
@@ -72,6 +73,7 @@ class VMVisualizer:
         self._prev_registers: Dict[str, Any] = {}
         self._has_prev_registers = False
         self.breakpoints: set[int] = set()
+        self.watched_registers: set[str] = set()
         # Color attributes will be initialized in _main
         self._attrs: Dict[str, int] = {
             "normal": 0,
@@ -155,6 +157,9 @@ class VMVisualizer:
                     else:
                         self.breakpoints.add(pc)
                         self.message = f"Breakpoint set at pc={pc}."
+                continue
+            if key in (ord("w"), ord("W")):
+                self._prompt_watch_name(stdscr)
                 continue
             if key in (ord("e"), ord("E")):
                 self.show_events = not self.show_events
@@ -368,6 +373,42 @@ class VMVisualizer:
             )
 
         row = min(height - 6, row + 3 + len(snapshot.registers))
+        self._write(stdscr, row, 0, "Watch:", self._attrs.get("heading", curses.A_BOLD))
+        if self.watched_registers:
+            for i, name in enumerate(sorted(self.watched_registers)):
+                if name in snapshot.registers:
+                    value = snapshot.registers[name]
+                    display = self._fmt(value)
+                    is_changed = (
+                        self._has_prev_registers
+                        and self._prev_registers.get(name) != value
+                    )
+                    prefix = "*" if is_changed else " "
+                    attr = (
+                        self._attrs.get("warn", curses.A_BOLD)
+                        if is_changed
+                        else self._attrs.get("normal", curses.A_NORMAL)
+                    )
+                    self._write(
+                        stdscr,
+                        row + 1 + i,
+                        2,
+                        f"{prefix} {name} = {display}",
+                        attr,
+                    )
+                else:
+                    self._write(
+                        stdscr,
+                        row + 1 + i,
+                        2,
+                        f"  {name} = <missing>",
+                        self._attrs.get("warn", curses.A_BOLD),
+                    )
+            row += 1 + len(self.watched_registers)
+        else:
+            self._write(stdscr, row + 1, 2, "<none>")
+            row += 2
+
         self._write(stdscr, row, 0, "Call stack:", self._attrs.get("heading", curses.A_BOLD))
         for i, frame in enumerate(snapshot.call_stack):
             self._write(
@@ -515,3 +556,40 @@ class VMVisualizer:
             return json.dumps(value, ensure_ascii=False)
         except Exception:
             return str(value)
+
+    def _prompt_watch_name(self, stdscr: "curses._CursesWindow") -> None:
+        height, width = stdscr.getmaxyx()
+        prompt = "Watch register (name, Enter to toggle, empty to cancel): "
+        self._write(
+            stdscr,
+            height - 1,
+            0,
+            " " * max(0, width - 1),
+        )
+        self._write(stdscr, height - 1, 0, prompt)
+        stdscr.refresh()
+        curses.echo()
+        curses.curs_set(1)
+        try:
+            name_bytes = stdscr.getstr(
+                height - 1,
+                len(prompt),
+                max(1, width - len(prompt) - 1),
+            )
+        except Exception:
+            name_bytes = b""
+        curses.noecho()
+        curses.curs_set(0)
+        try:
+            name = name_bytes.decode("utf-8").strip()
+        except Exception:
+            name = ""
+        if not name:
+            self.message = "Watch cancelled."
+            return
+        if name in self.watched_registers:
+            self.watched_registers.remove(name)
+            self.message = f"Unwatched {name}."
+        else:
+            self.watched_registers.add(name)
+            self.message = f"Watching {name}."

@@ -183,6 +183,8 @@ class VMVisualizer:
         self.prev_registers: Dict[str, Any] = {}
         self.search_mode = False
         self.search_query = ""
+        self.watch_mode = False
+        self.watch_query = ""
         self.message = "Press P to run, SPACE to step, / to search. Use arrows to navigate."
         self.trace_log: List[Dict[str, Any]] = []
         self.event_log: List[str] = []
@@ -197,6 +199,7 @@ class VMVisualizer:
         self._latest_snapshot: Optional[VMStateSnapshot] = None
         self._vm_cls = type(vm)
         self.breakpoints: Set[int] = set()
+        self.watched_registers: Set[str] = set()
         # Keep a frozen copy of instructions for resetting
         self._instructions = list(vm.instructions)
         self._initial_env_snapshot, self._initial_global_registers = (
@@ -618,6 +621,18 @@ class VMVisualizer:
         if not output_data:
             output_data = ["<empty>"]
 
+        watch_data: List[str] = []
+        if self.watched_registers:
+            for name in sorted(self.watched_registers):
+                if name in snapshot.registers:
+                    watch_data.append(
+                        f"{name}: {self._format_value(snapshot.registers[name])}"
+                    )
+                else:
+                    watch_data.append(f"{name}: <missing>")
+        else:
+            watch_data = ["<none>"]
+
         if self.selected_event_index >= len(self.timeline_events):
             self.selected_event_index = len(self.timeline_events) - 1
         if self.selected_event_index < 0 and self.timeline_events:
@@ -656,6 +671,7 @@ class VMVisualizer:
             timeline_highlight,
             timeline_coroutine_indices,
             event_detail_lines,
+            watch_data,
         )
 
     def _prepare_instruction_display(self) -> Tuple[List[str], int, Set[int]]:
@@ -743,11 +759,14 @@ class VMVisualizer:
             timeline_highlight,
             timeline_secondary,
             event_detail_lines,
+            watch_data,
         ) = self._prepare_data()
 
         # Compute dynamic footer reserve to avoid overlap with bottom help area
         footer_lines = 1  # at least the status/help line
         if self.search_mode or self.search_query:
+            footer_lines += 1
+        if self.watch_mode or self.watch_query:
             footer_lines += 1
         if self.message:
             footer_lines += 1
@@ -966,8 +985,19 @@ class VMVisualizer:
             secondary_color=CURRENT_COROUTINE_COLOR,
         )
 
+        watch_height = 120
+        watch_y = MARGIN + coroutine_height + 20
+        self._draw_section(
+            "Watch",
+            watch_data,
+            right_x,
+            watch_y,
+            right_width,
+            watch_height,
+        )
+
         # Timeline and event detail panels
-        events_y = MARGIN + coroutine_height + 20
+        events_y = watch_y + watch_height + 20
         # Ensure timeline fits within remaining height; leave room for details and footer
         timeline_height = min(300, max(0, SCREEN_HEIGHT - events_y - MARGIN - footer_height - 160))
         self._draw_section(
@@ -998,7 +1028,7 @@ class VMVisualizer:
         status_text = "PAUSED" if self.paused else "RUNNING"
         follow_text = "ON" if self.auto_follow_coroutine else "OFF"
         help_text = (
-            "[SPACE] step [P] run/pause [Q] quit [F] follow [B] breakpoint "
+            "[SPACE] step [P] run/pause [Q] quit [F] follow [B] breakpoint [W] watch "
             "[ARROWS] navigate [/] search [L] export [PGUP/PGDN] scroll [HOME/END] jump"
         )
         # Position footer block within the reserved area
@@ -1010,6 +1040,15 @@ class VMVisualizer:
                 MARGIN,
                 msg_y,
                 color=(80, 80, 200),
+            )
+            msg_y += LINE_HEIGHT
+        if self.watch_mode or self.watch_query:
+            cursor = "_" if self.watch_mode else ""
+            self._draw_text(
+                f"Watch: {self.watch_query}{cursor}",
+                MARGIN,
+                msg_y,
+                color=(80, 120, 80),
             )
             msg_y += LINE_HEIGHT
         if self.message:
@@ -1036,10 +1075,18 @@ class VMVisualizer:
                 if self.search_mode:
                     self._handle_search_key(event)
                     continue
+                if self.watch_mode:
+                    self._handle_watch_key(event)
+                    continue
                 if event.key == pygame.K_SLASH:
                     self.search_mode = True
                     self.search_query = ""
                     self.message = "Search mode: type to filter instructions, Enter to apply."
+                    continue
+                if event.key == pygame.K_w:
+                    self.watch_mode = True
+                    self.watch_query = ""
+                    self.message = "Watch mode: type register name, Enter to toggle."
                     continue
                 if event.key == pygame.K_q:
                     self.running = False
@@ -1097,9 +1144,9 @@ class VMVisualizer:
                         if pc in self.breakpoints:
                             self.breakpoints.remove(pc)
                             self.message = f"Breakpoint cleared at pc={pc}."
-                        else:
-                            self.breakpoints.add(pc)
-                            self.message = f"Breakpoint set at pc={pc}."
+                    else:
+                        self.breakpoints.add(pc)
+                        self.message = f"Breakpoint set at pc={pc}."
 
     def run(self):
         self.vm.index_labels()
@@ -1166,6 +1213,41 @@ class VMVisualizer:
         char = event.unicode
         if char and char.isprintable():
             self.search_query += char
+
+    def _handle_watch_key(self, event: pygame.event.Event) -> None:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            name = self.watch_query.strip()
+            if not name:
+                self.watch_mode = False
+                self.message = "Watch cancelled."
+                return
+            if name in self.watched_registers:
+                self.watched_registers.remove(name)
+                self.message = f"Unwatched {name}."
+            else:
+                self.watched_registers.add(name)
+                if (
+                    self._latest_snapshot is not None
+                    and name not in self._latest_snapshot.registers
+                ):
+                    self.message = f"Watching {name} (not in registers)."
+                else:
+                    self.message = f"Watching {name}."
+            self.watch_mode = False
+            self.watch_query = ""
+            return
+        if event.key in (pygame.K_ESCAPE, pygame.K_q):
+            self.watch_mode = False
+            self.watch_query = ""
+            self.message = "Watch cancelled."
+            return
+        if event.key in (pygame.K_BACKSPACE, pygame.K_DELETE):
+            self.watch_query = self.watch_query[:-1]
+            return
+
+        char = event.unicode
+        if char and char.isprintable():
+            self.watch_query += char
 
     def _export_trace(self) -> None:
         if not self.trace_log:
