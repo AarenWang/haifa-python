@@ -1121,13 +1121,17 @@ class BytecodeVM:
         self.pc = self.labels[args[0]]
         return "jump"
 
+    def _is_truthy(self, value: object) -> bool:
+        # Lua (and jq) treat only false and nil as falsey.
+        return value is not None and value is not False
+
     def _op_JZ(self, args):
-        if not bool(self.val(args[0])):
+        if not self._is_truthy(self.val(args[0])):
             self.pc = self.labels[args[1]]
             return "jump"
 
     def _op_JNZ(self, args):
-        if bool(self.val(args[0])):
+        if self._is_truthy(self.val(args[0])):
             self.pc = self.labels[args[1]]
             return "jump"
 

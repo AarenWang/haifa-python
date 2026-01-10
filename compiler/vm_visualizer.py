@@ -4,9 +4,73 @@ import os
 import sys
 import platform
 import time
+import pathlib
+import importlib.machinery
+import importlib.util
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
-import pygame
+
+def _import_real_pygame():
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    search_paths = [
+        path
+        for path in sys.path
+        if path
+        and os.path.abspath(path) not in {repo_root}
+        and path != ""
+    ]
+    venv_paths = _find_repo_venv_site_packages(repo_root)
+    for path in venv_paths:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    search_paths.extend(venv_paths)
+    spec = importlib.machinery.PathFinder.find_spec("pygame", search_paths)
+    if spec and spec.loader:
+        previous = sys.modules.pop("pygame", None)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["pygame"] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            if previous is not None:
+                sys.modules["pygame"] = previous
+            else:
+                sys.modules.pop("pygame", None)
+            return None
+        return module
+    return None
+
+
+def _find_repo_venv_site_packages(repo_root: str) -> list[str]:
+    root = pathlib.Path(repo_root) / ".venv"
+    if not root.exists():
+        return []
+    candidates: list[pathlib.Path] = []
+    lib_dir = root / "lib"
+    if lib_dir.exists():
+        for child in lib_dir.iterdir():
+            if child.is_dir() and child.name.startswith("python"):
+                site_dir = child / "site-packages"
+                if site_dir.is_dir():
+                    candidates.append(site_dir)
+    win_site = root / "Lib" / "site-packages"
+    if win_site.is_dir():
+        candidates.append(win_site)
+    return [str(path) for path in candidates]
+
+
+def _load_pygame():
+    import pygame as pg  # type: ignore
+
+    if getattr(pg, "_MockSurface", None) is not None:
+        real = _import_real_pygame()
+        if real is not None:
+            return real
+        raise ImportError("pygame stub active; install pygame for GUI visualizer")
+    return pg
+
+
+pygame = _load_pygame()
 
 try:
     from .bytecode import Instruction
@@ -168,7 +232,13 @@ def _get_chinese_font(size: int) -> pygame.font.Font:
     return pygame.font.Font(None, size)
 
 class VMVisualizer:
-    def __init__(self, vm: BytecodeVM):
+    def __init__(
+        self,
+        vm: BytecodeVM,
+        *,
+        source_text: str | None = None,
+        source_name: str | None = None,
+    ):
         self.vm = vm
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -200,6 +270,11 @@ class VMVisualizer:
         self._vm_cls = type(vm)
         self.breakpoints: Set[int] = set()
         self.watched_registers: Set[str] = set()
+        self._source_name, self._source_lines = self._load_source_lines(
+            source_text, source_name
+        )
+        self.source_scroll = 0
+        self._source_visible_lines = 0
         # Keep a frozen copy of instructions for resetting
         self._instructions = list(vm.instructions)
         self._initial_env_snapshot, self._initial_global_registers = (
@@ -379,6 +454,39 @@ class VMVisualizer:
             return json.dumps(value, ensure_ascii=False, indent=None)
         except TypeError:
             return str(value)
+
+    def _load_source_lines(
+        self, source_text: str | None, source_name: str | None
+    ) -> tuple[str | None, List[str]]:
+        if source_text is not None:
+            name = source_name or "<source>"
+            return name, source_text.splitlines()
+        name = source_name
+        if name is None:
+            for inst in self.vm.instructions:
+                debug = getattr(inst, "debug", None)
+                if debug is not None and getattr(debug, "location", None):
+                    name = debug.location.file
+                    break
+        if name and os.path.isfile(name):
+            try:
+                text = pathlib.Path(name).read_text(encoding="utf-8")
+                return name, text.splitlines()
+            except Exception:
+                return name, []
+        return name, []
+
+    def _current_source_line(self) -> int | None:
+        if not self.vm.instructions:
+            return None
+        pc = min(max(self.vm.pc, 0), len(self.vm.instructions) - 1)
+        for idx in range(pc, -1, -1):
+            debug = getattr(self.vm.instructions[idx], "debug", None)
+            if debug is not None:
+                location = getattr(debug, "location", None)
+                if location is not None and location.line:
+                    return location.line
+        return None
 
     def _consume_events(self) -> None:
         events = self.vm.drain_events()
@@ -621,6 +729,8 @@ class VMVisualizer:
         if not output_data:
             output_data = ["<empty>"]
 
+        source_data, source_highlight = self._prepare_source_display()
+
         watch_data: List[str] = []
         if self.watched_registers:
             for name in sorted(self.watched_registers):
@@ -672,6 +782,8 @@ class VMVisualizer:
             timeline_coroutine_indices,
             event_detail_lines,
             watch_data,
+            source_data,
+            source_highlight,
         )
 
     def _prepare_instruction_display(self) -> Tuple[List[str], int, Set[int]]:
@@ -712,6 +824,18 @@ class VMVisualizer:
             match_highlights = set()
 
         return instructions_data, highlight_idx, match_highlights
+
+    def _prepare_source_display(self) -> Tuple[List[str], int]:
+        if not self._source_lines:
+            return ["<source unavailable>"], -1
+        source_data = [
+            f"{idx:04d} {line}" for idx, line in enumerate(self._source_lines, start=1)
+        ]
+        highlight_line = self._current_source_line()
+        highlight_idx = highlight_line - 1 if highlight_line else -1
+        if highlight_idx < 0 or highlight_idx >= len(source_data):
+            highlight_idx = -1
+        return source_data, highlight_idx
 
     def _scroll_instructions(
         self, delta: int = 0, absolute: Optional[int] = None
@@ -760,6 +884,8 @@ class VMVisualizer:
             timeline_secondary,
             event_detail_lines,
             watch_data,
+            source_data,
+            source_highlight,
         ) = self._prepare_data()
 
         # Compute dynamic footer reserve to avoid overlap with bottom help area
@@ -772,8 +898,14 @@ class VMVisualizer:
             footer_lines += 1
         footer_height = footer_lines * LINE_HEIGHT + 20
 
-        # Instructions (respect footer reserve; never exceed available area)
-        instructions_height = max(0, SCREEN_HEIGHT - 2 * MARGIN - footer_height)
+        # Left column: source + instructions (respect footer reserve)
+        left_total_height = max(0, SCREEN_HEIGHT - 2 * MARGIN - footer_height)
+        source_height = min(240, max(120, int(left_total_height * 0.35))) if left_total_height else 0
+        left_gap = 16 if left_total_height else 0
+        if left_total_height and left_total_height < source_height + 120 + left_gap:
+            source_height = max(80, left_total_height // 3)
+            left_gap = 8
+        instructions_height = max(0, left_total_height - source_height - left_gap)
         inner_instruction_height = max(0, instructions_height - 40)
         if inner_instruction_height <= 0:
             visible_lines = 0
@@ -792,11 +924,44 @@ class VMVisualizer:
                 self.instruction_scroll = highlight_idx - visible_lines + 1
                 self.instruction_scroll = max(0, self.instruction_scroll)
 
+        source_title = "Source"
+        if self._source_name:
+            source_title = f"Source ({self._source_name})"
+        source_y = MARGIN
+        if source_height:
+            inner_source_height = max(0, source_height - 40)
+            if inner_source_height <= 0:
+                source_visible = 0
+            else:
+                source_visible = inner_source_height // LINE_HEIGHT
+                if source_visible <= 0:
+                    source_visible = 1
+            self._source_visible_lines = source_visible
+            max_source_scroll = max(0, len(source_data) - max(source_visible, 0))
+            self.source_scroll = max(0, min(self.source_scroll, max_source_scroll))
+            if source_highlight != -1 and source_visible > 0:
+                if source_highlight < self.source_scroll:
+                    self.source_scroll = source_highlight
+                elif source_highlight >= self.source_scroll + source_visible:
+                    self.source_scroll = source_highlight - source_visible + 1
+                    self.source_scroll = max(0, self.source_scroll)
+            self._draw_section(
+                source_title,
+                source_data,
+                MARGIN,
+                source_y,
+                600,
+                source_height,
+                highlight_index=source_highlight,
+                scroll_offset=self.source_scroll,
+            )
+
+        instructions_y = source_y + source_height + left_gap if source_height else MARGIN
         self._draw_section(
             "Instructions",
             instructions_data,
             MARGIN,
-            MARGIN,
+            instructions_y,
             600,
             instructions_height,
             highlight_index=highlight_idx,
@@ -1144,9 +1309,9 @@ class VMVisualizer:
                         if pc in self.breakpoints:
                             self.breakpoints.remove(pc)
                             self.message = f"Breakpoint cleared at pc={pc}."
-                    else:
-                        self.breakpoints.add(pc)
-                        self.message = f"Breakpoint set at pc={pc}."
+                        else:
+                            self.breakpoints.add(pc)
+                            self.message = f"Breakpoint set at pc={pc}."
 
     def run(self):
         self.vm.index_labels()

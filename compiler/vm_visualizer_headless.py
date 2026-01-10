@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 import datetime
 import json
+import pathlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -55,7 +56,14 @@ class VMVisualizer:
     Designed for environments without pygame but with a terminal.
     """
 
-    def __init__(self, vm: BytecodeVM, max_steps: Optional[int] = None):
+    def __init__(
+        self,
+        vm: BytecodeVM,
+        max_steps: Optional[int] = None,
+        *,
+        source_text: str | None = None,
+        source_name: str | None = None,
+    ):
         self._vm_cls = type(vm)
         self._program: List[Instruction] = list(vm.instructions)
         self.state = _VMState(vm=vm)
@@ -74,6 +82,9 @@ class VMVisualizer:
         self._has_prev_registers = False
         self.breakpoints: set[int] = set()
         self.watched_registers: set[str] = set()
+        self._source_name, self._source_lines = self._load_source_lines(
+            source_text, source_name
+        )
         # Color attributes will be initialized in _main
         self._attrs: Dict[str, int] = {
             "normal": 0,
@@ -355,6 +366,30 @@ class VMVisualizer:
         self._consume_events()
 
         row += 2
+        source_title = "Source"
+        if self._source_name:
+            source_title = f"Source ({self._source_name})"
+        self._write(stdscr, row, 0, source_title, self._attrs.get("heading", curses.A_BOLD))
+        source_line = self._current_source_line()
+        if not self._source_lines:
+            self._write(stdscr, row + 1, 2, "<source unavailable>")
+            row += 2
+        else:
+            max_lines = min(6, max(1, height - row - 12))
+            if source_line is None:
+                start_line = 0
+            else:
+                start_line = max(0, source_line - 1 - max_lines // 2)
+            end_line = min(len(self._source_lines), start_line + max_lines)
+            for i, line_idx in enumerate(range(start_line, end_line)):
+                line_no = line_idx + 1
+                text = self._source_lines[line_idx]
+                display = f"{line_no:04d} {text}"
+                is_highlight = source_line == line_no
+                attr = self._attrs.get("cursor", curses.A_REVERSE) if is_highlight else self._attrs.get("normal", curses.A_NORMAL)
+                self._write(stdscr, row + 1 + i, 2, display, attr)
+            row += 1 + max(1, end_line - start_line)
+
         self._write(stdscr, row, 0, "Registers:", self._attrs.get("heading", curses.A_BOLD))
         for i, (name, value) in enumerate(sorted(snapshot.registers.items())):
             display = self._fmt(value)
@@ -556,6 +591,40 @@ class VMVisualizer:
             return json.dumps(value, ensure_ascii=False)
         except Exception:
             return str(value)
+
+    def _load_source_lines(
+        self, source_text: str | None, source_name: str | None
+    ) -> tuple[str | None, List[str]]:
+        if source_text is not None:
+            name = source_name or "<source>"
+            return name, source_text.splitlines()
+        name = source_name
+        if name is None:
+            for inst in self._program:
+                debug = getattr(inst, "debug", None)
+                if debug is not None and getattr(debug, "location", None):
+                    name = debug.location.file
+                    break
+        if name:
+            try:
+                path = pathlib.Path(name)
+                if path.is_file():
+                    return name, path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                return name, []
+        return name, []
+
+    def _current_source_line(self) -> int | None:
+        if not self._program:
+            return None
+        pc = min(max(self.state.vm.pc, 0), len(self._program) - 1)
+        for idx in range(pc, -1, -1):
+            debug = getattr(self._program[idx], "debug", None)
+            if debug is not None:
+                location = getattr(debug, "location", None)
+                if location is not None and location.line:
+                    return location.line
+        return None
 
     def _prompt_watch_name(self, stdscr: "curses._CursesWindow") -> None:
         height, width = stdscr.getmaxyx()

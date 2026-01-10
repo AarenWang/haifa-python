@@ -95,7 +95,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     return 1
 
             assert vm_class is not None
-            visualizer = vm_class(vm)
+            visualizer = vm_class(
+                vm, source_text=source, source_name=source_name
+            )
             visualizer.run()
             return 0
         if args.repl or (not args.inline and not args.script and sys.stdin.isatty()):

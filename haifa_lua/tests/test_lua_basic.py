@@ -529,3 +529,28 @@ def test_short_circuit_behavior_preserves_operands():
     """
     result = run_source(src)
     assert result == [False, True, 0]
+
+
+def test_truthiness_of_zero_and_empty_string():
+    src = """
+    local function truthy(value)
+        if value then
+            return 1
+        else
+            return 0
+        end
+    end
+    return truthy(0), truthy(""), truthy({})
+    """
+    assert run_source(src) == [1, 1, 1]
+
+
+def test_short_circuit_with_truthy_zero_and_empty_string():
+    src = """
+    local a = 0 and 123
+    local b = 0 or 456
+    local c = "" and "ok"
+    local d = "" or "fallback"
+    return a, b, c, d
+    """
+    assert run_source(src) == [123, 0, "ok", ""]
