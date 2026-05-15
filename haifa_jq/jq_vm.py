@@ -151,6 +151,7 @@ class JQVM(BytecodeVM):
         self._handlers.update(
             {
                 JQOpcode.OBJ_GET: self._op_OBJ_GET,
+                JQOpcode.OBJ_GET_DYNAMIC: self._op_OBJ_GET_DYNAMIC,
                 JQOpcode.OBJ_SET: self._op_OBJ_SET,
                 JQOpcode.SET_INDEX: self._op_SET_INDEX,
                 JQOpcode.GET_INDEX: self._op_GET_INDEX,
@@ -190,6 +191,8 @@ class JQVM(BytecodeVM):
                 JQOpcode.SET_PATHS: self._op_SET_PATHS,
                 JQOpcode.DEL_PATHS: self._op_DEL_PATHS,
                 JQOpcode.GET_PATH_VALUE: self._op_GET_PATH_VALUE,
+                JQOpcode.MAP_VALUES: self._op_MAP_VALUES,
+                JQOpcode.WITH_ENTRIES: self._op_WITH_ENTRIES,
                 JQOpcode.INPUT: self._op_INPUT,
                 JQOpcode.INPUTS: self._op_INPUTS,
                 JQOpcode.HALT_NOW: self._op_HALT_NOW,
@@ -224,6 +227,14 @@ class JQVM(BytecodeVM):
     def _op_OBJ_GET(self, args):
         source = self.val(args[1])
         key = args[2]
+        if isinstance(source, dict) and key in source:
+            self.registers[args[0]] = source[key]
+        else:
+            self.registers[args[0]] = None
+
+    def _op_OBJ_GET_DYNAMIC(self, args):
+        source = self.val(args[1])
+        key = self.val(args[2])
         if isinstance(source, dict) and key in source:
             self.registers[args[0]] = source[key]
         else:
@@ -372,6 +383,39 @@ class JQVM(BytecodeVM):
         else:
             path = [path_value]
         self.registers[dest] = _get_path_value(source, path)
+
+    def _op_MAP_VALUES(self, args):
+        dest, source_reg, values_reg = args
+        source = self.val(source_reg)
+        mapped = self.val(values_reg)
+        if not isinstance(source, dict):
+            self.registers[dest] = source
+            return
+        mapped_values = mapped if isinstance(mapped, list) else [mapped]
+        keys = list(source.keys())
+        out = dict(source)
+        for idx, key in enumerate(keys):
+            if idx < len(mapped_values):
+                out[key] = mapped_values[idx]
+        self.registers[dest] = out
+
+    def _op_WITH_ENTRIES(self, args):
+        dest, source_reg, entries_reg = args
+        source = self.val(source_reg)
+        transformed = self.val(entries_reg)
+        if not isinstance(source, dict):
+            self.registers[dest] = source
+            return
+        items = transformed if isinstance(transformed, list) else [transformed]
+        out = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            value = item.get("value")
+            if isinstance(key, str):
+                out[key] = value
+        self.registers[dest] = out
 
     def _op_REDUCE(self, args):
         items_source = self.val(args[1])
