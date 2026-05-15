@@ -36,6 +36,10 @@ class LuaModuleSystem:
             "add_searcher",
             BuiltinFunction("package.add_searcher", self._lua_package_add_searcher),
         )
+        self.package_table.raw_set(
+            "searchpath",
+            BuiltinFunction("package.searchpath", self._lua_package_searchpath),
+        )
         self.base_path = pathlib.Path.cwd()
         self.module_envs: dict[str, LuaEnvironment] = {}
         self._install_default_searchers()
@@ -208,24 +212,32 @@ class LuaModuleSystem:
 
     def _search_lua_file(self, args: Sequence[object], vm: BytecodeVM) -> LuaMultiReturn:
         name = str(args[0]) if args else ""
-        module_path = name.replace(".", "/")
         path_value = self.package_table.raw_get("path")
         path_string = str(path_value) if path_value else "./?.lua;./?/init.lua"
+        resolved, error = self._search_path(name, path_string)
+        if resolved is None:
+            return LuaMultiReturn([None, error or "module not found"])
+        loader = BuiltinFunction(
+            f"module.loader[{name}]",
+            lambda loader_args, loader_vm, path=resolved: self._execute_module(path, name, loader_vm),
+        )
+        return LuaMultiReturn([loader, str(resolved)])
+
+    def _search_path(self, name: str, path_string: str) -> tuple[pathlib.Path | None, str | None]:
+        module_path = name.replace(".", "/")
+        attempted: list[str] = []
         for pattern in path_string.split(";"):
             pattern = pattern.strip()
             if not pattern:
                 continue
             candidate = pattern.replace("?", module_path)
             resolved = self.base_path / candidate
+            attempted.append(str(resolved))
             if resolved.is_file():
-                loader = BuiltinFunction(
-                    f"module.loader[{name}]",
-                    lambda loader_args, loader_vm, path=resolved: self._execute_module(
-                        path, name, loader_vm
-                    ),
-                )
-                return LuaMultiReturn([loader, str(resolved)])
-        return LuaMultiReturn([None, f"no file '{module_path}'" ])
+                return resolved, None
+        if not attempted:
+            return None, f"no file '{module_path}'"
+        return None, "\n".join(f"no file '{entry}'" for entry in attempted)
 
     def _execute_module(self, path: pathlib.Path, name: str, vm: BytecodeVM) -> LuaMultiReturn:
         source = path.read_text(encoding="utf-8")
@@ -344,6 +356,16 @@ class LuaModuleSystem:
         inherit = bool(args[2]) if len(args) >= 3 else False
         self.register_module_environment(name, env_value, inherit=inherit)
         return None
+
+    def _lua_package_searchpath(self, args: Sequence[object], vm: BytecodeVM) -> LuaMultiReturn:
+        if len(args) < 2:
+            raise RuntimeError("package.searchpath expects module name and path")
+        name = str(args[0])
+        path_string = str(args[1])
+        resolved, error = self._search_path(name, path_string)
+        if resolved is None:
+            return LuaMultiReturn([None, error or "module not found"])
+        return LuaMultiReturn([str(resolved)])
 
     def _lua_package_add_searcher(self, args: Sequence[object], vm: BytecodeVM) -> None:
         if not args:

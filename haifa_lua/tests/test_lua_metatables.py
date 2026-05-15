@@ -143,3 +143,17 @@ def test_call_and_len_metamethods():
     """
     result = run_source(src)
     assert result == [10.0, 42, "table"]
+
+
+def test_protected_metatable_blocks_reassignment():
+    src = """
+    local target = {}
+    local mt = { __metatable = "locked" }
+    setmetatable(target, mt)
+    local ok, err = pcall(function()
+        setmetatable(target, {})
+    end)
+    return getmetatable(target), ok, type(err) == "table", err.message ~= nil
+    """
+    result = run_source(src)
+    assert result == ["locked", False, True, True]
