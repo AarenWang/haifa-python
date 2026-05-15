@@ -94,3 +94,20 @@ def test_package_add_searcher_loads_custom_module(tmp_path: pathlib.Path) -> Non
     """
     result = run_source(script, env)
     assert result == [99.0]
+
+
+def test_package_searchpath_resolves_and_reports_errors(tmp_path: pathlib.Path) -> None:
+    module_path = tmp_path / "pkg" / "init.lua"
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text("return true", encoding="utf-8")
+
+    env = create_default_environment()
+    env.module_system.set_base_path(tmp_path)  # type: ignore[attr-defined]
+
+    src = """
+local found = package.searchpath("pkg", "./?.lua;./?/init.lua")
+local missing, err = package.searchpath("absent", "./?.lua")
+return type(found), found ~= nil, missing == nil, type(err) == "string"
+"""
+    result = run_source(src, env)
+    assert result == ["string", True, True, True]

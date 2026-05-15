@@ -854,6 +854,9 @@ def _is_lua_number(value: Any) -> bool:
 def _lua_setmetatable(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
     _ensure_args(args, 2, 2)
     table = _ensure_table(args[0])
+    existing = table.get_metatable()
+    if existing is not None and existing.raw_get("__metatable") is not None:
+        raise RuntimeError("cannot change a protected metatable")
     metatable_value = args[1]
     if metatable_value is None:
         table.set_metatable(None)
@@ -866,7 +869,13 @@ def _lua_setmetatable(args: Sequence[Any], vm: Any) -> LuaTable:  # noqa: ANN401
 def _lua_getmetatable(args: Sequence[Any], vm: Any):  # noqa: ANN401
     _ensure_args(args, 1, 1)
     table = _ensure_table(args[0])
-    return table.get_metatable()
+    metatable = table.get_metatable()
+    if metatable is None:
+        return None
+    protected = metatable.raw_get("__metatable")
+    if protected is not None:
+        return protected
+    return metatable
 
 
 def _lua_rawget(args: Sequence[Any], vm: Any):  # noqa: ANN401
