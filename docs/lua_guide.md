@@ -547,7 +547,7 @@ print(m.answer)
 
 最新版标准库在原有基础上补齐了大量常用 API，覆盖字符串模式匹配、表打包与移动、数学函数、系统时间以及调试辅助：
 
-* **字符串库**：`string.find`/`match`/`gsub` 支持 Lua 模式语法与捕获组替换，`string.format` 可格式化数字、字符串并处理 `%q` 转义。
+* **字符串库**：`string.find`/`match` 已支持模式匹配子集（字面匹配、`.`、`*`、`+`、`?`），并保留 `plain=true` 字面模式；`gsub` 与完整 Lua 模式（如 `%b`、`%f`、字符类边界细节）仍与官方 Lua 有差异，使用时请以当前测试覆盖行为为准。`string.format` 可格式化数字、字符串并处理 `%q` 转义。
 * **表工具**：新增 `table.pack`、`table.unpack`、`table.move`，方便在多返回值与稀疏数组之间转换，同时保持 `n` 字段与移动语义兼容。
 * **数学库**：补充三角函数 `sin`/`cos`/`tan` 及其反函数、角度转换 `deg`/`rad`、指数/对数、`math.modf`，并提供 `math.random`/`randomseed` 与 `math.huge` 常量。
 * **系统库**：`os.clock`/`os.time`/`os.date`/`os.difftime` 支持当前时间与时间戳转换，遵循沙箱策略不会暴露文件系统。

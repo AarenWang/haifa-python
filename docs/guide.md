@@ -109,6 +109,18 @@ pyjq 'while(. < 100; . * 2)' --input numbers.json
 pyjq 'until(. > 10; . + 3)' --input numbers.json
 ```
 
+### 5.7 路径编辑与对象改写
+```bash
+# 日志脱敏：对对象的每个 value 应用过滤器
+python -m compiler.jq_cli '.user | map_values(if . == null then . else "***" end)' --input payload.json
+
+# 字段重命名：entry 级别改写 key/value
+python -m compiler.jq_cli '.user | with_entries(if .key == "mobile" then {key: "phone", value: .value} else . end)' --input payload.json
+
+# 结构裁剪：删除字段/索引
+python -m compiler.jq_cli 'del(.debug), del(.items[0])' --input payload.json
+```
+
 ## 6. 类汇编脚本与可视化
 
 ### 6.1 基础类汇编执行

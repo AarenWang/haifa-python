@@ -13,6 +13,7 @@ from compiler.bytecode import Instruction
 class JQOpcode(Enum):
     # jq-only opcodes (handlers in JQVM)
     OBJ_GET = auto()
+    OBJ_GET_DYNAMIC = auto()
     GET_INDEX = auto()
     LEN_VALUE = auto()
 
@@ -61,6 +62,8 @@ class JQOpcode(Enum):
     SET_PATHS = auto()
     DEL_PATHS = auto()
     GET_PATH_VALUE = auto()
+    MAP_VALUES = auto()
+    WITH_ENTRIES = auto()
 
     # Stream/input helpers
     INPUT = auto()

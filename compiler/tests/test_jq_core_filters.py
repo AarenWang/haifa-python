@@ -49,7 +49,17 @@ class TestJQCoreFilters(unittest.TestCase):
         self.assertEqual(run_filter(".flags | all()", {"flags": [1, 1]}), [1])
         self.assertEqual(run_filter(".flags | all()", {"flags": [1, 0]}), [0])
 
+    def test_map_values(self):
+        data = {"obj": {"a": 1, "b": 2}}
+        self.assertEqual(run_filter(".obj | map_values(. * 10)", data), [{"a": 10, "b": 20}])
+
+    def test_with_entries(self):
+        data = {"obj": {"name": "alice", "role": "admin"}}
+        self.assertEqual(
+            run_filter(".obj | with_entries({key: .key, value: .value})", data),
+            [{"name": "alice", "role": "admin"}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

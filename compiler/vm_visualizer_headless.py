@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import copy
 import datetime
 import json
 import pathlib
@@ -47,6 +48,7 @@ class VMVisualizer:
     Controls:
       - SPACE / p : toggle auto-run
       - n / →     : single-step
+      - z / ←     : step back
       - b         : toggle breakpoint at current PC
       - w         : toggle watched register by name
       - r         : reset VM state
@@ -81,6 +83,8 @@ class VMVisualizer:
         self._prev_registers: Dict[str, Any] = {}
         self._has_prev_registers = False
         self.breakpoints: set[int] = set()
+        self.history_limit = 512
+        self._history: List[_VMState] = []
         self.watched_registers: set[str] = set()
         self._source_name, self._source_lines = self._load_source_lines(
             source_text, source_name
@@ -154,6 +158,9 @@ class VMVisualizer:
             if key in (ord("n"), curses.KEY_RIGHT):
                 self._advance(auto=False)
                 continue
+            if key in (ord("z"), curses.KEY_LEFT):
+                self._step_back()
+                continue
             if key in (ord("r"), ord("R")):
                 self._reset()
                 continue
@@ -196,6 +203,9 @@ class VMVisualizer:
             self.message = "Reached max steps; press r to reset or q to quit."
             return
 
+        self._history.append(copy.deepcopy(self.state))
+        if len(self._history) > self.history_limit:
+            self._history.pop(0)
         control = self.state.vm.step()
         self.state.step += 1
 
@@ -247,6 +257,15 @@ class VMVisualizer:
         self._event_entries.clear()
         self._prev_registers.clear()
         self._has_prev_registers = False
+        self._history.clear()
+
+    def _step_back(self) -> None:
+        if not self._history:
+            self.message = "No history to step back."
+            return
+        self.auto_run = False
+        self.state = self._history.pop()
+        self.message = f"Stepped back to step={self.state.step}, pc={self.state.vm.pc}."
 
     def _ensure_vm_environment(
         self, vm: BytecodeVM
