@@ -30,6 +30,11 @@ class Procedure:
         return _eval_sequence(self.body, local_env)
 
 
+@dataclass(frozen=True)
+class _UninitializedBinding:
+    name: Symbol
+
+
 def run_source(source: str, environment: Environment | None = None) -> list[object]:
     """Evaluate all top-level expressions in ``source`` and return their values."""
 
@@ -39,7 +44,10 @@ def run_source(source: str, environment: Environment | None = None) -> list[obje
 
 def _eval(expression: object, environment: Environment) -> Any:
     if isinstance(expression, Symbol):
-        return environment.lookup(expression)
+        value = environment.lookup(expression)
+        if isinstance(value, _UninitializedBinding):
+            raise SchemeRuntimeError(f"letrec binding '{value.name}' read before initialization")
+        return value
 
     if isinstance(expression, list):
         return _eval_list(expression, environment)
@@ -63,6 +71,20 @@ def _eval_list(expression: list[object], environment: Environment) -> Any:
             return _eval_lambda(expression, environment)
         if operator == "begin":
             return _eval_sequence(expression[1:], environment)
+        if operator == "set!":
+            return _eval_set(expression, environment)
+        if operator == "let":
+            return _eval_let(expression, environment)
+        if operator == "let*":
+            return _eval_let_star(expression, environment)
+        if operator == "letrec":
+            return _eval_letrec(expression, environment)
+        if operator == "and":
+            return _eval_and(expression, environment)
+        if operator == "or":
+            return _eval_or(expression, environment)
+        if operator == "cond":
+            return _eval_cond(expression, environment)
 
     procedure = _eval(operator, environment)
     args = [_eval(arg, environment) for arg in expression[1:]]
@@ -111,6 +133,80 @@ def _eval_lambda(expression: list[object], environment: Environment) -> Procedur
     return Procedure(_parse_params(params_expr, "lambda"), expression[2:], environment)
 
 
+def _eval_set(expression: list[object], environment: Environment) -> None:
+    _ensure_form_length(expression, 3, "set!")
+    target = expression[1]
+    if not isinstance(target, Symbol):
+        raise SchemeRuntimeError("set! expected a symbol")
+    environment.set(target, _eval(expression[2], environment))
+    return None
+
+
+def _eval_let(expression: list[object], environment: Environment) -> Any:
+    bindings = _parse_bindings_form(expression, "let")
+    values = [(name, _eval(value_expr, environment)) for name, value_expr in bindings]
+    local_env = Environment(parent=environment)
+    for name, value in values:
+        local_env.define(name, value)
+    return _eval_sequence(expression[2:], local_env)
+
+
+def _eval_let_star(expression: list[object], environment: Environment) -> Any:
+    bindings = _parse_bindings_form(expression, "let*")
+    local_env = Environment(parent=environment)
+    for name, value_expr in bindings:
+        local_env.define(name, _eval(value_expr, local_env))
+    return _eval_sequence(expression[2:], local_env)
+
+
+def _eval_letrec(expression: list[object], environment: Environment) -> Any:
+    bindings = _parse_bindings_form(expression, "letrec")
+    local_env = Environment(parent=environment)
+    for name, _ in bindings:
+        local_env.define(name, _UninitializedBinding(name))
+    for name, value_expr in bindings:
+        local_env.set(name, _eval(value_expr, local_env))
+    return _eval_sequence(expression[2:], local_env)
+
+
+def _eval_and(expression: list[object], environment: Environment) -> Any:
+    result: Any = True
+    for item in expression[1:]:
+        result = _eval(item, environment)
+        if not _is_truthy(result):
+            return False
+    return result
+
+
+def _eval_or(expression: list[object], environment: Environment) -> Any:
+    for item in expression[1:]:
+        result = _eval(item, environment)
+        if _is_truthy(result):
+            return result
+    return False
+
+
+def _eval_cond(expression: list[object], environment: Environment) -> Any:
+    for index, clause in enumerate(expression[1:], start=1):
+        if not isinstance(clause, list) or not clause:
+            raise SchemeRuntimeError("cond clauses must be non-empty lists")
+        test_expr = clause[0]
+        is_else = isinstance(test_expr, Symbol) and test_expr == "else"
+        if is_else:
+            if index != len(expression) - 1:
+                raise SchemeRuntimeError("cond else clause must be last")
+            if len(clause) == 1:
+                raise SchemeRuntimeError("cond else clause expected a body")
+            return _eval_sequence(clause[1:], environment)
+
+        test_value = _eval(test_expr, environment)
+        if _is_truthy(test_value):
+            if len(clause) == 1:
+                return test_value
+            return _eval_sequence(clause[1:], environment)
+    return None
+
+
 def _eval_sequence(expressions: Sequence[object], environment: Environment) -> Any:
     if not expressions:
         raise SchemeRuntimeError("expected at least one expression")
@@ -140,6 +236,30 @@ def _parse_params(params: Sequence[object], form_name: str) -> list[Symbol]:
         seen.add(param)
         parsed.append(param)
     return parsed
+
+
+def _parse_bindings_form(
+    expression: Sequence[object], form_name: str
+) -> list[tuple[Symbol, object]]:
+    if len(expression) < 3:
+        raise SchemeRuntimeError(f"{form_name} expected bindings and body")
+    bindings_expr = expression[1]
+    if not isinstance(bindings_expr, list):
+        raise SchemeRuntimeError(f"{form_name} expected binding list")
+
+    bindings: list[tuple[Symbol, object]] = []
+    seen: set[Symbol] = set()
+    for binding in bindings_expr:
+        if not isinstance(binding, list) or len(binding) != 2:
+            raise SchemeRuntimeError(f"{form_name} bindings must be (name value) pairs")
+        name, value_expr = binding
+        if not isinstance(name, Symbol):
+            raise SchemeRuntimeError(f"{form_name} binding names must be symbols")
+        if name in seen:
+            raise SchemeRuntimeError(f"{form_name} duplicate binding: {name}")
+        seen.add(name)
+        bindings.append((name, value_expr))
+    return bindings
 
 
 def _ensure_form_length(expression: Sequence[object], expected: int, form_name: str) -> None:

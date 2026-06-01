@@ -19,6 +19,12 @@ class Environment:
     def define(self, name: Symbol, value: Any) -> None:
         self.values[name] = value
 
+    def set(self, name: Symbol, value: Any) -> None:
+        environment = self._find(name)
+        if environment is None:
+            raise SchemeRuntimeError(f"unbound symbol: {name}")
+        environment.values[name] = value
+
     def lookup(self, name: Symbol) -> Any:
         environment = self._find(name)
         if environment is None:
