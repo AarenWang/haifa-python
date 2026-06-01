@@ -9,6 +9,7 @@ from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import Symbol, parse_source
 from haifa_scheme.stdlib import BuiltinFunction, create_global_environment
+from haifa_scheme.values import make_list
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,7 @@ def _eval_list(expression: list[object], environment: Environment) -> Any:
 
 def _eval_quote(expression: list[object]) -> object:
     _ensure_form_length(expression, 2, "quote")
-    return expression[1]
+    return _quote_to_value(expression[1])
 
 
 def _eval_if(expression: list[object], environment: Environment) -> Any:
@@ -152,3 +153,9 @@ def _ensure_form_length(expression: Sequence[object], expected: int, form_name: 
 
 def _is_truthy(value: object) -> bool:
     return value is not False
+
+
+def _quote_to_value(expression: object) -> object:
+    if isinstance(expression, list):
+        return make_list(_quote_to_value(item) for item in expression)
+    return expression

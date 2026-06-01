@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from haifa_scheme import SchemeRuntimeError, Symbol, run_source
+from haifa_scheme import EMPTY_LIST, Pair, SchemeRuntimeError, Symbol, run_source, to_scheme_string
 
 
 def test_arithmetic():
@@ -67,7 +67,11 @@ def test_function_define_shorthand_and_recursive_factorial():
 
 
 def test_quote_special_form_returns_expression_without_evaluating_it():
-    assert run_source("'answer '(1 2 x)") == [Symbol("answer"), [1, 2, Symbol("x")]]
+    symbol, quoted_list = run_source("'answer '(1 2 x)")
+
+    assert symbol == Symbol("answer")
+    assert to_scheme_string(quoted_list) == "(1 2 x)"
+    assert isinstance(quoted_list, Pair)
 
 
 def test_only_false_is_falsey():
