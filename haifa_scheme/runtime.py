@@ -35,6 +35,12 @@ class _UninitializedBinding:
     name: Symbol
 
 
+@dataclass(frozen=True)
+class _TailExpression:
+    expression: object
+    environment: Environment
+
+
 def run_source(source: str, environment: Environment | None = None) -> list[object]:
     """Evaluate all top-level expressions in ``source`` and return their values."""
 
@@ -43,15 +49,23 @@ def run_source(source: str, environment: Environment | None = None) -> list[obje
 
 
 def _eval(expression: object, environment: Environment) -> Any:
+    while True:
+        result = _eval_once(expression, environment)
+        if isinstance(result, _TailExpression):
+            expression = result.expression
+            environment = result.environment
+            continue
+        return result
+
+
+def _eval_once(expression: object, environment: Environment) -> Any:
     if isinstance(expression, Symbol):
         value = environment.lookup(expression)
         if isinstance(value, _UninitializedBinding):
             raise SchemeRuntimeError(f"letrec binding '{value.name}' read before initialization")
         return value
-
     if isinstance(expression, list):
         return _eval_list(expression, environment)
-
     return expression
 
 
@@ -100,7 +114,7 @@ def _eval_if(expression: list[object], environment: Environment) -> Any:
     _ensure_form_length(expression, 4, "if")
     condition = _eval(expression[1], environment)
     branch = expression[2] if _is_truthy(condition) else expression[3]
-    return _eval(branch, environment)
+    return _TailExpression(branch, environment)
 
 
 def _eval_define(expression: list[object], environment: Environment) -> None:
@@ -170,20 +184,25 @@ def _eval_letrec(expression: list[object], environment: Environment) -> Any:
 
 
 def _eval_and(expression: list[object], environment: Environment) -> Any:
-    result: Any = True
-    for item in expression[1:]:
+    items = expression[1:]
+    if not items:
+        return True
+    for item in items[:-1]:
         result = _eval(item, environment)
         if not _is_truthy(result):
             return False
-    return result
+    return _TailExpression(items[-1], environment)
 
 
 def _eval_or(expression: list[object], environment: Environment) -> Any:
-    for item in expression[1:]:
+    items = expression[1:]
+    if not items:
+        return False
+    for item in items[:-1]:
         result = _eval(item, environment)
         if _is_truthy(result):
             return result
-    return False
+    return _TailExpression(items[-1], environment)
 
 
 def _eval_cond(expression: list[object], environment: Environment) -> Any:
@@ -211,10 +230,9 @@ def _eval_sequence(expressions: Sequence[object], environment: Environment) -> A
     if not expressions:
         raise SchemeRuntimeError("expected at least one expression")
 
-    result: Any = None
-    for expression in expressions:
-        result = _eval(expression, environment)
-    return result
+    for expression in expressions[:-1]:
+        _eval(expression, environment)
+    return _TailExpression(expressions[-1], environment)
 
 
 def _apply(procedure: Any, args: Sequence[Any]) -> Any:
