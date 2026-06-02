@@ -31,15 +31,16 @@ pyscheme --help
 ## Supported Core Forms
 
 - `quote` and quote shorthand, such as `'x` and `'(1 2 3)`
-- `if`
+- `if`, including the optional alternate form
 - `define`, including function shorthand
 - `lambda`
 - `begin`
 - `set!`
-- `let`, `let*`, and `letrec`
-- `and`, `or`, and `cond`
+- `let`, named `let`, `let*`, and `letrec`
+- `and`, `or`, `cond`, `case`, and `do`
 
 Only `#f` is false. Numbers, strings, symbols, pairs, and the empty list are truthy.
+When an `if`, `case`, or `do` form has no selected result expression, the runtime returns `#<void>`.
 
 ## Values
 

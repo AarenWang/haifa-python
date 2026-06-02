@@ -198,6 +198,21 @@ def test_only_false_is_falsey():
     assert run_source(source) == [2, 1, 1]
 
 
+def test_if_supports_optional_alternate():
+    truthy_result, false_result = run_source("(if #t 10) (if #f 10)")
+
+    assert truthy_result == 10
+    assert false_result is None
+    assert to_scheme_string(false_result) == "#<void>"
+
+
+def test_if_rejects_wrong_argument_count():
+    with pytest.raises(SchemeRuntimeError, match="if expected 2 or 3 argument"):
+        run_source("(if #t)")
+    with pytest.raises(SchemeRuntimeError, match="if expected 2 or 3 argument"):
+        run_source("(if #t 1 2 3)")
+
+
 def test_argument_count_error_is_clear():
     with pytest.raises(SchemeRuntimeError, match="procedure expected 2 argument"):
         run_source("((lambda (x y) (+ x y)) 1)")

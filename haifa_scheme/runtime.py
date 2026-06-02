@@ -9,7 +9,7 @@ from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import DottedList, Symbol, parse_source
 from haifa_scheme.stdlib import BuiltinContext, BuiltinFunction, create_global_environment
-from haifa_scheme.values import Pair, Vector, make_list
+from haifa_scheme.values import Pair, Vector, equal_value, make_list
 
 
 @dataclass(frozen=True)
@@ -99,6 +99,10 @@ def _eval_list(expression: list[object], environment: Environment) -> Any:
             return _eval_or(expression, environment)
         if operator == "cond":
             return _eval_cond(expression, environment)
+        if operator == "case":
+            return _eval_case(expression, environment)
+        if operator == "do":
+            return _eval_do(expression, environment)
 
     procedure = _eval(operator, environment)
     args = [_eval(arg, environment) for arg in expression[1:]]
@@ -111,8 +115,12 @@ def _eval_quote(expression: list[object]) -> object:
 
 
 def _eval_if(expression: list[object], environment: Environment) -> Any:
-    _ensure_form_length(expression, 4, "if")
+    if len(expression) < 3 or len(expression) > 4:
+        actual = len(expression) - 1
+        raise SchemeRuntimeError(f"if expected 2 or 3 argument(s), got {actual}")
     condition = _eval(expression[1], environment)
+    if not _is_truthy(condition) and len(expression) == 3:
+        return None
     branch = expression[2] if _is_truthy(condition) else expression[3]
     return _TailExpression(branch, environment)
 
@@ -157,12 +165,33 @@ def _eval_set(expression: list[object], environment: Environment) -> None:
 
 
 def _eval_let(expression: list[object], environment: Environment) -> Any:
+    if len(expression) >= 2 and isinstance(expression[1], Symbol):
+        return _eval_named_let(expression, environment)
+
     bindings = _parse_bindings_form(expression, "let")
     values = [(name, _eval(value_expr, environment)) for name, value_expr in bindings]
     local_env = Environment(parent=environment)
     for name, value in values:
         local_env.define(name, value)
     return _eval_sequence(expression[2:], local_env)
+
+
+def _eval_named_let(expression: list[object], environment: Environment) -> Any:
+    if len(expression) < 4:
+        raise SchemeRuntimeError("named let expected name, bindings, and body")
+
+    name = expression[1]
+    if not isinstance(name, Symbol):
+        raise SchemeRuntimeError("named let expected a symbol name")
+
+    bindings = _parse_bindings(expression[2], "named let")
+    params = [binding_name for binding_name, _ in bindings]
+    args = [_eval(value_expr, environment) for _, value_expr in bindings]
+
+    local_env = Environment(parent=environment)
+    procedure = Procedure(params, expression[3:], local_env)
+    local_env.define(name, procedure)
+    return _apply(procedure, args)
 
 
 def _eval_let_star(expression: list[object], environment: Environment) -> Any:
@@ -226,6 +255,78 @@ def _eval_cond(expression: list[object], environment: Environment) -> Any:
     return None
 
 
+def _eval_case(expression: list[object], environment: Environment) -> Any:
+    if len(expression) < 2:
+        raise SchemeRuntimeError("case expected a key expression")
+
+    key_value = _eval(expression[1], environment)
+    clauses = expression[2:]
+    for index, clause in enumerate(clauses):
+        if not isinstance(clause, list) or not clause:
+            raise SchemeRuntimeError("case clauses must be non-empty lists")
+
+        datum_expr = clause[0]
+        is_else = isinstance(datum_expr, Symbol) and datum_expr == "else"
+        if is_else:
+            if index != len(clauses) - 1:
+                raise SchemeRuntimeError("case else clause must be last")
+            if len(clause) == 1:
+                raise SchemeRuntimeError("case else clause expected a body")
+            return _eval_sequence(clause[1:], environment)
+
+        if not isinstance(datum_expr, list):
+            raise SchemeRuntimeError("case clause expected a datum list")
+        if len(clause) == 1:
+            raise SchemeRuntimeError("case clause expected a body")
+
+        for datum in datum_expr:
+            if equal_value(key_value, _quote_to_value(datum)):
+                return _eval_sequence(clause[1:], environment)
+
+    return None
+
+
+def _eval_do(expression: list[object], environment: Environment) -> Any:
+    if len(expression) < 3:
+        raise SchemeRuntimeError("do expected variable specs and a termination clause")
+
+    bindings = _parse_do_bindings(expression[1])
+    termination = expression[2]
+    if not isinstance(termination, list) or not termination:
+        raise SchemeRuntimeError("do termination clause must be a non-empty list")
+
+    initial_values = [
+        (name, _eval(init_expr, environment), step_expr)
+        for name, init_expr, step_expr in bindings
+    ]
+    loop_env = Environment(parent=environment)
+    for name, value, _ in initial_values:
+        loop_env.define(name, value)
+
+    test_expr = termination[0]
+    result_exprs = termination[1:]
+    body_exprs = expression[3:]
+
+    while True:
+        if _is_truthy(_eval(test_expr, loop_env)):
+            if not result_exprs:
+                return None
+            return _eval_sequence(result_exprs, loop_env)
+
+        for body_expr in body_exprs:
+            _eval(body_expr, loop_env)
+
+        next_values: list[tuple[Symbol, Any]] = []
+        for name, _, step_expr in bindings:
+            if step_expr is None:
+                next_values.append((name, loop_env.lookup(name)))
+            else:
+                next_values.append((name, _eval(step_expr, loop_env)))
+
+        for name, value in next_values:
+            loop_env.set(name, value)
+
+
 def _eval_sequence(expressions: Sequence[object], environment: Environment) -> Any:
     if not expressions:
         raise SchemeRuntimeError("expected at least one expression")
@@ -272,7 +373,10 @@ def _parse_bindings_form(
 ) -> list[tuple[Symbol, object]]:
     if len(expression) < 3:
         raise SchemeRuntimeError(f"{form_name} expected bindings and body")
-    bindings_expr = expression[1]
+    return _parse_bindings(expression[1], form_name)
+
+
+def _parse_bindings(bindings_expr: object, form_name: str) -> list[tuple[Symbol, object]]:
     if not isinstance(bindings_expr, list):
         raise SchemeRuntimeError(f"{form_name} expected binding list")
 
@@ -288,6 +392,26 @@ def _parse_bindings_form(
             raise SchemeRuntimeError(f"{form_name} duplicate binding: {name}")
         seen.add(name)
         bindings.append((name, value_expr))
+    return bindings
+
+
+def _parse_do_bindings(bindings_expr: object) -> list[tuple[Symbol, object, object | None]]:
+    if not isinstance(bindings_expr, list):
+        raise SchemeRuntimeError("do variable specs must be a list")
+
+    bindings: list[tuple[Symbol, object, object | None]] = []
+    seen: set[Symbol] = set()
+    for binding in bindings_expr:
+        if not isinstance(binding, list) or len(binding) not in (2, 3):
+            raise SchemeRuntimeError("do variable specs must be (var init step?) lists")
+        name = binding[0]
+        if not isinstance(name, Symbol):
+            raise SchemeRuntimeError("do variable names must be symbols")
+        if name in seen:
+            raise SchemeRuntimeError(f"do duplicate variable: {name}")
+        seen.add(name)
+        step_expr = binding[2] if len(binding) == 3 else None
+        bindings.append((name, binding[1], step_expr))
     return bindings
 
 
