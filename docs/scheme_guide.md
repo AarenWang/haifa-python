@@ -84,11 +84,28 @@ List and equality operations:
 - `car`
 - `cdr`
 - `list`
+- `length`
+- `append`
+- `reverse`
+- `map`
+- `for-each`
 - `null?`
 - `pair?`
 - `list?`
 - `eq?`
 - `equal?`
+- `apply`
+
+Predicates:
+
+- `number?`
+- `integer?`
+- `string?`
+- `symbol?`
+- `boolean?`
+- `char?`
+- `vector?`
+- `procedure?`
 
 ## Examples
 

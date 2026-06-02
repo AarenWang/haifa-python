@@ -8,7 +8,7 @@ from typing import Any, Sequence
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import DottedList, Symbol, parse_source
-from haifa_scheme.stdlib import BuiltinFunction, create_global_environment
+from haifa_scheme.stdlib import BuiltinContext, BuiltinFunction, create_global_environment
 from haifa_scheme.values import Pair, Vector, make_list
 
 
@@ -237,10 +237,21 @@ def _eval_sequence(expressions: Sequence[object], environment: Environment) -> A
 
 def _apply(procedure: Any, args: Sequence[Any]) -> Any:
     if isinstance(procedure, BuiltinFunction):
-        return procedure(args)
+        return procedure(args, BuiltinContext(_apply_resolved, _is_procedure))
     if isinstance(procedure, Procedure):
         return procedure(args)
     raise SchemeRuntimeError(f"attempted to call non-procedure: {procedure!r}")
+
+
+def _apply_resolved(procedure: Any, args: Sequence[Any]) -> Any:
+    result = _apply(procedure, args)
+    if isinstance(result, _TailExpression):
+        return _eval(result.expression, result.environment)
+    return result
+
+
+def _is_procedure(value: Any) -> bool:
+    return isinstance(value, (BuiltinFunction, Procedure))
 
 
 def _parse_params(params: Sequence[object], form_name: str) -> list[Symbol]:

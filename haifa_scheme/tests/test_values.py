@@ -83,6 +83,43 @@ def test_list_builtin_returns_proper_scheme_list():
     assert to_scheme_string(value) == '(1 2 "three")'
 
 
+def test_length_counts_proper_list_items():
+    assert run_source("(length '(1 2 3)) (length '())") == [3, 0]
+
+
+def test_reverse_returns_reversed_proper_list():
+    [value] = run_source("(reverse '(1 2 3))")
+
+    assert to_scheme_string(value) == "(3 2 1)"
+
+
+def test_append_combines_lists_and_accepts_zero_arguments():
+    combined, empty = run_source("(append '(1 2) '(3 4)) (append)")
+
+    assert to_scheme_string(combined) == "(1 2 3 4)"
+    assert empty is EMPTY_LIST
+
+
+def test_append_uses_final_argument_as_tail():
+    dotted, unchanged_tail = run_source("(append '(1 2) 3) (append 3)")
+
+    assert to_scheme_string(dotted) == "(1 2 . 3)"
+    assert unchanged_tail == 3
+
+
+def test_length_and_reverse_reject_improper_lists():
+    with pytest.raises(SchemeRuntimeError, match="length expected proper list"):
+        run_source("(length '(1 . 2))")
+
+    with pytest.raises(SchemeRuntimeError, match="reverse expected proper list"):
+        run_source("(reverse '(1 . 2))")
+
+
+def test_append_rejects_improper_non_final_lists():
+    with pytest.raises(SchemeRuntimeError, match="append expected proper list"):
+        run_source("(append '(1 . 2) '(3 4))")
+
+
 def test_cons_car_cdr_and_runtime_dotted_pair():
     dotted, car_value, cdr_value = run_source(
         """
@@ -117,6 +154,54 @@ def test_list_predicates():
         (list? (cons 1 2))
         """
     ) == [True, True, False, True, True, False]
+
+
+def test_value_predicates_distinguish_scheme_value_types():
+    assert run_source(
+        r'''
+        (number? 1)
+        (number? 1.5)
+        (number? #t)
+        (integer? 1)
+        (integer? 1.5)
+        (integer? #f)
+        (string? "name")
+        (string? 'name)
+        (symbol? 'name)
+        (symbol? "name")
+        (boolean? #t)
+        (boolean? #f)
+        (boolean? 0)
+        (char? #\a)
+        (char? "a")
+        (vector? #(1 2))
+        (vector? '(1 2))
+        (procedure? +)
+        (procedure? '(1 2))
+        (list? #(1 2))
+        '''
+    ) == [
+        True,
+        True,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        False,
+    ]
 
 
 def test_empty_list_is_truthy():

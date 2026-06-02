@@ -6,34 +6,55 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from operator import mul
-from typing import Any
+from typing import Any, Protocol
 
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import Symbol
 from haifa_scheme.values import (
     EMPTY_LIST,
+    Char,
     EmptyList,
     Pair,
+    Vector,
     equal_value,
     is_proper_list,
     make_list,
 )
 
 
+class ApplyFunc(Protocol):
+    def __call__(self, procedure: Any, args: Sequence[Any]) -> Any: ...
+
+
+class ProcedurePredicate(Protocol):
+    def __call__(self, value: Any) -> bool: ...
+
+
+@dataclass(frozen=True)
+class BuiltinContext:
+    apply_func: ApplyFunc
+    is_procedure_func: ProcedurePredicate
+
+
 @dataclass(frozen=True)
 class BuiltinFunction:
     name: str
-    func: Callable[[Sequence[Any]], Any]
+    func: Callable[[Sequence[Any]], Any] | Callable[[Sequence[Any], BuiltinContext], Any]
+    needs_context: bool = False
 
-    def __call__(self, args: Sequence[Any]) -> Any:
+    def __call__(self, args: Sequence[Any], context: BuiltinContext | None = None) -> Any:
+        if self.needs_context:
+            if context is None:
+                raise SchemeRuntimeError(f"{self.name} requires runtime context")
+            return self.func(args, context)  # type: ignore[misc]
         return self.func(args)
 
 
 def create_global_environment() -> Environment:
     environment = Environment()
-    for name, func in _BUILTINS.items():
-        environment.define(Symbol(name), BuiltinFunction(name, func))
+    for name, builtin in _BUILTINS.items():
+        environment.define(Symbol(name), builtin)
     return environment
 
 
@@ -105,6 +126,48 @@ def _list(args: Sequence[Any]) -> Pair | EmptyList:
     return make_list(args)
 
 
+def _length(args: Sequence[Any]) -> int:
+    value = _ensure_proper_list_arg(args, "length")
+    return len(_proper_list_to_python_list(value))
+
+
+def _append(args: Sequence[Any]) -> Any:
+    if not args:
+        return EMPTY_LIST
+
+    result = args[-1]
+    for value in reversed(args[:-1]):
+        if not is_proper_list(value):
+            raise SchemeRuntimeError("append expected proper list arguments before final tail")
+        for item in reversed(_proper_list_to_python_list(value)):
+            result = Pair(item, result)
+    return result
+
+
+def _reverse(args: Sequence[Any]) -> Pair | EmptyList:
+    value = _ensure_proper_list_arg(args, "reverse")
+    return make_list(reversed(_proper_list_to_python_list(value)))
+
+
+def _map(args: Sequence[Any], context: BuiltinContext) -> Pair | EmptyList:
+    procedure, lists = _ensure_list_procedure_args(args, "map")
+    if not context.is_procedure_func(procedure):
+        raise SchemeRuntimeError("map expected procedure argument")
+    return make_list(
+        context.apply_func(procedure, list(items))
+        for items in zip(*lists, strict=True)
+    )
+
+
+def _for_each(args: Sequence[Any], context: BuiltinContext) -> None:
+    procedure, lists = _ensure_list_procedure_args(args, "for-each")
+    if not context.is_procedure_func(procedure):
+        raise SchemeRuntimeError("for-each expected procedure argument")
+    for items in zip(*lists, strict=True):
+        context.apply_func(procedure, list(items))
+    return None
+
+
 def _null_predicate(args: Sequence[Any]) -> bool:
     _ensure_exact_args(args, 1, "null?")
     return args[0] is EMPTY_LIST
@@ -135,6 +198,55 @@ def _equal_predicate(args: Sequence[Any]) -> bool:
     return equal_value(args[0], args[1])
 
 
+def _number_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "number?")
+    return _is_number(args[0])
+
+
+def _integer_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "integer?")
+    return isinstance(args[0], int) and not isinstance(args[0], bool)
+
+
+def _string_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "string?")
+    return isinstance(args[0], str) and not isinstance(args[0], Symbol)
+
+
+def _symbol_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "symbol?")
+    return isinstance(args[0], Symbol)
+
+
+def _boolean_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "boolean?")
+    return isinstance(args[0], bool)
+
+
+def _char_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "char?")
+    return isinstance(args[0], Char)
+
+
+def _vector_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "vector?")
+    return isinstance(args[0], Vector)
+
+
+def _apply_builtin(args: Sequence[Any], context: BuiltinContext) -> Any:
+    _ensure_min_args(args, 2, "apply")
+    final_arg = args[-1]
+    if not is_proper_list(final_arg):
+        raise SchemeRuntimeError("apply expected final argument to be a proper list")
+    applied_args = [*args[1:-1], *_proper_list_to_python_list(final_arg)]
+    return context.apply_func(args[0], applied_args)
+
+
+def _procedure_predicate(args: Sequence[Any], context: BuiltinContext) -> bool:
+    _ensure_exact_args(args, 1, "procedure?")
+    return context.is_procedure_func(args[0])
+
+
 def _compare_adjacent(
     args: Sequence[Any], name: str, predicate: Callable[[int | float, int | float], bool]
 ) -> bool:
@@ -160,31 +272,79 @@ def _ensure_pair_arg(args: Sequence[Any], name: str) -> Pair:
     return args[0]
 
 
+def _ensure_proper_list_arg(args: Sequence[Any], name: str) -> Pair | EmptyList:
+    _ensure_exact_args(args, 1, name)
+    if not is_proper_list(args[0]):
+        raise SchemeRuntimeError(f"{name} expected proper list argument")
+    return args[0]
+
+
+def _ensure_list_procedure_args(
+    args: Sequence[Any], name: str
+) -> tuple[Any, list[list[Any]]]:
+    _ensure_min_args(args, 2, name)
+    lists: list[list[Any]] = []
+    expected_length: int | None = None
+    for value in args[1:]:
+        if not is_proper_list(value):
+            raise SchemeRuntimeError(f"{name} expected proper list arguments")
+        items = _proper_list_to_python_list(value)
+        if expected_length is None:
+            expected_length = len(items)
+        elif len(items) != expected_length:
+            raise SchemeRuntimeError(f"{name} expected list arguments with equal length")
+        lists.append(items)
+    return args[0], lists
+
+
 def _ensure_numbers(args: Sequence[Any], name: str) -> None:
     for arg in args:
         if not _is_number(arg):
             raise SchemeRuntimeError(f"{name} expected number arguments")
 
 
+def _proper_list_to_python_list(value: Any) -> list[Any]:
+    result: list[Any] = []
+    current = value
+    while isinstance(current, Pair):
+        result.append(current.car)
+        current = current.cdr
+    return result
+
+
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-_BUILTINS: dict[str, Callable[[Sequence[Any]], Any]] = {
-    "+": _add,
-    "-": _subtract,
-    "*": _multiply,
-    "/": _divide,
-    "=": _numeric_equal,
-    "<": _less_than,
-    ">": _greater_than,
-    "cons": _cons,
-    "car": _car,
-    "cdr": _cdr,
-    "list": _list,
-    "null?": _null_predicate,
-    "pair?": _pair_predicate,
-    "list?": _list_predicate,
-    "eq?": _eq_predicate,
-    "equal?": _equal_predicate,
+_BUILTINS: dict[str, BuiltinFunction] = {
+    "+": BuiltinFunction("+", _add),
+    "-": BuiltinFunction("-", _subtract),
+    "*": BuiltinFunction("*", _multiply),
+    "/": BuiltinFunction("/", _divide),
+    "=": BuiltinFunction("=", _numeric_equal),
+    "<": BuiltinFunction("<", _less_than),
+    ">": BuiltinFunction(">", _greater_than),
+    "cons": BuiltinFunction("cons", _cons),
+    "car": BuiltinFunction("car", _car),
+    "cdr": BuiltinFunction("cdr", _cdr),
+    "list": BuiltinFunction("list", _list),
+    "length": BuiltinFunction("length", _length),
+    "append": BuiltinFunction("append", _append),
+    "reverse": BuiltinFunction("reverse", _reverse),
+    "map": BuiltinFunction("map", _map, needs_context=True),
+    "for-each": BuiltinFunction("for-each", _for_each, needs_context=True),
+    "null?": BuiltinFunction("null?", _null_predicate),
+    "pair?": BuiltinFunction("pair?", _pair_predicate),
+    "list?": BuiltinFunction("list?", _list_predicate),
+    "eq?": BuiltinFunction("eq?", _eq_predicate),
+    "equal?": BuiltinFunction("equal?", _equal_predicate),
+    "number?": BuiltinFunction("number?", _number_predicate),
+    "integer?": BuiltinFunction("integer?", _integer_predicate),
+    "string?": BuiltinFunction("string?", _string_predicate),
+    "symbol?": BuiltinFunction("symbol?", _symbol_predicate),
+    "boolean?": BuiltinFunction("boolean?", _boolean_predicate),
+    "char?": BuiltinFunction("char?", _char_predicate),
+    "vector?": BuiltinFunction("vector?", _vector_predicate),
+    "apply": BuiltinFunction("apply", _apply_builtin, needs_context=True),
+    "procedure?": BuiltinFunction("procedure?", _procedure_predicate, needs_context=True),
 }
