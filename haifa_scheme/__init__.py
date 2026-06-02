@@ -3,15 +3,17 @@
 from haifa_scheme.errors import SchemeRuntimeError, SchemeSyntaxError
 from haifa_scheme.reader import Symbol, parse_source
 from haifa_scheme.runtime import Procedure, run_source
-from haifa_scheme.values import EMPTY_LIST, Pair, to_scheme_string
+from haifa_scheme.values import EMPTY_LIST, Char, Pair, Vector, to_scheme_string
 
 __all__ = [
     "EMPTY_LIST",
+    "Char",
     "Pair",
     "Procedure",
     "SchemeRuntimeError",
     "SchemeSyntaxError",
     "Symbol",
+    "Vector",
     "parse_source",
     "run_source",
     "to_scheme_string",

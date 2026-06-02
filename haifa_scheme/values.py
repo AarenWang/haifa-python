@@ -22,6 +22,20 @@ class Pair:
     cdr: Any
 
 
+@dataclass(frozen=True)
+class Char:
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str) or len(self.value) != 1:
+            raise ValueError("Scheme character value must be a single Python character")
+
+
+@dataclass(frozen=True)
+class Vector:
+    items: tuple[Any, ...]
+
+
 def make_list(values: Iterable[Any]) -> Pair | EmptyList:
     result: Pair | EmptyList = EMPTY_LIST
     for value in reversed(list(values)):
@@ -58,6 +72,10 @@ def to_scheme_string(value: Any) -> str:
         return "()"
     if isinstance(value, Pair):
         return _pair_to_scheme_string(value)
+    if isinstance(value, Char):
+        return _char_to_scheme_string(value)
+    if isinstance(value, Vector):
+        return _vector_to_scheme_string(value)
     if isinstance(value, Symbol):
         return str(value)
     if isinstance(value, bool):
@@ -99,6 +117,19 @@ def _string_literal(value: str) -> str:
         .replace("\t", "\\t")
     )
     return f'"{escaped}"'
+
+
+def _char_to_scheme_string(value: Char) -> str:
+    names = {
+        " ": "space",
+        "\n": "newline",
+        "\t": "tab",
+    }
+    return f"#\\{names.get(value.value, value.value)}"
+
+
+def _vector_to_scheme_string(value: Vector) -> str:
+    return f"#({' '.join(to_scheme_string(item) for item in value.items)})"
 
 
 def _is_number(value: Any) -> bool:

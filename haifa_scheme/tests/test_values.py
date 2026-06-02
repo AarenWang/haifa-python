@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from haifa_scheme import EMPTY_LIST, Pair, SchemeRuntimeError, Symbol, run_source, to_scheme_string
+from haifa_scheme import (
+    EMPTY_LIST,
+    Char,
+    Pair,
+    SchemeRuntimeError,
+    Symbol,
+    Vector,
+    run_source,
+    to_scheme_string,
+)
 
 
 def test_quote_empty_and_proper_list_values():
@@ -18,6 +27,53 @@ def test_quote_nested_list_printing():
     [value] = run_source("'(1 (2 3) x)")
 
     assert to_scheme_string(value) == "(1 (2 3) x)"
+
+
+def test_quote_dotted_pair_value():
+    [value] = run_source("'(1 . 2)")
+
+    assert isinstance(value, Pair)
+    assert value.car == 1
+    assert value.cdr == 2
+    assert to_scheme_string(value) == "(1 . 2)"
+
+
+def test_quote_multi_head_dotted_list_value():
+    [value] = run_source("'(a b . c)")
+
+    assert isinstance(value, Pair)
+    assert to_scheme_string(value) == "(a b . c)"
+
+
+def test_quote_nested_dotted_pair_value():
+    first, second = run_source("'((1 . 2) . 3) '(a . (b . c))")
+
+    assert to_scheme_string(first) == "((1 . 2) . 3)"
+    assert to_scheme_string(second) == "(a b . c)"
+
+
+def test_quote_character_value():
+    [value] = run_source(r"'#\space")
+
+    assert value == Char(" ")
+    assert to_scheme_string(value) == r"#\space"
+
+
+def test_quote_vector_value():
+    [value] = run_source("'#(1 2 3)")
+
+    assert value == Vector((1, 2, 3))
+    assert to_scheme_string(value) == "#(1 2 3)"
+
+
+def test_quote_vector_recursively_converts_items():
+    [value] = run_source(r"'#(1 (2 . 3) #\space)")
+
+    assert isinstance(value, Vector)
+    assert value.items[0] == 1
+    assert isinstance(value.items[1], Pair)
+    assert value.items[2] == Char(" ")
+    assert to_scheme_string(value) == r"#(1 (2 . 3) #\space)"
 
 
 def test_list_builtin_returns_proper_scheme_list():
@@ -85,3 +141,14 @@ def test_to_scheme_string_formats_atoms_and_strings():
     assert to_scheme_string(False) == "#f"
     assert to_scheme_string(Symbol("name")) == "name"
     assert to_scheme_string('hello\n"scheme"') == r'"hello\n\"scheme\""'
+
+
+def test_to_scheme_string_formats_characters():
+    assert to_scheme_string(Char("a")) == r"#\a"
+    assert to_scheme_string(Char(" ")) == r"#\space"
+    assert to_scheme_string(Char("\n")) == r"#\newline"
+    assert to_scheme_string(Char("\t")) == r"#\tab"
+
+
+def test_to_scheme_string_formats_vectors():
+    assert to_scheme_string(Vector((1, Pair(2, 3), Char(" ")))) == r"#(1 (2 . 3) #\space)"

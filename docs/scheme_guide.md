@@ -47,10 +47,12 @@ The runtime supports:
 
 - numbers
 - strings
+- characters, such as `#\a`, `#\space`, and `#\newline`
 - booleans: `#t` and `#f`
 - symbols
 - the empty list: `()`
 - pairs and proper lists
+- vectors
 - user procedures and builtin procedures
 
 List and pair values print in Scheme form:
@@ -58,7 +60,11 @@ List and pair values print in Scheme form:
 ```scheme
 '(1 2 3)       ; (1 2 3)
 (cons 1 2)    ; (1 . 2)
+'(1 . 2)      ; (1 . 2)
+#(1 2 3)      ; #(1 2 3)
 ```
+
+The reader also understands quasiquote syntax, expanding backquote, comma, and comma-at into `quasiquote`, `unquote`, and `unquote-splicing` forms. Runtime quasiquote expansion is not implemented yet.
 
 ## Builtins
 
@@ -113,4 +119,4 @@ Closure with mutation:
 
 ## Current Non-Goals
 
-The runtime does not yet implement macros, quasiquote, vectors, ports, exact/inexact numeric towers, continuations, or bytecode compilation. Tail-call optimization is tracked separately in the Scheme sprint plan.
+The runtime does not yet implement macros, runtime quasiquote expansion, ports, exact/inexact numeric towers, continuations, or bytecode compilation.

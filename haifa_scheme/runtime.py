@@ -7,9 +7,9 @@ from typing import Any, Sequence
 
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
-from haifa_scheme.reader import Symbol, parse_source
+from haifa_scheme.reader import DottedList, Symbol, parse_source
 from haifa_scheme.stdlib import BuiltinFunction, create_global_environment
-from haifa_scheme.values import make_list
+from haifa_scheme.values import Pair, Vector, make_list
 
 
 @dataclass(frozen=True)
@@ -294,6 +294,13 @@ def _is_truthy(value: object) -> bool:
 
 
 def _quote_to_value(expression: object) -> object:
+    if isinstance(expression, Vector):
+        return Vector(tuple(_quote_to_value(item) for item in expression.items))
+    if isinstance(expression, DottedList):
+        tail = _quote_to_value(expression.tail)
+        for item in reversed(expression.items):
+            tail = Pair(_quote_to_value(item), tail)
+        return tail
     if isinstance(expression, list):
         return make_list(_quote_to_value(item) for item in expression)
     return expression

@@ -4,9 +4,13 @@ The reader turns source text into simple Python values:
 
 - numbers become ``int`` or ``float``
 - booleans become ``bool``
+- character literals become ``Char``
+- vector literals become ``Vector``
 - string literals become ``str``
 - symbols become ``Symbol``
 - lists become Python ``list``
+- dotted lists become ``DottedList``
+- reader syntax expands quote/quasiquote/unquote forms into lists
 """
 
 from __future__ import annotations
@@ -20,6 +24,14 @@ from haifa_scheme.errors import SchemeSyntaxError
 
 class Symbol(str):
     """A Scheme symbol, distinct from a Scheme string literal."""
+
+
+@dataclass(frozen=True)
+class DottedList:
+    """A Scheme dotted list such as ``(a b . c)``."""
+
+    items: list[object]
+    tail: object
 
 
 @dataclass(frozen=True)
@@ -64,6 +76,11 @@ def _tokenize(source: str) -> list[_Token]:
             index += 1
             continue
 
+        if index + 1 < length and source[index : index + 2] == "#(":
+            tokens.append(_Token("vector-open", "#(", index))
+            index += 2
+            continue
+
         if char == ")":
             tokens.append(_Token("close", char, index))
             index += 1
@@ -74,6 +91,20 @@ def _tokenize(source: str) -> list[_Token]:
             index += 1
             continue
 
+        if char == "`":
+            tokens.append(_Token("quasiquote", char, index))
+            index += 1
+            continue
+
+        if char == ",":
+            if index + 1 < length and source[index + 1] == "@":
+                tokens.append(_Token("unquote-splicing", ",@", index))
+                index += 2
+                continue
+            tokens.append(_Token("unquote", char, index))
+            index += 1
+            continue
+
         if char == '"':
             start = index
             value, index = _read_string(source, index)
@@ -81,7 +112,7 @@ def _tokenize(source: str) -> list[_Token]:
             continue
 
         start = index
-        while index < length and not source[index].isspace() and source[index] not in "();'":
+        while index < length and not source[index].isspace() and source[index] not in "();'`,":
             index += 1
         atom = source[start:index]
         tokens.append(_Token("literal", _parse_atom(atom), start))
@@ -127,11 +158,29 @@ def _parse_atom(atom: str) -> object:
         return True
     if atom == "#f":
         return False
+    if atom.startswith("#\\"):
+        return _parse_character(atom)
     if _INT_RE.fullmatch(atom):
         return int(atom)
     if _FLOAT_RE.fullmatch(atom):
         return float(atom)
     return Symbol(atom)
+
+
+def _parse_character(atom: str) -> object:
+    from haifa_scheme.values import Char
+
+    value = atom[2:]
+    named_characters = {
+        "space": " ",
+        "newline": "\n",
+        "tab": "\t",
+    }
+    if value in named_characters:
+        return Char(named_characters[value])
+    if len(value) == 1:
+        return Char(value)
+    raise SchemeSyntaxError(f"malformed character literal: {atom}")
 
 
 class _Parser:
@@ -154,24 +203,61 @@ class _Parser:
             return token.value
         if token.kind == "open":
             return self._parse_list(token.position)
-        if token.kind == "quote":
-            if self._is_at_end():
-                raise SchemeSyntaxError(f"quote at character {token.position} has no expression")
-            return [Symbol("quote"), self._parse_expression()]
+        if token.kind == "vector-open":
+            return self._parse_vector(token.position)
+        if token.kind in {"quote", "quasiquote", "unquote", "unquote-splicing"}:
+            return self._parse_reader_form(token)
         if token.kind == "close":
             raise SchemeSyntaxError(f"unexpected ')' at character {token.position}")
 
         raise SchemeSyntaxError(f"unexpected token at character {token.position}")
 
-    def _parse_list(self, start_position: int) -> list[object]:
+    def _parse_reader_form(self, token: _Token) -> list[object]:
+        if self._is_at_end():
+            raise SchemeSyntaxError(f"{token.kind} at character {token.position} has no expression")
+        return [Symbol(token.kind), self._parse_expression()]
+
+    def _parse_list(self, start_position: int) -> list[object] | DottedList:
         items: list[object] = []
         while not self._is_at_end():
             if self._peek().kind == "close":
                 self._advance()
                 return items
+            if self._is_dot_token(self._peek()):
+                dot_token = self._advance()
+                if not items:
+                    raise SchemeSyntaxError(
+                        f"dotted list at character {dot_token.position} must have a head"
+                    )
+                if self._is_at_end() or self._peek().kind == "close":
+                    raise SchemeSyntaxError(
+                        f"dotted list at character {dot_token.position} must have a tail"
+                    )
+
+                tail = self._parse_expression()
+                if self._is_at_end():
+                    raise SchemeSyntaxError(f"unclosed '(' at character {start_position}")
+                if self._peek().kind != "close":
+                    raise SchemeSyntaxError(
+                        f"dotted list at character {dot_token.position} must have exactly one tail"
+                    )
+                self._advance()
+                return DottedList(items, tail)
             items.append(self._parse_expression())
 
         raise SchemeSyntaxError(f"unclosed '(' at character {start_position}")
+
+    def _parse_vector(self, start_position: int) -> object:
+        from haifa_scheme.values import Vector
+
+        items: list[object] = []
+        while not self._is_at_end():
+            if self._peek().kind == "close":
+                self._advance()
+                return Vector(tuple(items))
+            items.append(self._parse_expression())
+
+        raise SchemeSyntaxError(f"unclosed vector literal at character {start_position}")
 
     def _is_at_end(self) -> bool:
         return self._position >= len(self._tokens)
@@ -183,3 +269,7 @@ class _Parser:
         token = self._tokens[self._position]
         self._position += 1
         return token
+
+    @staticmethod
+    def _is_dot_token(token: _Token) -> bool:
+        return token.kind == "literal" and token.value == Symbol(".")
