@@ -6,6 +6,7 @@ Haifa Python is a teaching-oriented compiler and virtual machine playground buil
 
 - a jq-style JSON query/runtime tool (`pyjq`)
 - a Lua subset with runtime, coroutines, and tracing (`pylua`)
+- a small Scheme interpreter with lexical scope, pairs, lists, and REPL support (`pyscheme`)
 
 The project is designed for people who want to study how source code moves through the full execution pipeline: lexer, parser, AST, semantic analysis, bytecode generation, VM execution, and debugging/visualization.
 
@@ -40,6 +41,7 @@ If you are teaching or learning compiler construction, language runtimes, or vir
 
 - `compiler/`: core bytecode VM, jq frontend/runtime, instruction set, and visualizers
 - `haifa_lua/`: Lua lexer, parser, compiler, runtime, stdlib, coroutines, and CLI
+- `haifa_scheme/`: Scheme reader, tree-walking runtime, stdlib, values, and CLI
 - `docs/`: user guides, sprint notes, and reference material
 - `knowledge/`: architecture and deep-dive notes
 - `examples/`: runnable Lua and coroutine examples
@@ -100,6 +102,26 @@ python3 -m haifa_lua.cli examples/coroutines.lua --trace coroutine
 python3 -m haifa_lua.cli examples/coroutines.lua --visualize curses
 ```
 
+### Try the Scheme runtime
+
+Run a script:
+
+```bash
+python3 -m haifa_scheme.cli examples/factorial.scm --print-output
+```
+
+Evaluate inline code:
+
+```bash
+python3 -m haifa_scheme.cli -e '(letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1))))))) (fact 5))' --print-output
+```
+
+Start the REPL:
+
+```bash
+python3 -m haifa_scheme.cli --repl
+```
+
 ### Try the jq-style runtime
 
 Query a JSON file:
@@ -125,6 +147,7 @@ After installation, the same tools are also available as:
 ```bash
 pylua --help
 pyjq --help
+pyscheme --help
 ```
 
 ## Learning Path
@@ -135,14 +158,17 @@ For a guided tour, a practical sequence is:
 2. Read `haifa_lua/lexer.py`, `haifa_lua/parser.py`, and `haifa_lua/compiler.py`.
 3. Follow execution into `compiler/bytecode.py` and `compiler/bytecode_vm.py`.
 4. Compare the Lua flow with the jq flow in `haifa_jq/jq_parser.py`, `haifa_jq/jq_compiler.py`, and `haifa_jq/jq_vm.py`.
-5. Open the visualizer or trace output to inspect runtime state changes.
+5. Read `haifa_scheme/reader.py` and `haifa_scheme/runtime.py` to compare a tree-walking interpreter with the bytecode-backed tracks.
+6. Open the visualizer or trace output to inspect runtime state changes.
 
 ## Documentation
 
 - [`docs/lua_guide.md`](docs/lua_guide.md): practical guide to the Lua runtime
+- [`docs/scheme_guide.md`](docs/scheme_guide.md): practical guide to the Scheme runtime
 - [`docs/guide.md`](docs/guide.md): jq CLI guide and examples
 - [`docs/reference.md`](docs/reference.md): command reference
 - [`docs/lua_sprint.md`](docs/lua_sprint.md): implementation milestones and roadmap
+- [`docs/haifa_scheme_sprit.md`](docs/haifa_scheme_sprit.md): Scheme implementation milestones and roadmap
 - [`knowledge/03-bytecode-and-vm.md`](knowledge/03-bytecode-and-vm.md): bytecode/VM background
 - [`knowledge/06-lua-execution-pipeline.md`](knowledge/06-lua-execution-pipeline.md): end-to-end Lua execution pipeline
 
@@ -150,4 +176,5 @@ For a guided tour, a practical sequence is:
 
 - The GUI visualizer depends on `pygame`. In non-GUI environments, use `--visualize curses`.
 - The Lua implementation is intentionally a subset/runtime experiment, not a full Lua compatibility target.
+- The Scheme implementation is intentionally a small teaching subset, not a full R5RS/R7RS compatibility target.
 - The repository favors readability and inspectability over aggressive optimization.
