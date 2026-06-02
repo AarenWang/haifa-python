@@ -206,7 +206,8 @@ def _get_chinese_font(size: int) -> pygame.font.Font:
             font = pygame.font.SysFont(font_name, size)
             if _font_supports_text(font, "测试"):
                 return font
-        except (pygame.error, OSError):
+        except (pygame.error, OSError, TypeError):
+            # TypeError: Handle pygame Windows font enumeration bug
             continue
 
     # Fallback to default font. We still prefer to use a monospace family when
@@ -216,7 +217,8 @@ def _get_chinese_font(size: int) -> pygame.font.Font:
         monospace_font = pygame.font.SysFont("monospace", size)
         if _font_supports_text(monospace_font, "测试"):
             return monospace_font
-    except (pygame.error, OSError):
+    except (pygame.error, OSError, TypeError):
+        # TypeError: Handle pygame Windows font enumeration bug
         pass
 
     try:
