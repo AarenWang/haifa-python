@@ -6,11 +6,12 @@ This roadmap extends the current teaching Scheme runtime toward a more standard 
 
 Implemented:
 
-- Reader for numbers, strings, booleans, symbols, lists, quote shorthand, and line comments.
+- Reader for numbers, strings, booleans, symbols, lists, dotted lists, character literals, vectors, quote/quasiquote shorthand, and line comments.
 - Tree-walking evaluator with lexical environments and closures.
-- Core forms: `quote`, `if`, `define`, `lambda`, `begin`, `set!`, `let`, `let*`, `letrec`, `and`, `or`, `cond`.
+- Core forms: `quote`, `if`, `define`, `lambda`, `begin`, `set!`, `let`, named `let`, `let*`, `letrec`, `and`, `or`, `cond`, `case`, `do`.
 - Pair/list values, Scheme formatting, and basic equality.
-- Builtins: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `cons`, `car`, `cdr`, `list`, `null?`, `pair?`, `list?`, `eq?`, `equal?`.
+- Builtins: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `cons`, `car`, `cdr`, `list`, `length`, `append`, `reverse`, `map`, `for-each`, `apply`, predicates, `eq?`, `equal?`.
+- Macro expansion with `define-syntax` and a practical `syntax-rules` subset.
 - CLI, examples, REPL, and trampoline support for key tail-call positions.
 
 ## Phase 1: Reader Data Coverage
@@ -138,6 +139,12 @@ Tests:
 - Repeated pattern matching with ellipsis.
 - Hygiene tests where introduced identifiers do not capture user bindings.
 
+Implemented boundary:
+
+- Common one-level ellipsis forms are supported.
+- Template-introduced local bindings are scoped for `lambda`, `let`, `let*`, `letrec`, and named `let`.
+- Nested ellipsis and full referential hygiene remain out of scope.
+
 ## Phase 5: Advanced Scheme Semantics
 
 Goal: tackle standard features that need deeper runtime changes.
@@ -178,10 +185,4 @@ Tests:
 
 Start with Phase 1 and Phase 2 before macros. Reader and stdlib gaps are high-value and low-risk, while `syntax-rules`, `call/cc`, ports, and number tower require more runtime structure.
 
-The next concrete implementation step should be:
-
-1. Dotted pair reader syntax.
-2. `apply`.
-3. `length`, `append`, `reverse`.
-
-These unlock many standard examples without committing to the full macro or continuation design too early.
+The next concrete implementation step should be Phase 5, beginning with a small continuation representation and `call/cc`, then ports, then number tower work.

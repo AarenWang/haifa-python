@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
+from haifa_scheme.macros import SyntaxRulesMacro, parse_syntax_rules
 from haifa_scheme.reader import DottedList, Symbol, parse_source
 from haifa_scheme.stdlib import BuiltinContext, BuiltinFunction, create_global_environment
 from haifa_scheme.values import Pair, Vector, equal_value, make_list
@@ -81,6 +82,8 @@ def _eval_list(expression: list[object], environment: Environment) -> Any:
             return _eval_if(expression, environment)
         if operator == "define":
             return _eval_define(expression, environment)
+        if operator == "define-syntax":
+            return _eval_define_syntax(expression, environment)
         if operator == "lambda":
             return _eval_lambda(expression, environment)
         if operator == "begin":
@@ -103,6 +106,10 @@ def _eval_list(expression: list[object], environment: Environment) -> Any:
             return _eval_case(expression, environment)
         if operator == "do":
             return _eval_do(expression, environment)
+
+        macro = _lookup_macro(operator, environment)
+        if macro is not None:
+            return _TailExpression(macro.expand(expression), environment)
 
     procedure = _eval(operator, environment)
     args = [_eval(arg, environment) for arg in expression[1:]]
@@ -144,6 +151,15 @@ def _eval_define(expression: list[object], environment: Environment) -> None:
         return None
 
     raise SchemeRuntimeError("define expected a symbol or function signature")
+
+
+def _eval_define_syntax(expression: list[object], environment: Environment) -> None:
+    _ensure_form_length(expression, 3, "define-syntax")
+    name = expression[1]
+    if not isinstance(name, Symbol):
+        raise SchemeRuntimeError("define-syntax expected a symbol name")
+    environment.define(name, parse_syntax_rules(name, expression[2]))
+    return None
 
 
 def _eval_lambda(expression: list[object], environment: Environment) -> Procedure:
@@ -342,6 +358,16 @@ def _apply(procedure: Any, args: Sequence[Any]) -> Any:
     if isinstance(procedure, Procedure):
         return procedure(args)
     raise SchemeRuntimeError(f"attempted to call non-procedure: {procedure!r}")
+
+
+def _lookup_macro(name: Symbol, environment: Environment) -> SyntaxRulesMacro | None:
+    try:
+        value = environment.lookup(name)
+    except SchemeRuntimeError:
+        return None
+    if isinstance(value, SyntaxRulesMacro):
+        return value
+    return None
 
 
 def _apply_resolved(procedure: Any, args: Sequence[Any]) -> Any:

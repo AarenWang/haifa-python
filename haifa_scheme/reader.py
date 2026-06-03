@@ -23,7 +23,29 @@ from haifa_scheme.errors import SchemeSyntaxError
 
 
 class Symbol(str):
-    """A Scheme symbol, distinct from a Scheme string literal."""
+    """A Scheme symbol, distinct from a Scheme string literal.
+
+    Macro expansion may attach an internal scope marker to introduced symbols.
+    Unscoped symbols keep ordinary string-like equality so existing reader tests
+    and public formatting behavior stay unchanged.
+    """
+
+    scope: int | None
+
+    def __new__(cls, value: str, scope: int | None = None) -> "Symbol":
+        obj = str.__new__(cls, value)
+        obj.scope = scope
+        return obj
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Symbol):
+            return str(self) == str(other) and self.scope == other.scope
+        return self.scope is None and str.__eq__(self, other)
+
+    def __hash__(self) -> int:
+        if self.scope is None:
+            return str.__hash__(self)
+        return hash((str(self), self.scope))
 
 
 @dataclass(frozen=True)

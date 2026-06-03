@@ -38,6 +38,7 @@ pyscheme --help
 - `set!`
 - `let`, named `let`, `let*`, and `letrec`
 - `and`, `or`, `cond`, `case`, and `do`
+- `define-syntax` with `syntax-rules`
 
 Only `#f` is false. Numbers, strings, symbols, pairs, and the empty list are truthy.
 When an `if`, `case`, or `do` form has no selected result expression, the runtime returns `#<void>`.
@@ -108,6 +109,32 @@ Predicates:
 - `vector?`
 - `procedure?`
 
+## Macros
+
+The runtime supports a small `syntax-rules` macro system:
+
+- pattern variables
+- literal identifiers
+- wildcard `_`
+- common one-level ellipsis forms such as `body ...` and `(x y) ...`
+- hygiene for local bindings introduced by macro templates in `lambda`, `let`, `let*`, `letrec`, and named `let`
+
+Example:
+
+```scheme
+(define-syntax when
+  (syntax-rules ()
+    ((when test body ...)
+     (if test (begin body ...)))))
+
+(define x 0)
+(when #t
+  (set! x (+ x 1))
+  (set! x (+ x 2)))
+```
+
+Nested ellipsis such as `((x ...) ...)` and full R5RS referential hygiene are not implemented yet.
+
 ## Examples
 
 Recursive factorial:
@@ -137,4 +164,4 @@ Closure with mutation:
 
 ## Current Non-Goals
 
-The runtime does not yet implement macros, runtime quasiquote expansion, ports, exact/inexact numeric towers, continuations, or bytecode compilation.
+The runtime does not yet implement runtime quasiquote expansion, ports, exact/inexact numeric towers, continuations, or bytecode compilation.
