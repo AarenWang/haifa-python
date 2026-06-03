@@ -44,7 +44,7 @@ class ReplSession:
             return False
 
         try:
-            output = run_source(line, self.environment)
+            output = run_source(line, self.environment, input=sys.stdin, output=sys.stdout)
         except (SchemeRuntimeError, SchemeSyntaxError) as exc:
             print(f"Scheme execution failed: {exc}", file=sys.stderr)
             return False
@@ -71,12 +71,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         if args.inline:
-            output = run_source(args.inline)
+            output = run_source(args.inline, input=sys.stdin, output=sys.stdout)
         elif args.script:
             source = pathlib.Path(args.script).read_text(encoding="utf-8")
-            output = run_source(source)
+            output = run_source(source, input=sys.stdin, output=sys.stdout)
         else:
-            output = run_source(sys.stdin.read())
+            output = run_source(sys.stdin.read(), output=sys.stdout)
 
         if args.print_output:
             _print_values(output)

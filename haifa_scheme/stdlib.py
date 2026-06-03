@@ -9,17 +9,20 @@ from operator import mul
 from typing import Any, Protocol
 
 from haifa_scheme.environment import Environment
-from haifa_scheme.errors import SchemeRuntimeError
-from haifa_scheme.reader import Symbol
+from haifa_scheme.errors import SchemeRuntimeError, SchemeSyntaxError
+from haifa_scheme.reader import DottedList, Symbol, parse_source
 from haifa_scheme.values import (
     EMPTY_LIST,
+    EOF_OBJECT,
     Char,
     EmptyList,
     Pair,
+    TextPort,
     Vector,
     equal_value,
     is_proper_list,
     make_list,
+    to_scheme_string,
 )
 
 
@@ -40,6 +43,8 @@ class BuiltinContext:
     apply_func: ApplyFunc
     is_procedure_func: ProcedurePredicate
     call_cc_func: CallCcFunc
+    current_input_port: TextPort
+    current_output_port: TextPort
 
 
 @dataclass(frozen=True)
@@ -260,6 +265,88 @@ def _call_cc_builtin(args: Sequence[Any], context: BuiltinContext) -> Any:
     return context.call_cc_func(procedure)
 
 
+def _display_builtin(args: Sequence[Any], context: BuiltinContext) -> None:
+    value, port = _value_and_output_port(args, "display", context)
+    _write_text(port, _display_text(value), "display")
+    return None
+
+
+def _write_builtin(args: Sequence[Any], context: BuiltinContext) -> None:
+    value, port = _value_and_output_port(args, "write", context)
+    _write_text(port, to_scheme_string(value), "write")
+    return None
+
+
+def _newline_builtin(args: Sequence[Any], context: BuiltinContext) -> None:
+    port = _optional_output_port(args, "newline", context)
+    _write_text(port, "\n", "newline")
+    return None
+
+
+def _read_builtin(args: Sequence[Any], context: BuiltinContext) -> Any:
+    port = _optional_input_port(args, "read", context)
+    _ensure_open_input_port(port, "read")
+    if not port.datums_loaded:
+        try:
+            port.pending_datums.extend(parse_source(port.stream.read()))
+        except SchemeSyntaxError as exc:
+            raise SchemeRuntimeError(f"read failed: {exc}") from exc
+        port.datums_loaded = True
+    if not port.pending_datums:
+        return EOF_OBJECT
+    return _datum_to_value(port.pending_datums.pop(0))
+
+
+def _open_input_file(args: Sequence[Any]) -> TextPort:
+    path = _ensure_string_path(args, "open-input-file")
+    try:
+        stream = open(path, "r", encoding="utf-8")
+    except OSError as exc:
+        raise SchemeRuntimeError(f"open-input-file failed: {exc}") from exc
+    return TextPort.input(stream, path, close_stream=True)
+
+
+def _open_output_file(args: Sequence[Any]) -> TextPort:
+    path = _ensure_string_path(args, "open-output-file")
+    try:
+        stream = open(path, "w", encoding="utf-8")
+    except OSError as exc:
+        raise SchemeRuntimeError(f"open-output-file failed: {exc}") from exc
+    return TextPort.output(stream, path, close_stream=True)
+
+
+def _close_input_port(args: Sequence[Any]) -> None:
+    _ensure_open_input_port(_ensure_port_arg(args, "close-input-port"), "close-input-port")
+    args[0].close()
+    return None
+
+
+def _close_output_port(args: Sequence[Any]) -> None:
+    _ensure_open_output_port(_ensure_port_arg(args, "close-output-port"), "close-output-port")
+    args[0].close()
+    return None
+
+
+def _input_port_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "input-port?")
+    return isinstance(args[0], TextPort) and args[0].readable
+
+
+def _output_port_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "output-port?")
+    return isinstance(args[0], TextPort) and args[0].writable
+
+
+def _current_input_port(args: Sequence[Any], context: BuiltinContext) -> TextPort:
+    _ensure_exact_args(args, 0, "current-input-port")
+    return context.current_input_port
+
+
+def _current_output_port(args: Sequence[Any], context: BuiltinContext) -> TextPort:
+    _ensure_exact_args(args, 0, "current-output-port")
+    return context.current_output_port
+
+
 def _compare_adjacent(
     args: Sequence[Any], name: str, predicate: Callable[[int | float, int | float], bool]
 ) -> bool:
@@ -308,6 +395,94 @@ def _ensure_list_procedure_args(
             raise SchemeRuntimeError(f"{name} expected list arguments with equal length")
         lists.append(items)
     return args[0], lists
+
+
+def _ensure_port_arg(args: Sequence[Any], name: str) -> TextPort:
+    _ensure_exact_args(args, 1, name)
+    if not isinstance(args[0], TextPort):
+        raise SchemeRuntimeError(f"{name} expected port argument")
+    return args[0]
+
+
+def _ensure_string_path(args: Sequence[Any], name: str) -> str:
+    _ensure_exact_args(args, 1, name)
+    path = args[0]
+    if not isinstance(path, str) or isinstance(path, Symbol):
+        raise SchemeRuntimeError(f"{name} expected string path")
+    return path
+
+
+def _value_and_output_port(
+    args: Sequence[Any], name: str, context: BuiltinContext
+) -> tuple[Any, TextPort]:
+    if len(args) not in (1, 2):
+        raise SchemeRuntimeError(f"{name} expected 1 or 2 argument(s), got {len(args)}")
+    port = context.current_output_port if len(args) == 1 else args[1]
+    if not isinstance(port, TextPort):
+        raise SchemeRuntimeError(f"{name} expected output port argument")
+    _ensure_open_output_port(port, name)
+    return args[0], port
+
+
+def _optional_output_port(
+    args: Sequence[Any], name: str, context: BuiltinContext
+) -> TextPort:
+    if len(args) > 1:
+        raise SchemeRuntimeError(f"{name} expected 0 or 1 argument(s), got {len(args)}")
+    port = context.current_output_port if not args else args[0]
+    if not isinstance(port, TextPort):
+        raise SchemeRuntimeError(f"{name} expected output port argument")
+    _ensure_open_output_port(port, name)
+    return port
+
+
+def _optional_input_port(args: Sequence[Any], name: str, context: BuiltinContext) -> TextPort:
+    if len(args) > 1:
+        raise SchemeRuntimeError(f"{name} expected 0 or 1 argument(s), got {len(args)}")
+    port = context.current_input_port if not args else args[0]
+    if not isinstance(port, TextPort):
+        raise SchemeRuntimeError(f"{name} expected input port argument")
+    _ensure_open_input_port(port, name)
+    return port
+
+
+def _ensure_open_input_port(port: TextPort, name: str) -> None:
+    if not port.readable or port.closed:
+        raise SchemeRuntimeError(f"{name} expected open input port")
+
+
+def _ensure_open_output_port(port: TextPort, name: str) -> None:
+    if not port.writable or port.closed:
+        raise SchemeRuntimeError(f"{name} expected open output port")
+
+
+def _write_text(port: TextPort, text: str, name: str) -> None:
+    _ensure_open_output_port(port, name)
+    try:
+        port.stream.write(text)
+    except OSError as exc:
+        raise SchemeRuntimeError(f"{name} failed: {exc}") from exc
+
+
+def _display_text(value: Any) -> str:
+    if isinstance(value, str) and not isinstance(value, Symbol):
+        return value
+    if isinstance(value, Char):
+        return value.value
+    return to_scheme_string(value)
+
+
+def _datum_to_value(expression: object) -> object:
+    if isinstance(expression, Vector):
+        return Vector(tuple(_datum_to_value(item) for item in expression.items))
+    if isinstance(expression, DottedList):
+        tail = _datum_to_value(expression.tail)
+        for item in reversed(expression.items):
+            tail = Pair(_datum_to_value(item), tail)
+        return tail
+    if isinstance(expression, list):
+        return make_list(_datum_to_value(item) for item in expression)
+    return expression
 
 
 def _ensure_numbers(args: Sequence[Any], name: str) -> None:
@@ -363,5 +538,21 @@ _BUILTINS: dict[str, BuiltinFunction] = {
     "call/cc": BuiltinFunction("call/cc", _call_cc_builtin, needs_context=True),
     "call-with-current-continuation": BuiltinFunction(
         "call-with-current-continuation", _call_cc_builtin, needs_context=True
+    ),
+    "display": BuiltinFunction("display", _display_builtin, needs_context=True),
+    "write": BuiltinFunction("write", _write_builtin, needs_context=True),
+    "newline": BuiltinFunction("newline", _newline_builtin, needs_context=True),
+    "read": BuiltinFunction("read", _read_builtin, needs_context=True),
+    "open-input-file": BuiltinFunction("open-input-file", _open_input_file),
+    "open-output-file": BuiltinFunction("open-output-file", _open_output_file),
+    "close-input-port": BuiltinFunction("close-input-port", _close_input_port),
+    "close-output-port": BuiltinFunction("close-output-port", _close_output_port),
+    "input-port?": BuiltinFunction("input-port?", _input_port_predicate),
+    "output-port?": BuiltinFunction("output-port?", _output_port_predicate),
+    "current-input-port": BuiltinFunction(
+        "current-input-port", _current_input_port, needs_context=True
+    ),
+    "current-output-port": BuiltinFunction(
+        "current-output-port", _current_output_port, needs_context=True
     ),
 }

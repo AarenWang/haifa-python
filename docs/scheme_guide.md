@@ -55,6 +55,8 @@ The runtime supports:
 - the empty list: `()`
 - pairs and proper lists
 - vectors
+- EOF object: `#<eof>`
+- textual input and output ports
 - user procedures and builtin procedures
 
 List and pair values print in Scheme form:
@@ -100,6 +102,19 @@ List and equality operations:
 - `call/cc`
 - `call-with-current-continuation`
 
+Ports and IO:
+
+- `display`
+- `write`
+- `newline`
+- `read`
+- `open-input-file`
+- `open-output-file`
+- `close-input-port`
+- `close-output-port`
+- `current-input-port`
+- `current-output-port`
+
 Predicates:
 
 - `number?`
@@ -110,6 +125,8 @@ Predicates:
 - `char?`
 - `vector?`
 - `procedure?`
+- `input-port?`
+- `output-port?`
 
 ## Macros
 
@@ -155,6 +172,30 @@ is still active. Saved continuations cannot be invoked after that extent has
 returned; doing so raises a runtime error. Full re-entrant continuations are out
 of scope for the current tree-walking evaluator.
 
+## Ports And IO
+
+The runtime supports textual ports for basic Scheme IO. `display` writes strings
+and characters directly, while `write` uses Scheme literal formatting.
+
+```scheme
+(display "hello") ; hello
+(write "hello")   ; "hello"
+(newline)
+```
+
+`read` parses Scheme datums from the current input port or an explicit input
+port. A single port can be read repeatedly; when no datums remain, `read`
+returns `#<eof>`.
+
+```scheme
+(define in (open-input-file "data.scm"))
+(read in)
+(close-input-port in)
+```
+
+File ports are UTF-8 text ports. `open-output-file` overwrites the destination.
+Closed ports reject further reads or writes with a runtime error.
+
 ## Examples
 
 Recursive factorial:
@@ -184,4 +225,4 @@ Closure with mutation:
 
 ## Current Non-Goals
 
-The runtime does not yet implement runtime quasiquote expansion, ports, exact/inexact numeric towers, full re-entrant continuations, or bytecode compilation.
+The runtime does not yet implement runtime quasiquote expansion, exact/inexact numeric towers, full re-entrant continuations, binary ports, append-mode file ports, or bytecode compilation.

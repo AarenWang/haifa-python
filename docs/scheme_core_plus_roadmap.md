@@ -13,6 +13,8 @@ Implemented:
 - Builtins: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `cons`, `car`, `cdr`, `list`, `length`, `append`, `reverse`, `map`, `for-each`, `apply`, predicates, `eq?`, `equal?`.
 - Macro expansion with `define-syntax` and a practical `syntax-rules` subset.
 - Escape-only continuations with `call/cc` and `call-with-current-continuation`.
+- Textual ports and IO procedures: `read`, `write`, `display`, `newline`, file
+  input/output ports, and current port accessors.
 - CLI, examples, REPL, and trampoline support for key tail-call positions.
 
 ## Phase 1: Reader Data Coverage
@@ -190,9 +192,14 @@ Implemented boundary:
   higher-order builtin callbacks.
 - Calling a saved continuation after its dynamic extent has returned raises a
   runtime error. Full re-entrant continuations remain out of scope.
+- Textual input/output ports are supported, including injectable current ports,
+  UTF-8 file ports, repeated `read` calls on the same port, `#<eof>`, and
+  closed-port errors.
+- Binary ports, append-mode file ports, and exact/inexact numeric tower work
+  remain out of scope for this boundary.
 
 ## Recommended Order
 
 Start with Phase 1 and Phase 2 before macros. Reader and stdlib gaps are high-value and low-risk, while `syntax-rules`, `call/cc`, ports, and number tower require more runtime structure.
 
-The next concrete implementation step should be Phase 5, beginning with a small continuation representation and `call/cc`, then ports, then number tower work.
+The next concrete implementation step should complete Phase 5 by adding the exact/inexact number tower, rational numbers, complex numbers, and `eqv?` numeric semantics.

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable, TextIO
 
 from haifa_scheme.reader import Symbol
 
@@ -14,6 +14,14 @@ class EmptyList:
 
 
 EMPTY_LIST = EmptyList()
+
+
+@dataclass(frozen=True)
+class EOFObject:
+    """The Scheme end-of-file object."""
+
+
+EOF_OBJECT = EOFObject()
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,45 @@ class Char:
 @dataclass(frozen=True)
 class Vector:
     items: tuple[Any, ...]
+
+
+@dataclass
+class TextPort:
+    stream: TextIO
+    readable: bool
+    writable: bool
+    name: str
+    close_stream: bool = False
+    pending_datums: list[object] = field(default_factory=list)
+    datums_loaded: bool = False
+    closed: bool = False
+
+    @classmethod
+    def input(cls, stream: TextIO, name: str, *, close_stream: bool = False) -> "TextPort":
+        return cls(
+            stream=stream,
+            readable=True,
+            writable=False,
+            name=name,
+            close_stream=close_stream,
+        )
+
+    @classmethod
+    def output(cls, stream: TextIO, name: str, *, close_stream: bool = False) -> "TextPort":
+        return cls(
+            stream=stream,
+            readable=False,
+            writable=True,
+            name=name,
+            close_stream=close_stream,
+        )
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        if self.close_stream:
+            self.stream.close()
+        self.closed = True
 
 
 def make_list(values: Iterable[Any]) -> Pair | EmptyList:
@@ -70,12 +117,16 @@ def equal_value(left: Any, right: Any) -> bool:
 def to_scheme_string(value: Any) -> str:
     if value is EMPTY_LIST:
         return "()"
+    if value is EOF_OBJECT:
+        return "#<eof>"
     if isinstance(value, Pair):
         return _pair_to_scheme_string(value)
     if isinstance(value, Char):
         return _char_to_scheme_string(value)
     if isinstance(value, Vector):
         return _vector_to_scheme_string(value)
+    if isinstance(value, TextPort):
+        return _port_to_scheme_string(value)
     if isinstance(value, Symbol):
         return str(value)
     if isinstance(value, bool):
@@ -130,6 +181,17 @@ def _char_to_scheme_string(value: Char) -> str:
 
 def _vector_to_scheme_string(value: Vector) -> str:
     return f"#({' '.join(to_scheme_string(item) for item in value.items)})"
+
+
+def _port_to_scheme_string(value: TextPort) -> str:
+    if value.readable and value.writable:
+        direction = "input-output-port"
+    elif value.readable:
+        direction = "input-port"
+    else:
+        direction = "output-port"
+    status = "closed " if value.closed else ""
+    return f"#<{status}{direction} {value.name}>"
 
 
 def _is_number(value: Any) -> bool:

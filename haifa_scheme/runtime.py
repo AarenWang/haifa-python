@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import io
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Sequence, TextIO
 
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.macros import SyntaxRulesMacro, parse_syntax_rules
 from haifa_scheme.reader import DottedList, Symbol, parse_source
 from haifa_scheme.stdlib import BuiltinContext, BuiltinFunction, create_global_environment
-from haifa_scheme.values import Pair, Vector, equal_value, make_list
+from haifa_scheme.values import Pair, TextPort, Vector, equal_value, make_list
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,21 @@ class _TailExpression:
     environment: Environment
 
 
+@dataclass(frozen=True)
+class _RuntimePorts:
+    input_port: TextPort
+    output_port: TextPort
+
+
+_CURRENT_PORTS: ContextVar[_RuntimePorts] = ContextVar(
+    "haifa_scheme_current_ports",
+    default=_RuntimePorts(
+        TextPort.input(io.StringIO(""), "current-input"),
+        TextPort.output(io.StringIO(), "current-output"),
+    ),
+)
+
+
 class _ContinuationJump(Exception):
     def __init__(self, value: Any, token: object) -> None:
         super().__init__()
@@ -64,11 +81,23 @@ class _EscapeContinuation:
         raise _ContinuationJump(args[0], self.token)
 
 
-def run_source(source: str, environment: Environment | None = None) -> list[object]:
+def run_source(
+    source: str,
+    environment: Environment | None = None,
+    *,
+    input: TextIO | TextPort | None = None,
+    output: TextIO | TextPort | None = None,
+) -> list[object]:
     """Evaluate all top-level expressions in ``source`` and return their values."""
 
     runtime_env = environment if environment is not None else create_global_environment()
-    return [_eval(expression, runtime_env) for expression in parse_source(source)]
+    input_port = _coerce_input_port(input)
+    output_port = _coerce_output_port(output)
+    token = _CURRENT_PORTS.set(_RuntimePorts(input_port, output_port))
+    try:
+        return [_eval(expression, runtime_env) for expression in parse_source(source)]
+    finally:
+        _CURRENT_PORTS.reset(token)
 
 
 def _eval(expression: object, environment: Environment) -> Any:
@@ -376,12 +405,15 @@ def _eval_sequence(expressions: Sequence[object], environment: Environment) -> A
 
 def _apply(procedure: Any, args: Sequence[Any]) -> Any:
     if isinstance(procedure, BuiltinFunction):
+        ports = _CURRENT_PORTS.get()
         return procedure(
             args,
             BuiltinContext(
                 _apply_resolved,
                 _is_procedure,
                 _call_with_current_continuation,
+                ports.input_port,
+                ports.output_port,
             ),
         )
     if isinstance(procedure, Procedure):
@@ -496,6 +528,26 @@ def _ensure_form_length(expression: Sequence[object], expected: int, form_name: 
 
 def _is_truthy(value: object) -> bool:
     return value is not False
+
+
+def _coerce_input_port(value: TextIO | TextPort | None) -> TextPort:
+    if value is None:
+        return TextPort.input(io.StringIO(""), "current-input")
+    if isinstance(value, TextPort):
+        if not value.readable:
+            raise SchemeRuntimeError("run_source input expected input port")
+        return value
+    return TextPort.input(value, "current-input")
+
+
+def _coerce_output_port(value: TextIO | TextPort | None) -> TextPort:
+    if value is None:
+        return TextPort.output(io.StringIO(), "current-output")
+    if isinstance(value, TextPort):
+        if not value.writable:
+            raise SchemeRuntimeError("run_source output expected output port")
+        return value
+    return TextPort.output(value, "current-output")
 
 
 def _quote_to_value(expression: object) -> object:
