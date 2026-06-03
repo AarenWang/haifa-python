@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fractions import Fraction
+import math
 from typing import Any, Iterable, TextIO
 
 from haifa_scheme.reader import Symbol
@@ -108,7 +110,15 @@ def equal_value(left: Any, right: Any) -> bool:
     if left is EMPTY_LIST or right is EMPTY_LIST:
         return left is right
     if _is_number(left) and _is_number(right):
-        return left == right
+        return eqv_value(left, right)
+    if type(left) is not type(right):
+        return False
+    return left == right
+
+
+def eqv_value(left: Any, right: Any) -> bool:
+    if _is_number(left) and _is_number(right):
+        return _numeric_eqv(left, right)
     if type(left) is not type(right):
         return False
     return left == right
@@ -131,6 +141,8 @@ def to_scheme_string(value: Any) -> str:
         return str(value)
     if isinstance(value, bool):
         return "#t" if value else "#f"
+    if _is_number(value):
+        return _number_to_scheme_string(value)
     if isinstance(value, str):
         return _string_literal(value)
     if value is None:
@@ -195,4 +207,55 @@ def _port_to_scheme_string(value: TextPort) -> str:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, Fraction, float, complex)) and not isinstance(value, bool)
+
+
+def _is_exact_number(value: Any) -> bool:
+    return isinstance(value, (int, Fraction)) and not isinstance(value, bool)
+
+
+def _numeric_eqv(left: Any, right: Any) -> bool:
+    if _is_exact_number(left) or _is_exact_number(right):
+        return _is_exact_number(left) and _is_exact_number(right) and left == right
+    return type(left) is type(right) and left == right
+
+
+def _number_to_scheme_string(value: int | Fraction | float | complex) -> str:
+    if isinstance(value, Fraction):
+        if value.denominator == 1:
+            return str(value.numerator)
+        return f"{value.numerator}/{value.denominator}"
+    if isinstance(value, complex):
+        return _complex_to_scheme_string(value)
+    return str(value)
+
+
+def _complex_to_scheme_string(value: complex) -> str:
+    real = 0.0 if value.real == 0 else value.real
+    imag = 0.0 if value.imag == 0 else value.imag
+
+    if real == 0:
+        return f"{_signed_imaginary_to_scheme_string(imag)}i"
+
+    sign = "+" if imag >= 0 else "-"
+    return (
+        f"{_float_component_to_scheme_string(real)}"
+        f"{sign}{_imaginary_magnitude_to_scheme_string(abs(imag))}i"
+    )
+
+
+def _signed_imaginary_to_scheme_string(value: float) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{_imaginary_magnitude_to_scheme_string(abs(value))}"
+
+
+def _imaginary_magnitude_to_scheme_string(value: float) -> str:
+    if value == 1:
+        return ""
+    return _float_component_to_scheme_string(value)
+
+
+def _float_component_to_scheme_string(value: float) -> str:
+    if math.isfinite(value) and value.is_integer():
+        return str(int(value))
+    return str(value)

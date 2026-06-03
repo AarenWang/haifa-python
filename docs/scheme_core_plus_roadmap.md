@@ -15,6 +15,8 @@ Implemented:
 - Escape-only continuations with `call/cc` and `call-with-current-continuation`.
 - Textual ports and IO procedures: `read`, `write`, `display`, `newline`, file
   input/output ports, and current port accessors.
+- Number tower MVP with exact integers, exact rationals, inexact reals, inexact
+  complex numbers, and `eqv?` numeric exactness semantics.
 - CLI, examples, REPL, and trampoline support for key tail-call positions.
 
 ## Phase 1: Reader Data Coverage
@@ -195,11 +197,18 @@ Implemented boundary:
 - Textual input/output ports are supported, including injectable current ports,
   UTF-8 file ports, repeated `read` calls on the same port, `#<eof>`, and
   closed-port errors.
-- Binary ports, append-mode file ports, and exact/inexact numeric tower work
-  remain out of scope for this boundary.
+- Exact rational literals and arithmetic are supported with normalized fractions.
+  Inexact complex literals and arithmetic use Python complex numbers.
+- `number?`, `integer?`, `exact?`, `inexact?`, `rational?`, `real?`, `complex?`,
+  and `eqv?` cover the MVP numeric model.
+- Binary ports, append-mode file ports, exact complex numbers, radix/exactness
+  prefixes, infinities, and NaN remain out of scope for this boundary.
 
 ## Recommended Order
 
 Start with Phase 1 and Phase 2 before macros. Reader and stdlib gaps are high-value and low-risk, while `syntax-rules`, `call/cc`, ports, and number tower require more runtime structure.
 
-The next concrete implementation step should complete Phase 5 by adding the exact/inexact number tower, rational numbers, complex numbers, and `eqv?` numeric semantics.
+The next concrete implementation step should harden the Scheme subset with
+runtime quasiquote expansion, broader numeric syntax such as radix/exactness
+prefixes, and deeper continuation support if full re-entrant `call/cc` becomes
+necessary.

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import reduce
+import math
 from operator import mul
 from typing import Any, Protocol
 
@@ -20,6 +22,7 @@ from haifa_scheme.values import (
     TextPort,
     Vector,
     equal_value,
+    eqv_value,
     is_proper_list,
     make_list,
     to_scheme_string,
@@ -89,6 +92,8 @@ def _multiply(args: Sequence[Any]) -> Any:
 def _divide(args: Sequence[Any]) -> Any:
     _ensure_min_args(args, 1, "/")
     _ensure_numbers(args, "/")
+    if _all_exact_numbers(args):
+        return _divide_exact(args)
     if len(args) == 1:
         if args[0] == 0:
             raise SchemeRuntimeError("/ division by zero")
@@ -203,6 +208,16 @@ def _eq_predicate(args: Sequence[Any]) -> bool:
     return type(left) is type(right) and left == right
 
 
+def _eqv_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 2, "eqv?")
+    left, right = args
+    if isinstance(left, Pair) or isinstance(right, Pair):
+        return left is right
+    if left is EMPTY_LIST or right is EMPTY_LIST:
+        return left is right
+    return eqv_value(left, right)
+
+
 def _equal_predicate(args: Sequence[Any]) -> bool:
     _ensure_exact_args(args, 2, "equal?")
     return equal_value(args[0], args[1])
@@ -215,7 +230,51 @@ def _number_predicate(args: Sequence[Any]) -> bool:
 
 def _integer_predicate(args: Sequence[Any]) -> bool:
     _ensure_exact_args(args, 1, "integer?")
-    return isinstance(args[0], int) and not isinstance(args[0], bool)
+    value = args[0]
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, Fraction):
+        return value.denominator == 1
+    if isinstance(value, float):
+        return math.isfinite(value) and value.is_integer()
+    return False
+
+
+def _exact_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "exact?")
+    return _is_exact_number(args[0])
+
+
+def _inexact_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "inexact?")
+    return _is_inexact_number(args[0])
+
+
+def _rational_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "rational?")
+    value = args[0]
+    if isinstance(value, bool) or isinstance(value, complex):
+        return False
+    return isinstance(value, (int, Fraction)) or (
+        isinstance(value, float) and math.isfinite(value)
+    )
+
+
+def _real_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "real?")
+    value = args[0]
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, complex):
+        return value.imag == 0
+    return isinstance(value, (int, Fraction, float))
+
+
+def _complex_predicate(args: Sequence[Any]) -> bool:
+    _ensure_exact_args(args, 1, "complex?")
+    return _is_number(args[0])
 
 
 def _string_predicate(args: Sequence[Any]) -> bool:
@@ -348,11 +407,25 @@ def _current_output_port(args: Sequence[Any], context: BuiltinContext) -> TextPo
 
 
 def _compare_adjacent(
-    args: Sequence[Any], name: str, predicate: Callable[[int | float, int | float], bool]
+    args: Sequence[Any], name: str, predicate: Callable[[Any, Any], bool]
 ) -> bool:
     _ensure_min_args(args, 2, name)
-    _ensure_numbers(args, name)
+    _ensure_real_comparable_numbers(args, name)
     return all(predicate(left, right) for left, right in zip(args, args[1:]))
+
+
+def _divide_exact(args: Sequence[Any]) -> Fraction:
+    if len(args) == 1:
+        if args[0] == 0:
+            raise SchemeRuntimeError("/ division by zero")
+        return Fraction(1) / Fraction(args[0])
+
+    result = Fraction(args[0])
+    for divisor in args[1:]:
+        if divisor == 0:
+            raise SchemeRuntimeError("/ division by zero")
+        result /= Fraction(divisor)
+    return result
 
 
 def _ensure_min_args(args: Sequence[Any], minimum: int, name: str) -> None:
@@ -491,6 +564,14 @@ def _ensure_numbers(args: Sequence[Any], name: str) -> None:
             raise SchemeRuntimeError(f"{name} expected number arguments")
 
 
+def _ensure_real_comparable_numbers(args: Sequence[Any], name: str) -> None:
+    for arg in args:
+        if not _is_number(arg):
+            raise SchemeRuntimeError(f"{name} expected number arguments")
+        if isinstance(arg, complex):
+            raise SchemeRuntimeError(f"{name} expected real number arguments")
+
+
 def _proper_list_to_python_list(value: Any) -> list[Any]:
     result: list[Any] = []
     current = value
@@ -501,7 +582,19 @@ def _proper_list_to_python_list(value: Any) -> list[Any]:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, Fraction, float, complex)) and not isinstance(value, bool)
+
+
+def _is_exact_number(value: Any) -> bool:
+    return isinstance(value, (int, Fraction)) and not isinstance(value, bool)
+
+
+def _is_inexact_number(value: Any) -> bool:
+    return isinstance(value, (float, complex)) and not isinstance(value, bool)
+
+
+def _all_exact_numbers(args: Sequence[Any]) -> bool:
+    return all(_is_exact_number(arg) for arg in args)
 
 
 _BUILTINS: dict[str, BuiltinFunction] = {
@@ -525,9 +618,15 @@ _BUILTINS: dict[str, BuiltinFunction] = {
     "pair?": BuiltinFunction("pair?", _pair_predicate),
     "list?": BuiltinFunction("list?", _list_predicate),
     "eq?": BuiltinFunction("eq?", _eq_predicate),
+    "eqv?": BuiltinFunction("eqv?", _eqv_predicate),
     "equal?": BuiltinFunction("equal?", _equal_predicate),
     "number?": BuiltinFunction("number?", _number_predicate),
     "integer?": BuiltinFunction("integer?", _integer_predicate),
+    "exact?": BuiltinFunction("exact?", _exact_predicate),
+    "inexact?": BuiltinFunction("inexact?", _inexact_predicate),
+    "rational?": BuiltinFunction("rational?", _rational_predicate),
+    "real?": BuiltinFunction("real?", _real_predicate),
+    "complex?": BuiltinFunction("complex?", _complex_predicate),
     "string?": BuiltinFunction("string?", _string_predicate),
     "symbol?": BuiltinFunction("symbol?", _symbol_predicate),
     "boolean?": BuiltinFunction("boolean?", _boolean_predicate),

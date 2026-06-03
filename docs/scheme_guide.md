@@ -47,7 +47,8 @@ When an `if`, `case`, or `do` form has no selected result expression, the runtim
 
 The runtime supports:
 
-- numbers
+- numbers: exact integers, exact rationals such as `1/2`, inexact reals, and
+  inexact complex literals such as `1+2i`, `2i`, `+i`, and `-i`
 - strings
 - characters, such as `#\a`, `#\space`, and `#\newline`
 - booleans: `#t` and `#f`
@@ -97,6 +98,7 @@ List and equality operations:
 - `pair?`
 - `list?`
 - `eq?`
+- `eqv?`
 - `equal?`
 - `apply`
 - `call/cc`
@@ -119,6 +121,11 @@ Predicates:
 
 - `number?`
 - `integer?`
+- `exact?`
+- `inexact?`
+- `rational?`
+- `real?`
+- `complex?`
 - `string?`
 - `symbol?`
 - `boolean?`
@@ -196,6 +203,24 @@ returns `#<eof>`.
 File ports are UTF-8 text ports. `open-output-file` overwrites the destination.
 Closed ports reject further reads or writes with a runtime error.
 
+## Number Tower MVP
+
+Exact integer arithmetic uses Python integers. Exact rational arithmetic uses
+normalized fractions, so `(/ 1 2)` returns `1/2` and `(+ 1/2 1/3)` returns
+`5/6`. Mixing exact numbers with inexact reals or complex numbers produces
+inexact Python numeric results.
+
+`=` compares numeric value across exact and inexact numbers, while `eqv?`
+preserves exactness:
+
+```scheme
+(= 1 1.0)       ; #t
+(eqv? 1 1.0)   ; #f
+(eqv? 1/2 (/ 1 2)) ; #t
+```
+
+`<` and `>` accept real numbers and reject complex values.
+
 ## Examples
 
 Recursive factorial:
@@ -225,4 +250,4 @@ Closure with mutation:
 
 ## Current Non-Goals
 
-The runtime does not yet implement runtime quasiquote expansion, exact/inexact numeric towers, full re-entrant continuations, binary ports, append-mode file ports, or bytecode compilation.
+The runtime does not yet implement runtime quasiquote expansion, full re-entrant continuations, binary ports, append-mode file ports, exact complex numbers, radix/exactness numeric prefixes, or bytecode compilation.

@@ -16,6 +16,7 @@ The reader turns source text into simple Python values:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 import re
 from typing import Any
 
@@ -64,8 +65,16 @@ class _Token:
 
 
 _INT_RE = re.compile(r"[+-]?\d+")
+_RATIONAL_RE = re.compile(r"[+-]?\d+/\d+")
 _FLOAT_RE = re.compile(
     r"[+-]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+[eE][+-]?\d+)|(?:\d+\.\d*[eE][+-]?\d+)|(?:\.\d+[eE][+-]?\d+))"
+)
+_COMPLEX_COMPONENT = r"(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))"
+_RECTANGULAR_COMPLEX_RE = re.compile(
+    rf"(?P<real>[+-]?{_COMPLEX_COMPONENT})(?P<sign>[+-])(?P<imag>{_COMPLEX_COMPONENT})i"
+)
+_IMAGINARY_COMPLEX_RE = re.compile(
+    rf"(?P<sign>[+-]?)(?P<imag>{_COMPLEX_COMPONENT})?i"
 )
 
 
@@ -182,11 +191,47 @@ def _parse_atom(atom: str) -> object:
         return False
     if atom.startswith("#\\"):
         return _parse_character(atom)
+    complex_value = _parse_complex(atom)
+    if complex_value is not None:
+        return complex_value
+    if _RATIONAL_RE.fullmatch(atom):
+        return _parse_rational(atom)
     if _INT_RE.fullmatch(atom):
         return int(atom)
     if _FLOAT_RE.fullmatch(atom):
         return float(atom)
     return Symbol(atom)
+
+
+def _parse_rational(atom: str) -> Fraction:
+    numerator_text, denominator_text = atom.split("/", 1)
+    denominator = int(denominator_text)
+    if denominator == 0:
+        raise SchemeSyntaxError(f"rational literal denominator cannot be zero: {atom}")
+    return Fraction(int(numerator_text), denominator)
+
+
+def _parse_complex(atom: str) -> complex | None:
+    rectangular_match = _RECTANGULAR_COMPLEX_RE.fullmatch(atom)
+    if rectangular_match:
+        real = float(rectangular_match.group("real"))
+        imag = float(rectangular_match.group("imag"))
+        if rectangular_match.group("sign") == "-":
+            imag = -imag
+        return complex(real, imag)
+
+    imaginary_match = _IMAGINARY_COMPLEX_RE.fullmatch(atom)
+    if not imaginary_match:
+        return None
+
+    sign = imaginary_match.group("sign")
+    imag_text = imaginary_match.group("imag")
+    if not sign and imag_text is None:
+        return None
+    imag = 1.0 if imag_text is None else float(imag_text)
+    if sign == "-":
+        imag = -imag
+    return complex(0.0, imag)
 
 
 def _parse_character(atom: str) -> object:
