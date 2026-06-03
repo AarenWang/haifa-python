@@ -31,10 +31,15 @@ class ProcedurePredicate(Protocol):
     def __call__(self, value: Any) -> bool: ...
 
 
+class CallCcFunc(Protocol):
+    def __call__(self, procedure: Any) -> Any: ...
+
+
 @dataclass(frozen=True)
 class BuiltinContext:
     apply_func: ApplyFunc
     is_procedure_func: ProcedurePredicate
+    call_cc_func: CallCcFunc
 
 
 @dataclass(frozen=True)
@@ -247,6 +252,14 @@ def _procedure_predicate(args: Sequence[Any], context: BuiltinContext) -> bool:
     return context.is_procedure_func(args[0])
 
 
+def _call_cc_builtin(args: Sequence[Any], context: BuiltinContext) -> Any:
+    _ensure_exact_args(args, 1, "call/cc")
+    procedure = args[0]
+    if not context.is_procedure_func(procedure):
+        raise SchemeRuntimeError("call/cc expected procedure argument")
+    return context.call_cc_func(procedure)
+
+
 def _compare_adjacent(
     args: Sequence[Any], name: str, predicate: Callable[[int | float, int | float], bool]
 ) -> bool:
@@ -347,4 +360,8 @@ _BUILTINS: dict[str, BuiltinFunction] = {
     "vector?": BuiltinFunction("vector?", _vector_predicate),
     "apply": BuiltinFunction("apply", _apply_builtin, needs_context=True),
     "procedure?": BuiltinFunction("procedure?", _procedure_predicate, needs_context=True),
+    "call/cc": BuiltinFunction("call/cc", _call_cc_builtin, needs_context=True),
+    "call-with-current-continuation": BuiltinFunction(
+        "call-with-current-continuation", _call_cc_builtin, needs_context=True
+    ),
 }

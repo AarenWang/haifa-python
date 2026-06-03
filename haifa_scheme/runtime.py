@@ -42,6 +42,28 @@ class _TailExpression:
     environment: Environment
 
 
+class _ContinuationJump(Exception):
+    def __init__(self, value: Any, token: object) -> None:
+        super().__init__()
+        self.value = value
+        self.token = token
+
+
+@dataclass
+class _EscapeContinuation:
+    token: object
+    active: bool = True
+
+    def apply(self, args: Sequence[Any]) -> Any:
+        if len(args) != 1:
+            raise SchemeRuntimeError(
+                f"continuation expected 1 argument(s), got {len(args)}"
+            )
+        if not self.active:
+            raise SchemeRuntimeError("continuation has escaped")
+        raise _ContinuationJump(args[0], self.token)
+
+
 def run_source(source: str, environment: Environment | None = None) -> list[object]:
     """Evaluate all top-level expressions in ``source`` and return their values."""
 
@@ -354,10 +376,32 @@ def _eval_sequence(expressions: Sequence[object], environment: Environment) -> A
 
 def _apply(procedure: Any, args: Sequence[Any]) -> Any:
     if isinstance(procedure, BuiltinFunction):
-        return procedure(args, BuiltinContext(_apply_resolved, _is_procedure))
+        return procedure(
+            args,
+            BuiltinContext(
+                _apply_resolved,
+                _is_procedure,
+                _call_with_current_continuation,
+            ),
+        )
     if isinstance(procedure, Procedure):
         return procedure(args)
+    if isinstance(procedure, _EscapeContinuation):
+        return procedure.apply(args)
     raise SchemeRuntimeError(f"attempted to call non-procedure: {procedure!r}")
+
+
+def _call_with_current_continuation(procedure: Any) -> Any:
+    token = object()
+    continuation = _EscapeContinuation(token)
+    try:
+        return _apply_resolved(procedure, [continuation])
+    except _ContinuationJump as jump:
+        if jump.token is token:
+            return jump.value
+        raise
+    finally:
+        continuation.active = False
 
 
 def _lookup_macro(name: Symbol, environment: Environment) -> SyntaxRulesMacro | None:
@@ -378,7 +422,7 @@ def _apply_resolved(procedure: Any, args: Sequence[Any]) -> Any:
 
 
 def _is_procedure(value: Any) -> bool:
-    return isinstance(value, (BuiltinFunction, Procedure))
+    return isinstance(value, (BuiltinFunction, Procedure, _EscapeContinuation))
 
 
 def _parse_params(params: Sequence[object], form_name: str) -> list[Symbol]:

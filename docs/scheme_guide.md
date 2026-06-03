@@ -97,6 +97,8 @@ List and equality operations:
 - `eq?`
 - `equal?`
 - `apply`
+- `call/cc`
+- `call-with-current-continuation`
 
 Predicates:
 
@@ -135,6 +137,24 @@ Example:
 
 Nested ellipsis such as `((x ...) ...)` and full R5RS referential hygiene are not implemented yet.
 
+## Continuations
+
+The runtime supports escape-only continuations through `call/cc` and its alias
+`call-with-current-continuation`.
+
+```scheme
+(+ 1
+   (call/cc
+    (lambda (k)
+      (k 41)
+      99))) ; 42
+```
+
+The captured continuation may be called while the dynamic extent of the `call/cc`
+is still active. Saved continuations cannot be invoked after that extent has
+returned; doing so raises a runtime error. Full re-entrant continuations are out
+of scope for the current tree-walking evaluator.
+
 ## Examples
 
 Recursive factorial:
@@ -164,4 +184,4 @@ Closure with mutation:
 
 ## Current Non-Goals
 
-The runtime does not yet implement runtime quasiquote expansion, ports, exact/inexact numeric towers, continuations, or bytecode compilation.
+The runtime does not yet implement runtime quasiquote expansion, ports, exact/inexact numeric towers, full re-entrant continuations, or bytecode compilation.

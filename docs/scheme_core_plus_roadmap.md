@@ -12,6 +12,7 @@ Implemented:
 - Pair/list values, Scheme formatting, and basic equality.
 - Builtins: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `cons`, `car`, `cdr`, `list`, `length`, `append`, `reverse`, `map`, `for-each`, `apply`, predicates, `eq?`, `equal?`.
 - Macro expansion with `define-syntax` and a practical `syntax-rules` subset.
+- Escape-only continuations with `call/cc` and `call-with-current-continuation`.
 - CLI, examples, REPL, and trampoline support for key tail-call positions.
 
 ## Phase 1: Reader Data Coverage
@@ -152,7 +153,7 @@ Goal: tackle standard features that need deeper runtime changes.
 Features:
 
 - Continuations:
-  - `call/cc`
+  - escape-only `call/cc`
 - Ports and IO:
   - `read`
   - `write`
@@ -180,6 +181,15 @@ Tests:
 - `write` versus `display` formatting.
 - Exact/inexact arithmetic and equality.
 - Rational and complex arithmetic edge cases.
+
+Implemented boundary:
+
+- `call/cc` and `call-with-current-continuation` capture an escape continuation for
+  the current dynamic extent.
+- Continuations are procedures and can escape through nested Scheme evaluation and
+  higher-order builtin callbacks.
+- Calling a saved continuation after its dynamic extent has returned raises a
+  runtime error. Full re-entrant continuations remain out of scope.
 
 ## Recommended Order
 
