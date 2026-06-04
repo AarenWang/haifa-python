@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
+from typing import TextIO
 from typing import Iterable, Sequence
 
 from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
@@ -11,6 +13,7 @@ from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError, SchemeVMRuntimeError
 from haifa_scheme.macros import SyntaxRulesMacro, parse_syntax_rules
 from haifa_scheme.reader import DottedList, LocatedDatum, Symbol, parse_source_with_locations
+from haifa_scheme.runtime import _coerce_input_port, _coerce_output_port
 from haifa_scheme.values import EMPTY_LIST, Pair, Vector
 from haifa_scheme.vm_runtime import (
     SchemeVMRuntime,
@@ -1284,13 +1287,23 @@ def run_source_vm(
     runtime: SchemeVMRuntime | None = None,
     *,
     environment: Environment | None = None,
+    input: TextIO | object | None = None,
+    output: TextIO | object | None = None,
     source_name: str = "<input>",
 ) -> list[object]:
     expressions = parse_source_with_locations(source, source_name=source_name)
     if not expressions:
         return []
 
-    runtime = runtime or SchemeVMRuntime(environment=environment)
+    runtime = runtime or SchemeVMRuntime(
+        environment=environment,
+        input_port=_coerce_input_port(input),
+        output_port=_coerce_output_port(output),
+    )
+    if input is not None:
+        runtime.input_port = _coerce_input_port(input)
+    if output is not None:
+        runtime.output_port = _coerce_output_port(output)
     compiler = SchemeCompiler(runtime)
     instructions = compiler.compile_expressions(expressions, source_name=source_name)
     vm = runtime.create_vm(instructions)

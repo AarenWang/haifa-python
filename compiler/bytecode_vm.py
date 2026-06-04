@@ -34,6 +34,10 @@ class LuaYield:
 from .value_utils import resolve_value
 
 
+def _is_vm_control_flow(exc: Exception) -> bool:
+    return bool(getattr(exc, "__vm_control_flow__", False))
+
+
 @dataclass
 class Cell:
     value: object
@@ -325,6 +329,8 @@ class BytecodeVM:
                 return None
             raise
         except Exception as exc:
+            if _is_vm_control_flow(exc):
+                raise
             if self._handle_exception(exc):
                 return None
             raise self._wrap_runtime_error(exc) from exc
@@ -976,9 +982,15 @@ class BytecodeVM:
         self.last_return = list(values)
         self.return_value = self.last_return[0] if self.last_return else None
         if self.call_stack:
+            current_globals = {
+                name: value
+                for name, value in self.registers.items()
+                if name.startswith("G_SCHEME_")
+            }
             frame = self.call_stack.pop()
             self.pc = frame.return_pc
             self.param_stack = frame.param_stack
+            frame.registers.update(current_globals)
             self.registers = frame.registers
             self.current_upvalues = frame.upvalues
             self.pending_params = frame.pending_params
@@ -1057,8 +1069,14 @@ class BytecodeVM:
                             break
                     result = list(self.last_return)
             finally:
+                current_globals = {
+                    name: value
+                    for name, value in self.registers.items()
+                    if name.startswith("G_SCHEME_")
+                }
                 self.pc = saved_pc
                 self.registers = saved_registers
+                self.registers.update(current_globals)
                 self.param_stack = saved_param_stack
                 self.pending_params = saved_pending
                 self.current_upvalues = saved_upvalues

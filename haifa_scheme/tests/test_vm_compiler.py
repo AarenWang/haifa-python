@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import importlib
 import json
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from compiler.bytecode import Opcode
 from compiler.bytecode_vm import BytecodeVM
 
+from haifa_scheme import EOF_OBJECT
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError, SchemeVMRuntimeError
 from haifa_scheme.reader import Symbol
@@ -80,6 +82,29 @@ def test_vm_backend_map_accepts_builtin_symbol_value():
     [value] = run_source_vm("(map + '(1 2) '(10 20))")
 
     assert to_scheme_string(value) == "(11 22)"
+
+
+def test_vm_backend_apply_calls_user_procedure():
+    source = """
+    (define (combine a b c)
+      (+ (* a 100) (* b 10) c))
+    (apply combine '(4 5 6))
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_for_each_calls_vm_closure_for_side_effects():
+    source = """
+    (define total 0)
+    (for-each (lambda (x y)
+                (set! total (+ total x y)))
+              '(1 2)
+              '(10 20))
+    total
+    """
+
+    assert run_source_vm(source) == run_source(source)
 
 
 def test_vm_backend_global_define_and_lookup():
@@ -198,6 +223,117 @@ def test_vm_backend_non_tail_recursion_preserves_traceback_depth():
         assert any(frame.function_name == "explode" for frame in exc.frames)
     else:  # pragma: no cover
         raise AssertionError("expected SchemeVMRuntimeError")
+
+
+def test_vm_backend_ports_round_trip_matches_interpreter(tmp_path: Path):
+    path = tmp_path / "scheme-port-vm.txt"
+    scheme_path = path.as_posix()
+
+    run_source_vm(
+        f'''
+        (define out (open-output-file "{scheme_path}"))
+        (display "one" out)
+        (newline out)
+        (write '(2 3) out)
+        (close-output-port out)
+        '''
+    )
+    assert path.read_text(encoding="utf-8") == "one\n(2 3)"
+
+    values = run_source_vm(
+        f'''
+        (define in (open-input-file "{scheme_path}"))
+        (read in)
+        (read in)
+        (read in)
+        (close-input-port in)
+        '''
+    )
+
+    assert values[0] is None
+    assert values[1] == Symbol("one")
+    assert to_scheme_string(values[2]) == "(2 3)"
+    assert values[3] is EOF_OBJECT
+    assert values[4] is None
+
+
+def test_vm_backend_current_ports_use_injected_streams():
+    input_stream = io.StringIO("10 20")
+    output_stream = io.StringIO()
+
+    values = run_source_vm(
+        """
+        (define in (current-input-port))
+        (define out (current-output-port))
+        (display "x" out)
+        (read in)
+        (read in)
+        """,
+        input=input_stream,
+        output=output_stream,
+    )
+
+    assert values == [None, None, None, 10, 20]
+    assert output_stream.getvalue() == "x"
+
+
+def test_vm_backend_call_cc_escapes_to_current_continuation():
+    assert run_source_vm("(+ 1 (call/cc (lambda (k) (k 41) 99)))") == [42]
+
+
+def test_vm_backend_continuation_is_a_procedure():
+    assert run_source_vm("(call/cc (lambda (k) (procedure? k)))") == [True]
+
+
+def test_vm_backend_continuation_escapes_through_map_callback():
+    source = """
+    (+ 10
+       (call/cc
+        (lambda (k)
+          (map (lambda (x)
+                 (if (= x 2)
+                     (k x)
+                     x))
+               '(1 2 3))
+          99)))
+    """
+
+    assert run_source_vm(source) == [12]
+
+
+def test_vm_backend_continuation_escapes_through_for_each_callback():
+    source = """
+    (define seen 0)
+    (call/cc
+     (lambda (k)
+       (for-each (lambda (x)
+                   (if (= x 2)
+                       (k seen)
+                       (set! seen (+ seen x))))
+                 '(1 2 3))
+       99))
+    seen
+    """
+
+    assert run_source_vm(source) == [None, 1, 1]
+
+
+def test_vm_backend_saved_continuation_cannot_be_reentered():
+    source = """
+    (define saved #f)
+    (call/cc
+     (lambda (k)
+       (set! saved k)
+       1))
+    (saved 2)
+    """
+
+    try:
+        run_source_vm(source)
+    except SchemeVMRuntimeError as exc:
+        assert "continuation has escaped" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected continuation reentry failure")
 
 
 def test_vm_backend_closure_counter():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 from typing import Any, Sequence
 
@@ -35,6 +36,30 @@ class SchemeBuiltinAdapter:
 
     def __repr__(self) -> str:
         return f"<SchemeBuiltinAdapter {self.builtin.name}>"
+
+
+class _ContinuationJump(Exception):
+    __vm_control_flow__ = True
+
+    def __init__(self, value: Any, token: object) -> None:
+        super().__init__()
+        self.value = value
+        self.token = token
+
+
+@dataclasses.dataclass
+class _VMEscapeContinuation:
+    token: object
+    active: bool = True
+
+    def __call__(self, *args: object) -> object:
+        if len(args) != 1:
+            raise SchemeRuntimeError(
+                f"continuation expected 1 argument(s), got {len(args)}"
+            )
+        if not self.active:
+            raise SchemeRuntimeError("continuation has escaped")
+        raise _ContinuationJump(args[0], self.token)
 
 
 class SchemeVMRuntime:
@@ -86,17 +111,13 @@ class SchemeVMRuntime:
         return BuiltinContext(
             apply_func=lambda procedure, args: self._apply_func(vm, procedure, args),
             is_procedure_func=self._is_procedure,
-            call_cc_func=self._call_cc_unsupported,
+            call_cc_func=lambda procedure: self._call_with_current_continuation(vm, procedure),
             current_input_port=self.input_port,
             current_output_port=self.output_port,
         )
 
     def _apply_func(self, vm: BytecodeVM, procedure: Any, args: Sequence[Any]) -> Any:
-        callable_value = procedure
-        if isinstance(procedure, BuiltinFunction):
-            callable_value = self._get_builtin_adapter(procedure)
-        values = vm.call_callable(callable_value, list(args))
-        return values[0] if values else None
+        return self._apply_func_static(vm, procedure, args)
 
     def _is_procedure(self, value: Any) -> bool:
         return isinstance(value, (BuiltinFunction, SchemeBuiltinAdapter)) or getattr(
@@ -118,8 +139,28 @@ class SchemeVMRuntime:
         return equal_value(left, right)
 
     @staticmethod
-    def _call_cc_unsupported(procedure: Any) -> Any:
-        raise SchemeRuntimeError("call/cc is not supported by the Scheme VM backend yet")
+    def _call_with_current_continuation(vm: BytecodeVM, procedure: Any) -> Any:
+        token = object()
+        continuation = _VMEscapeContinuation(token)
+        try:
+            return SchemeVMRuntime._apply_func_static(vm, procedure, [continuation])
+        except _ContinuationJump as jump:
+            if jump.token is token:
+                return jump.value
+            raise
+        finally:
+            continuation.active = False
+
+    @staticmethod
+    def _apply_func_static(vm: BytecodeVM, procedure: Any, args: Sequence[Any]) -> Any:
+        callable_value = procedure
+        scheme_runtime = getattr(vm, "scheme_runtime", None)
+        if isinstance(procedure, BuiltinFunction):
+            if scheme_runtime is None:
+                raise SchemeRuntimeError("Scheme VM runtime is unavailable")
+            callable_value = scheme_runtime._get_builtin_adapter(procedure)
+        values = vm.call_callable(callable_value, list(args))
+        return values[0] if values else None
 
     def _get_builtin_adapter(self, builtin: BuiltinFunction) -> SchemeBuiltinAdapter:
         adapter = self._builtin_adapters.get(builtin.name)
