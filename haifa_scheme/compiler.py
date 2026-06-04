@@ -91,6 +91,9 @@ class SchemeCompiler:
 
     def _compile_expression(self, expression: LocatedDatum) -> str:
         expression = self._macro_expand(expression)
+        return self._compile_expression_value(expression)
+
+    def _compile_expression_value(self, expression: LocatedDatum) -> str:
         value = expression.value
         if isinstance(value, list):
             return self._compile_list_expression(expression)
@@ -238,8 +241,7 @@ class SchemeCompiler:
             child._bind_parameter(param, expression)
         for subexpression in body[:-1]:
             child._compile_expression(subexpression)
-        result_reg = child._compile_expression(body[-1])
-        child._emit(Opcode.RETURN, [result_reg], body[-1])
+        child._compile_tail_expression(body[-1])
         self.function_blocks.extend(child.instructions)
         self.function_blocks.extend(child.function_blocks)
 
@@ -335,6 +337,10 @@ class SchemeCompiler:
             self._pop_scope()
 
     def _compile_named_let(self, items: Sequence[object], expression: LocatedDatum) -> str:
+        letrec_expr = self._lower_named_let(items, expression)
+        return self._compile_expression(letrec_expr)
+
+    def _lower_named_let(self, items: Sequence[object], expression: LocatedDatum) -> LocatedDatum:
         if len(items) < 4:
             raise SchemeCompileError("named let expected name, bindings, and body")
         name = self._unwrap(items[1])
@@ -365,7 +371,7 @@ class SchemeCompiler:
             [Symbol("lambda"), params, *self._located_tail(items[3:])],
             expression,
         )
-        letrec_expr = self._synthetic(
+        return self._synthetic(
             [
                 Symbol("letrec"),
                 [[self._synthetic(name, expression), lambda_expr]],
@@ -373,7 +379,6 @@ class SchemeCompiler:
             ],
             expression,
         )
-        return self._compile_expression(letrec_expr)
 
     def _compile_letrec(self, items: Sequence[object], expression: LocatedDatum) -> str:
         if len(items) < 3:
@@ -629,6 +634,327 @@ class SchemeCompiler:
         self._emit(Opcode.RESULT, [result_reg], expression)
         return result_reg
 
+    def _compile_tail_expression(self, expression: LocatedDatum) -> None:
+        expression = self._macro_expand(expression)
+        value = expression.value
+        if isinstance(value, list):
+            self._compile_tail_list_expression(expression)
+            return
+        if isinstance(value, Symbol):
+            result_reg = self._read_symbol(str(value), expression)
+            self._emit(Opcode.RETURN, [result_reg], expression)
+            return
+        result_reg = self._emit_literal(self._literal_to_runtime_value(expression), expression)
+        self._emit(Opcode.RETURN, [result_reg], expression)
+
+    def _compile_tail_list_expression(self, expression: LocatedDatum) -> None:
+        items = expression.value
+        if not items:
+            raise SchemeCompileError("cannot evaluate empty list")
+        operator = items[0]
+        operator_value = self._unwrap(operator)
+        if isinstance(operator_value, Symbol):
+            if operator_value == "begin":
+                self._compile_tail_begin(items, expression)
+                return
+            if operator_value == "if":
+                self._compile_tail_if(items, expression)
+                return
+            if operator_value == "let":
+                self._compile_tail_let(items, expression)
+                return
+            if operator_value == "let*":
+                self._compile_tail_let_star(items, expression)
+                return
+            if operator_value == "letrec":
+                self._compile_tail_letrec(items, expression)
+                return
+            if operator_value == "and":
+                self._compile_tail_and(items, expression)
+                return
+            if operator_value == "or":
+                self._compile_tail_or(items, expression)
+                return
+            if operator_value == "cond":
+                self._compile_tail_cond(items, expression)
+                return
+            if operator_value == "case":
+                self._compile_tail_case(items, expression)
+                return
+            if operator_value in {"quote", "define", "set!", "lambda", "do", "define-syntax"}:
+                result_reg = self._compile_list_expression(expression)
+                self._emit(Opcode.RETURN, [result_reg], expression)
+                return
+
+        self._compile_tail_call(items, expression)
+        return
+
+    def _compile_tail_call(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        operator = self._as_located(items[0])
+        callee_reg = self._compile_expression(operator)
+        argument_regs: list[tuple[str, LocatedDatum]] = []
+        for argument in items[1:]:
+            argument_expr = self._as_located(argument)
+            argument_reg = self._compile_expression(argument_expr)
+            argument_regs.append((argument_reg, argument_expr))
+        for argument_reg, argument_expr in argument_regs:
+            self._emit(Opcode.PARAM, [argument_reg], argument_expr)
+        self._emit(Opcode.TAIL_CALL_VALUE, [callee_reg], operator)
+        self._emit(Opcode.HALT, [], expression)
+
+    def _compile_tail_begin(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        body = items[1:]
+        if not body:
+            raise SchemeCompileError("begin expected at least one expression")
+        for subexpression in body[:-1]:
+            self._compile_expression(self._as_located(subexpression))
+        self._compile_tail_expression(self._as_located(body[-1]))
+
+    def _compile_tail_if(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        if len(items) not in (3, 4):
+            actual = len(items) - 1
+            raise SchemeCompileError(f"if expected 2 or 3 argument(s), got {actual}")
+        cond_reg = self._compile_expression(self._as_located(items[1]))
+        else_label = f"__scheme_tail_if_else_{self.root._new_function_label()}"
+        end_label = f"__scheme_tail_if_end_{self.root._new_function_label()}"
+        self._branch_if_false(cond_reg, else_label, expression)
+        self._compile_tail_expression(self._as_located(items[2]))
+        self._emit(Opcode.LABEL, [else_label], expression)
+        if len(items) == 4:
+            self._compile_tail_expression(self._as_located(items[3]))
+        else:
+            void_reg = self._emit_literal(None, expression)
+            self._emit(Opcode.RETURN, [void_reg], expression)
+        self._emit(Opcode.LABEL, [end_label], expression)
+
+    def _compile_tail_let(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        if len(items) < 3:
+            raise SchemeCompileError("let expected bindings and body")
+        if isinstance(self._unwrap(items[1]), Symbol):
+            letrec_expr = self._lower_named_let(items, expression)
+            self._compile_tail_expression(letrec_expr)
+            return
+        bindings_expr = self._unwrap(items[1])
+        if not isinstance(bindings_expr, list):
+            raise SchemeCompileError("let expected binding list")
+        seen: set[str] = set()
+        compiled_bindings: list[tuple[str, str]] = []
+        for binding in bindings_expr:
+            binding_value = self._unwrap(binding)
+            if not isinstance(binding_value, list) or len(binding_value) != 2:
+                raise SchemeCompileError("let bindings must be (name value) pairs")
+            name = self._unwrap(binding_value[0])
+            if not isinstance(name, Symbol):
+                raise SchemeCompileError("let binding names must be symbols")
+            name_text = str(name)
+            if name_text in seen:
+                raise SchemeCompileError(f"let duplicate binding: {name}")
+            seen.add(name_text)
+            value_reg = self._compile_expression(self._as_located(binding_value[1]))
+            compiled_bindings.append((name_text, value_reg))
+        self._push_scope()
+        try:
+            for name_text, value_reg in compiled_bindings:
+                self.scope_stack[-1][name_text] = VarBinding(value_reg)
+            for subexpression in items[2:-1]:
+                self._compile_expression(self._as_located(subexpression))
+            self._compile_tail_expression(self._as_located(items[-1]))
+        finally:
+            self._pop_scope()
+
+    def _compile_tail_let_star(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        if len(items) < 3:
+            raise SchemeCompileError("let* expected bindings and body")
+        bindings_expr = self._unwrap(items[1])
+        if not isinstance(bindings_expr, list):
+            raise SchemeCompileError("let* expected binding list")
+        self._push_scope()
+        try:
+            seen: set[str] = set()
+            for binding in bindings_expr:
+                binding_value = self._unwrap(binding)
+                if not isinstance(binding_value, list) or len(binding_value) != 2:
+                    raise SchemeCompileError("let* bindings must be (name value) pairs")
+                name = self._unwrap(binding_value[0])
+                if not isinstance(name, Symbol):
+                    raise SchemeCompileError("let* binding names must be symbols")
+                name_text = str(name)
+                if name_text in seen:
+                    raise SchemeCompileError(f"let* duplicate binding: {name}")
+                seen.add(name_text)
+                value_reg = self._compile_expression(self._as_located(binding_value[1]))
+                self.scope_stack[-1][name_text] = VarBinding(value_reg)
+            for subexpression in items[2:-1]:
+                self._compile_expression(self._as_located(subexpression))
+            self._compile_tail_expression(self._as_located(items[-1]))
+        finally:
+            self._pop_scope()
+
+    def _compile_tail_letrec(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        if len(items) < 3:
+            raise SchemeCompileError("letrec expected bindings and body")
+        bindings_expr = self._unwrap(items[1])
+        if not isinstance(bindings_expr, list):
+            raise SchemeCompileError("letrec expected binding list")
+        self._push_scope()
+        try:
+            ordered_bindings: list[tuple[str, LocatedDatum]] = []
+            seen: set[str] = set()
+            for binding in bindings_expr:
+                binding_value = self._unwrap(binding)
+                if not isinstance(binding_value, list) or len(binding_value) != 2:
+                    raise SchemeCompileError("letrec bindings must be (name value) pairs")
+                name = self._unwrap(binding_value[0])
+                if not isinstance(name, Symbol):
+                    raise SchemeCompileError("letrec binding names must be symbols")
+                name_text = str(name)
+                if name_text in seen:
+                    raise SchemeCompileError(f"letrec duplicate binding: {name}")
+                seen.add(name_text)
+                placeholder_reg = self._emit_literal(_LETREC_UNINITIALIZED, expression)
+                cell_reg = self._alloc_cell_reg(name_text)
+                self._emit(Opcode.MAKE_CELL, [cell_reg, placeholder_reg], expression)
+                self.scope_stack[-1][name_text] = VarBinding(
+                    cell_reg, is_cell=True, read_guard_name=name_text
+                )
+                ordered_bindings.append((name_text, self._as_located(binding_value[1])))
+            for name_text, value_expr in ordered_bindings:
+                value_reg = self._compile_expression(value_expr)
+                self._emit(
+                    Opcode.CELL_SET,
+                    [self.scope_stack[-1][name_text].storage, value_reg],
+                    value_expr,
+                )
+            for subexpression in items[2:-1]:
+                self._compile_expression(self._as_located(subexpression))
+            self._compile_tail_expression(self._as_located(items[-1]))
+        finally:
+            self._pop_scope()
+
+    def _compile_tail_and(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        operands = [self._as_located(item) for item in items[1:]]
+        if not operands:
+            value_reg = self._emit_literal(True, expression)
+            self._emit(Opcode.RETURN, [value_reg], expression)
+            return
+        if len(operands) == 1:
+            self._compile_tail_expression(operands[0])
+            return
+        end_label = f"__scheme_tail_and_end_{self.root._new_function_label()}"
+        result_reg = self._new_temp()
+        for operand in operands[:-1]:
+            value_reg = self._compile_expression(operand)
+            self._emit(Opcode.MOV, [result_reg, value_reg], operand)
+            self._branch_if_false(value_reg, end_label, operand)
+        self._compile_tail_expression(operands[-1])
+        self._emit(Opcode.LABEL, [end_label], expression)
+        self._emit(Opcode.RETURN, [result_reg], expression)
+
+    def _compile_tail_or(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        operands = [self._as_located(item) for item in items[1:]]
+        if not operands:
+            value_reg = self._emit_literal(False, expression)
+            self._emit(Opcode.RETURN, [value_reg], expression)
+            return
+        if len(operands) == 1:
+            self._compile_tail_expression(operands[0])
+            return
+        for operand in operands[:-1]:
+            value_reg = self._compile_expression(operand)
+            false_label = f"__scheme_tail_or_next_{self.root._new_function_label()}"
+            self._branch_if_false(value_reg, false_label, operand)
+            self._emit(Opcode.RETURN, [value_reg], operand)
+            self._emit(Opcode.LABEL, [false_label], operand)
+        self._compile_tail_expression(operands[-1])
+
+    def _compile_tail_cond(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        clauses = items[1:]
+        if not clauses:
+            void_reg = self._emit_literal(None, expression)
+            self._emit(Opcode.RETURN, [void_reg], expression)
+            return
+        end_label = f"__scheme_tail_cond_end_{self.root._new_function_label()}"
+        for index, clause in enumerate(clauses):
+            clause_expr = self._as_located(clause)
+            clause_value = self._unwrap(clause)
+            if not isinstance(clause_value, list) or not clause_value:
+                raise SchemeCompileError("cond clauses must be non-empty lists")
+            test_expr = self._as_located(clause_value[0])
+            test_value = self._unwrap(clause_value[0])
+            is_else = isinstance(test_value, Symbol) and test_value == "else"
+            if is_else:
+                if index != len(clauses) - 1:
+                    raise SchemeCompileError("cond else clause must be last")
+                if len(clause_value) == 1:
+                    raise SchemeCompileError("cond else clause expected a body")
+                self._compile_tail_sequence(
+                    [self._as_located(part) for part in clause_value[1:]],
+                    clause_expr,
+                )
+                self._emit(Opcode.JMP, [end_label], clause_expr)
+                break
+            next_label = f"__scheme_tail_cond_next_{self.root._new_function_label()}"
+            test_reg = self._compile_expression(test_expr)
+            self._branch_if_false(test_reg, next_label, test_expr)
+            if len(clause_value) == 1:
+                self._emit(Opcode.RETURN, [test_reg], clause_expr)
+            else:
+                self._compile_tail_sequence(
+                    [self._as_located(part) for part in clause_value[1:]],
+                    clause_expr,
+                )
+            self._emit(Opcode.LABEL, [next_label], clause_expr)
+        self._emit(Opcode.LABEL, [end_label], expression)
+        void_reg = self._emit_literal(None, expression)
+        self._emit(Opcode.RETURN, [void_reg], expression)
+
+    def _compile_tail_case(self, items: Sequence[object], expression: LocatedDatum) -> None:
+        if len(items) < 2:
+            raise SchemeCompileError("case expected a key expression")
+        key_reg = self._compile_expression(self._as_located(items[1]))
+        end_label = f"__scheme_tail_case_end_{self.root._new_function_label()}"
+        clauses = items[2:]
+        for index, clause in enumerate(clauses):
+            clause_expr = self._as_located(clause)
+            clause_value = self._unwrap(clause)
+            if not isinstance(clause_value, list) or not clause_value:
+                raise SchemeCompileError("case clauses must be non-empty lists")
+            datum_expr = self._as_located(clause_value[0])
+            datum_value = self._unwrap(clause_value[0])
+            is_else = isinstance(datum_value, Symbol) and datum_value == "else"
+            if is_else:
+                if index != len(clauses) - 1:
+                    raise SchemeCompileError("case else clause must be last")
+                if len(clause_value) == 1:
+                    raise SchemeCompileError("case else clause expected a body")
+                self._compile_tail_sequence(
+                    [self._as_located(part) for part in clause_value[1:]],
+                    clause_expr,
+                )
+                self._emit(Opcode.JMP, [end_label], clause_expr)
+                break
+            if not isinstance(datum_value, list):
+                raise SchemeCompileError("case clause expected a datum list")
+            if len(clause_value) == 1:
+                raise SchemeCompileError("case clause expected a body")
+            clause_matched = f"__scheme_tail_case_match_{self.root._new_function_label()}"
+            next_label = f"__scheme_tail_case_next_{self.root._new_function_label()}"
+            for datum in datum_value:
+                matches_reg = self._compile_internal_equal_value_call(
+                    key_reg, self._emit_literal(self._datum_to_runtime_value(datum), datum_expr), datum_expr
+                )
+                self._emit(Opcode.JNZ, [matches_reg, clause_matched], datum_expr)
+            self._emit(Opcode.JMP, [next_label], clause_expr)
+            self._emit(Opcode.LABEL, [clause_matched], clause_expr)
+            self._compile_tail_sequence(
+                [self._as_located(part) for part in clause_value[1:]],
+                clause_expr,
+            )
+            self._emit(Opcode.LABEL, [next_label], clause_expr)
+        self._emit(Opcode.LABEL, [end_label], expression)
+        void_reg = self._emit_literal(None, expression)
+        self._emit(Opcode.RETURN, [void_reg], expression)
+
     def _read_symbol(self, name: str, expression: LocatedDatum) -> str:
         binding = self._lookup_binding(name)
         if binding is not None:
@@ -772,6 +1098,17 @@ class SchemeCompiler:
         for subexpression in expressions[:-1]:
             self._compile_expression(subexpression)
         return self._compile_expression(expressions[-1])
+
+    def _compile_tail_sequence(
+        self, expressions: Sequence[LocatedDatum], fallback_expression: LocatedDatum
+    ) -> None:
+        if not expressions:
+            void_reg = self._emit_literal(None, fallback_expression)
+            self._emit(Opcode.RETURN, [void_reg], fallback_expression)
+            return
+        for subexpression in expressions[:-1]:
+            self._compile_expression(subexpression)
+        self._compile_tail_expression(expressions[-1])
 
     def _lookup_binding(self, name: str) -> VarBinding | None:
         for scope in reversed(self.scope_stack):

@@ -112,6 +112,7 @@ class BytecodeVM:
             Opcode.CELL_SET: self._op_CELL_SET,
             Opcode.CLOSURE: self._op_CLOSURE,
             Opcode.CALL_VALUE: self._op_CALL_VALUE,
+            Opcode.TAIL_CALL_VALUE: self._op_TAIL_CALL_VALUE,
             Opcode.BIND_UPVALUE: self._op_BIND_UPVALUE,
             Opcode.VARARG: self._op_VARARG,
             Opcode.VARARG_FIRST: self._op_VARARG_FIRST,
@@ -641,6 +642,50 @@ class BytecodeVM:
         self.return_value = values[0] if values else None
         self.awaiting_resume = False
         return None
+
+    def _op_TAIL_CALL_VALUE(self, args):
+        callee_reg = args[0]
+        callee = self.registers.get(callee_reg)
+        pending = self.pending_params
+        args_to_pass = list(pending)
+        pending.clear()
+        if isinstance(callee, dict) and "label" in callee:
+            self.registers = dict(self.registers)
+            self.param_stack = args_to_pass
+            self.pending_params = []
+            self.current_upvalues = list(callee.get("upvalues", []))
+            self.pc = self.labels[callee["label"]]
+            return "jump"
+        if getattr(callee, "__lua_builtin__", False):
+            allow_yield = getattr(callee, "allow_yield", False)
+            yield_probe = getattr(callee, "yield_probe", False)
+            if allow_yield or yield_probe:
+                result = callee(args_to_pass, self)
+            else:
+                with self._non_yieldable_context():
+                    result = callee(args_to_pass, self)
+        elif callable(callee):
+            with self._non_yieldable_context():
+                result = callee(*args_to_pass)
+        else:
+            handler = self._find_metamethod(callee, "__call")
+            if handler is None or not self._is_direct_callable(handler):
+                raise self._wrap_runtime_error(
+                    RuntimeError(f"TAIL_CALL_VALUE expects callable or closure in {callee_reg}")
+                )
+            result = self.call_callable(handler, [callee, *args_to_pass])
+        if isinstance(result, LuaYield):
+            if self.current_coroutine is None:
+                raise self._wrap_runtime_error(RuntimeError("coroutine.yield called outside coroutine"))
+            self.yield_values = list(result.values)
+            self.awaiting_resume = True
+            self.last_return = []
+            self.return_value = None
+            if hasattr(self.current_coroutine, "_set_yield"):
+                self.current_coroutine._set_yield(self.yield_values)
+            return "yield"
+        values = self._coerce_call_result(result)
+        return self._return_with(values)
 
     def _op_BIND_UPVALUE(self, args):
         dst, index_arg = args

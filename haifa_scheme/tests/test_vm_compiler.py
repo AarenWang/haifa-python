@@ -12,7 +12,7 @@ from compiler.bytecode import Opcode
 from compiler.bytecode_vm import BytecodeVM
 
 from haifa_scheme.environment import Environment
-from haifa_scheme.errors import SchemeRuntimeError
+from haifa_scheme.errors import SchemeRuntimeError, SchemeVMRuntimeError
 from haifa_scheme.reader import Symbol
 from haifa_scheme.stdlib import create_global_environment
 from haifa_scheme.compiler import SchemeCompiler, compile_source, run_source_vm
@@ -136,6 +136,68 @@ def test_vm_backend_function_define_shorthand_and_recursive_factorial():
     """
 
     assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def _run_vm_with_max_call_depth(source: str, *, max_steps: int = 1_000_000) -> tuple[list[object], int]:
+    runtime = SchemeVMRuntime()
+    compiler = SchemeCompiler(runtime)
+    instructions = compiler.compile_source(source)
+    vm = runtime.create_vm(instructions)
+    vm.index_labels()
+    max_depth = 0
+    steps = 0
+    while True:
+        max_depth = max(max_depth, len(vm.call_stack))
+        status = vm.step()
+        steps += 1
+        if status == "halt":
+            break
+        if steps >= max_steps:
+            raise AssertionError("VM did not halt before max_steps")
+    return ([vm.registers.get(register) for register in compiler.result_registers], max_depth)
+
+
+def test_vm_backend_tail_recursive_countdown_reuses_call_frame():
+    source = """
+    (define (countdown n acc)
+      (if (= n 0)
+          acc
+          (countdown (- n 1) (+ acc 1))))
+    (countdown 2000 0)
+    """
+    results, max_depth = _run_vm_with_max_call_depth(source)
+    assert results == [None, 2000]
+    assert max_depth <= 2
+
+
+def test_vm_backend_tail_recursive_factorial_is_correct_and_optimized():
+    source = """
+    (define (fact n acc)
+      (if (= n 0)
+          acc
+          (fact (- n 1) (* acc n))))
+    (fact 10 1)
+    """
+    results, max_depth = _run_vm_with_max_call_depth(source)
+    assert results == [None, 3628800]
+    assert max_depth <= 2
+
+
+def test_vm_backend_non_tail_recursion_preserves_traceback_depth():
+    source = """
+    (define (explode n)
+      (if (= n 0)
+          missing
+          (* n (explode (- n 1)))))
+    (explode 10)
+    """
+    try:
+        run_source_vm(source)
+    except SchemeVMRuntimeError as exc:
+        assert len(exc.frames) >= 5
+        assert any(frame.function_name == "explode" for frame in exc.frames)
+    else:  # pragma: no cover
+        raise AssertionError("expected SchemeVMRuntimeError")
 
 
 def test_vm_backend_closure_counter():

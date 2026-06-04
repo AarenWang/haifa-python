@@ -56,6 +56,7 @@ class Opcode(Enum):
     CELL_SET = auto()    # CELL_SET cell, src
     CLOSURE = auto()     # CLOSURE dst, label, cell1, cell2, ...
     CALL_VALUE = auto()  # CALL_VALUE callee_reg
+    TAIL_CALL_VALUE = auto()  # TAIL_CALL_VALUE callee_reg
     BIND_UPVALUE = auto()# BIND_UPVALUE dst_cell, index
     VARARG = auto()      # VARARG dst
     VARARG_FIRST = auto()# VARARG_FIRST dst, src
