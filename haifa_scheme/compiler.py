@@ -524,7 +524,7 @@ class SchemeCompiler:
             clause_matched = f"__scheme_case_match_{self.root._new_function_label()}"
             next_label = f"__scheme_case_next_{self.root._new_function_label()}"
             for datum in datum_value:
-                matches_reg = self._compile_equal_call(
+                matches_reg = self._compile_internal_equal_value_call(
                     key_reg, self._emit_literal(self._datum_to_runtime_value(datum), datum_expr), datum_expr
                 )
                 self._emit(Opcode.JNZ, [matches_reg, clause_matched], datum_expr)
@@ -641,19 +641,23 @@ class SchemeCompiler:
         existing = self._upvalue_bindings.get(name)
         if existing is not None:
             return existing
-        source_cell = self.parent_compiler._ensure_capture_cell(name, expression)
-        if source_cell is None:
+        source_binding = self.parent_compiler._ensure_capture_binding(name, expression)
+        if source_binding is None:
             return None
         index = len(self._upvalue_order)
-        binding = VarBinding(self._alloc_cell_reg(name), is_cell=True)
+        binding = VarBinding(
+            self._alloc_cell_reg(name),
+            is_cell=True,
+            read_guard_name=source_binding.read_guard_name,
+        )
         self._upvalue_bindings[name] = binding
         self._upvalue_order.append(name)
-        self._upvalue_source_cells.append(source_cell)
+        self._upvalue_source_cells.append(source_binding.storage)
         self.scope_stack[0][name] = binding
         self._emit(Opcode.BIND_UPVALUE, [binding.storage, str(index)], expression)
         return binding
 
-    def _ensure_capture_cell(self, name: str, expression: LocatedDatum) -> str | None:
+    def _ensure_capture_binding(self, name: str, expression: LocatedDatum) -> VarBinding | None:
         binding = self._lookup_binding(name)
         if binding is not None:
             if not binding.is_cell:
@@ -661,11 +665,11 @@ class SchemeCompiler:
                 self._emit(Opcode.MAKE_CELL, [cell_reg, binding.storage], expression)
                 binding.storage = cell_reg
                 binding.is_cell = True
-            return binding.storage
+            return binding
         if self.parent_compiler is not None:
             upvalue_binding = self._bind_parent_symbol(name, expression)
             if upvalue_binding is not None:
-                return upvalue_binding.storage
+                return upvalue_binding
         return None
 
     def _define_symbol(self, name: str, value_reg: str, expression: LocatedDatum) -> None:
@@ -673,7 +677,13 @@ class SchemeCompiler:
             self.root._known_globals.add(name)
             self._emit(Opcode.MOV, [mangle_global_name(name), value_reg], expression)
             return
-        raise SchemeCompileError("internal define is unsupported in Phase 4 VM backend")
+
+        current_scope = self.scope_stack[-1]
+        existing = current_scope.get(name)
+        if existing is not None:
+            self._binding_write(existing, value_reg, expression)
+            return
+        current_scope[name] = VarBinding(value_reg)
 
     def _binding_read(self, binding: VarBinding, expression: LocatedDatum) -> str:
         if binding.is_cell:
@@ -706,6 +716,16 @@ class SchemeCompiler:
         self._emit(Opcode.PARAM, [left_reg], expression)
         self._emit(Opcode.PARAM, [right_reg], expression)
         self._emit(Opcode.CALL_VALUE, [mangle_global_name("equal?")], expression)
+        result_reg = self._new_temp()
+        self._emit(Opcode.RESULT, [result_reg], expression)
+        return result_reg
+
+    def _compile_internal_equal_value_call(
+        self, left_reg: str, right_reg: str, expression: LocatedDatum
+    ) -> str:
+        self._emit(Opcode.PARAM, [left_reg], expression)
+        self._emit(Opcode.PARAM, [right_reg], expression)
+        self._emit(Opcode.CALL_VALUE, [mangle_internal_name("equal_value")], expression)
         result_reg = self._new_temp()
         self._emit(Opcode.RESULT, [result_reg], expression)
         return result_reg

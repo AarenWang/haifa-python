@@ -10,7 +10,7 @@ from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import Symbol
 from haifa_scheme.stdlib import BuiltinContext, BuiltinFunction, create_global_environment
-from haifa_scheme.values import TextPort
+from haifa_scheme.values import TextPort, equal_value
 
 
 def mangle_global_name(name: str) -> str:
@@ -58,6 +58,7 @@ class SchemeVMRuntime:
             else:
                 registers[mangle_global_name(str(name))] = value
         registers[mangle_internal_name("ensure_initialized")] = self._ensure_initialized
+        registers[mangle_internal_name("equal_value")] = self._equal_value
         registers[mangle_internal_name("is_false")] = self._is_false
         registers[mangle_internal_name("lookup_global")] = _LookupGlobalHelper(self)
         return registers
@@ -111,6 +112,10 @@ class SchemeVMRuntime:
     @staticmethod
     def _is_false(value: Any) -> bool:
         return value is False
+
+    @staticmethod
+    def _equal_value(left: Any, right: Any) -> bool:
+        return equal_value(left, right)
 
     @staticmethod
     def _call_cc_unsupported(procedure: Any) -> Any:

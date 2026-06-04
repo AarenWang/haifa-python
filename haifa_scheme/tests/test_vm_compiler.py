@@ -276,6 +276,22 @@ def test_vm_backend_letrec_rejects_read_before_initialization():
         raise AssertionError("expected letrec read-before-initialization failure")
 
 
+def test_vm_backend_letrec_closure_read_before_initialization_is_not_swallowed():
+    source = """
+    (letrec ((x (lambda () y))
+             (z (x))
+             (y 1))
+      0)
+    """
+
+    try:
+        run_source_vm(source)
+    except SchemeRuntimeError as exc:
+        assert "read before initialization" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected letrec closure read-before-initialization failure")
+
+
 def test_vm_backend_do_matches_interpreter():
     source = """
     (do ((i 0 (+ i 1))
@@ -284,6 +300,26 @@ def test_vm_backend_do_matches_interpreter():
     """
 
     assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def test_vm_backend_do_result_expressions_allow_define_like_interpreter():
+    source = """
+    (do ((i 0 (+ i 1)))
+        ((= i 3)
+         (define done 'ignored)
+         (+ i 10)))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def test_vm_backend_case_uses_internal_datum_equality():
+    source = """
+    (define equal? (lambda (a b) #f))
+    (case 2 ((2) 'matched) (else 'missed))
+    """
+
+    assert run_source_vm(source) == run_source(source)
 
 
 def test_vm_backend_literal_values_match_interpreter():
