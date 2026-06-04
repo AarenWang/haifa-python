@@ -8,7 +8,7 @@ from typing import Iterable, Sequence
 from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
 from compiler.vm_errors import VMRuntimeError
 from haifa_scheme.environment import Environment
-from haifa_scheme.errors import SchemeRuntimeError
+from haifa_scheme.errors import SchemeRuntimeError, SchemeVMRuntimeError
 from haifa_scheme.reader import DottedList, LocatedDatum, Symbol, parse_source_with_locations
 from haifa_scheme.values import EMPTY_LIST, Pair, Vector
 from haifa_scheme.vm_runtime import (
@@ -895,10 +895,18 @@ def run_source_vm(
     try:
         vm.run()
     except VMRuntimeError as exc:
-        frame_names = [frame.function_name for frame in exc.frames if frame.function_name]
-        if frame_names:
-            raise SchemeRuntimeError(f"{exc} [traceback: {' -> '.join(frame_names)}]") from exc
-        raise
+        head = next((frame for frame in exc.frames if frame.file and frame.line), None)
+        if head is None:
+            raise SchemeVMRuntimeError(str(exc), frames=list(exc.frames)) from exc
+        frame_names = [
+            frame.function_name
+            for frame in exc.frames
+            if frame.function_name and frame.function_name != "<chunk>"
+        ]
+        suffix = f" [traceback: {' -> '.join(frame_names)}]" if frame_names else ""
+        raise SchemeVMRuntimeError(
+            f"{head.file}:{head.line}: {exc}{suffix}", frames=list(exc.frames)
+        ) from exc
     runtime.sync_from_vm(vm)
     return [vm.registers.get(register) for register in compiler.result_registers]
 

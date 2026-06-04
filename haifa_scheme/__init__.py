@@ -1,7 +1,7 @@
 """Scheme reader and runtime package."""
 
 from haifa_scheme.compiler import SchemeCompileError, SchemeCompiler, compile_source, run_source_vm
-from haifa_scheme.errors import SchemeRuntimeError, SchemeSyntaxError
+from haifa_scheme.errors import SchemeRuntimeError, SchemeSyntaxError, SchemeVMRuntimeError
 from haifa_scheme.reader import LocatedDatum, SourceSpan, Symbol, parse_source, parse_source_with_locations
 from haifa_scheme.runtime import Procedure, run_source
 from haifa_scheme.values import EOF_OBJECT, EMPTY_LIST, Char, Pair, TextPort, Vector, to_scheme_string
@@ -19,6 +19,7 @@ __all__ = [
     "SchemeCompiler",
     "SchemeRuntimeError",
     "SchemeSyntaxError",
+    "SchemeVMRuntimeError",
     "SchemeVMRuntime",
     "SourceSpan",
     "Symbol",
