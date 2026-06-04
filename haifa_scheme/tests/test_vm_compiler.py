@@ -372,12 +372,71 @@ def test_visualizer_uses_scheme_source_debug_line():
     assert visualizer._current_source_line() == 2
 
 
-def test_scheme_compiler_rejects_phase_4_unsupported_forms():
+def test_scheme_compiler_rejects_internal_define_syntax():
     compiler = SchemeCompiler()
 
     try:
-        compiler.compile_source("(define-syntax m (syntax-rules () ((_ ) 1)))")
+        compiler.compile_source("((lambda () (define-syntax m (syntax-rules () ((_ ) 1))) (m)))")
     except Exception as exc:
         assert "unsupported" in str(exc).lower() or "phase" in str(exc).lower()
     else:  # pragma: no cover
-        raise AssertionError("expected compile failure for define-syntax in phase 4")
+        raise AssertionError("expected compile failure for internal define-syntax")
+
+
+def test_vm_backend_when_macro_expands_like_interpreter():
+    source = """
+    (define-syntax when
+      (syntax-rules ()
+        ((_ test body ...)
+         (if test (begin body ...) #<void>))))
+    (define x 0)
+    (when #t (set! x 5))
+    x
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_unless_macro_expands_like_interpreter():
+    source = """
+    (define-syntax unless
+      (syntax-rules ()
+        ((_ test body ...)
+         (if test #<void> (begin body ...)))))
+    (define x 0)
+    (unless #t (set! x 5))
+    (unless #f (set! x 7))
+    x
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_macro_ellipsis_body_expressions():
+    source = """
+    (define-syntax when
+      (syntax-rules ()
+        ((_ test body ...)
+         (if test (begin body ...) #<void>))))
+    (define x 0)
+    (when #t (set! x (+ x 1)) (set! x (+ x 2)) (set! x (+ x 3)))
+    x
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_macro_expansion_error_points_to_call_site():
+    source = """
+    (define-syntax m
+      (syntax-rules ()
+        ((_ 1) 10)))
+    (m 2)
+    """
+
+    try:
+        run_source_vm(source, source_name="macro.scm")
+    except Exception as exc:
+        assert "macro.scm:5" in str(exc) or "macro.scm:4" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected macro expansion failure")

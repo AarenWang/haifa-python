@@ -9,11 +9,11 @@ from haifa_scheme.reader import DottedList, LocatedDatum, SourceSpan, parse_sour
 
 
 def test_parse_atoms():
-    expressions = parse_source('42 -7 3.5 #t #f hello "world"')
+    expressions = parse_source('42 -7 3.5 #t #f #<void> hello "world"')
 
-    assert expressions == [42, -7, 3.5, True, False, Symbol("hello"), "world"]
-    assert isinstance(expressions[5], Symbol)
-    assert type(expressions[6]) is str
+    assert expressions == [42, -7, 3.5, True, False, None, Symbol("hello"), "world"]
+    assert isinstance(expressions[6], Symbol)
+    assert type(expressions[7]) is str
 
 
 def test_parse_nested_lists():

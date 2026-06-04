@@ -265,6 +265,12 @@ def _parse_atom(atom: str) -> object:
         return True
     if atom == "#f":
         return False
+    if atom == "#<void>":
+        return None
+    if atom == "#<eof>":
+        from haifa_scheme.values import EOF_OBJECT
+
+        return EOF_OBJECT
     if atom.startswith("#\\"):
         return _parse_character(atom)
     complex_value = _parse_complex(atom)

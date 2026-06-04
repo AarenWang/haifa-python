@@ -9,6 +9,7 @@ from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocat
 from compiler.vm_errors import VMRuntimeError
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError, SchemeVMRuntimeError
+from haifa_scheme.macros import SyntaxRulesMacro, parse_syntax_rules
 from haifa_scheme.reader import DottedList, LocatedDatum, Symbol, parse_source_with_locations
 from haifa_scheme.values import EMPTY_LIST, Pair, Vector
 from haifa_scheme.vm_runtime import (
@@ -57,6 +58,7 @@ class SchemeCompiler:
                 for name in self.runtime.to_vm_registers().keys()
                 if name.startswith("G_SCHEME_")
             }
+            self._macro_env: dict[str, SyntaxRulesMacro] = {}
             self._function_counter = 0
 
     def compile_source(self, source: str, *, source_name: str = "<input>") -> list[Instruction]:
@@ -88,6 +90,7 @@ class SchemeCompiler:
         return list(self.instructions)
 
     def _compile_expression(self, expression: LocatedDatum) -> str:
+        expression = self._macro_expand(expression)
         value = expression.value
         if isinstance(value, list):
             return self._compile_list_expression(expression)
@@ -132,10 +135,26 @@ class SchemeCompiler:
             if operator_value == "do":
                 return self._compile_do(items, expression)
             if operator_value == "define-syntax":
-                raise SchemeCompileError(
-                    f"unsupported special form in Phase 5 VM backend: {operator_value}"
-                )
+                return self._compile_define_syntax(items, expression)
         return self._compile_call(items, expression)
+
+    def _compile_define_syntax(self, items: Sequence[object], expression: LocatedDatum) -> str:
+        if len(items) != 3:
+            raise SchemeCompileError("define-syntax expected a name and transformer")
+        if self.parent_compiler is not None:
+            raise SchemeCompileError("internal define-syntax is unsupported in Phase 7 VM backend")
+        name_value = self._unwrap(items[1])
+        if not isinstance(name_value, Symbol):
+            raise SchemeCompileError("define-syntax expected an identifier name")
+        transformer_plain = self._to_plain_datum(items[2])
+        try:
+            macro = parse_syntax_rules(Symbol(str(name_value)), transformer_plain)
+        except SchemeRuntimeError as exc:
+            raise SchemeCompileError(
+                f"{expression.span.file}:{expression.span.line}: {exc}"
+            ) from exc
+        self.root._macro_env[str(name_value)] = macro
+        return self._emit_literal(None, expression)
 
     def _compile_quote(self, items: Sequence[object], expression: LocatedDatum) -> str:
         if len(items) != 2:
@@ -871,6 +890,52 @@ class SchemeCompiler:
                 template.span,
             )
         return LocatedDatum(value, template.span)
+
+    def _macro_expand(self, expression: LocatedDatum) -> LocatedDatum:
+        if self.parent_compiler is not None:
+            macro_env = self.root._macro_env
+        else:
+            macro_env = self._macro_env
+
+        expanded = expression
+        for _ in range(128):
+            value = expanded.value
+            if not isinstance(value, list) or not value:
+                return expanded
+            head_value = self._unwrap(value[0])
+            if not isinstance(head_value, Symbol):
+                return expanded
+            head_name = str(head_value)
+            if head_name == "define-syntax":
+                return expanded
+            macro = macro_env.get(head_name)
+            if macro is None:
+                return expanded
+            call_plain = self._to_plain_datum(expanded)
+            assert isinstance(call_plain, list)
+            try:
+                result_plain = macro.expand(call_plain)
+            except SchemeRuntimeError as exc:
+                raise SchemeCompileError(
+                    f"{expanded.span.file}:{expanded.span.line}: {exc}"
+                ) from exc
+            expanded = self._synthetic(result_plain, expanded)
+        raise SchemeCompileError(
+            f"{expression.span.file}:{expression.span.line}: macro expansion exceeded limit"
+        )
+
+    def _to_plain_datum(self, value: object) -> object:
+        value = self._unwrap(value)
+        if isinstance(value, list):
+            return [self._to_plain_datum(item) for item in value]
+        if isinstance(value, DottedList):
+            return DottedList(
+                [self._to_plain_datum(item) for item in value.items],
+                self._to_plain_datum(value.tail),
+            )
+        if isinstance(value, Vector):
+            return Vector(tuple(self._to_plain_datum(item) for item in value.items))
+        return value
 
 
 def compile_source(source: str, *, source_name: str = "<input>") -> list[Instruction]:

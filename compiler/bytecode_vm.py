@@ -1246,7 +1246,7 @@ class BytecodeVM:
         self.registers[args[0]] = int(isinstance(self.val(args[1]), list))
 
     def _op_IS_NULL(self, args):
-        self.registers[args[0]] = int(self.val(args[1]) is None)
+        self.registers[args[0]] = self.val(args[1]) is None
 
     def _op_COALESCE(self, args):
         dst, lhs, rhs = args

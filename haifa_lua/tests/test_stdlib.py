@@ -783,20 +783,21 @@ def test_os_remove_rename_execute(tmp_path: pathlib.Path, monkeypatch: pytest.Mo
     env = create_default_environment()
     source = tmp_path / "src.txt"
     target = tmp_path / "renamed.txt"
+    ok_command = f"\"{sys.executable}\" -c \"import sys; sys.exit(0)\""
     env.register("source_path", str(source))
     env.register("target_path", str(target))
     env.register("env_var_name", "HAIFA_TEST_ENV")
+    env.register("ok_command", ok_command)
     monkeypatch.setenv("HAIFA_TEST_ENV", "value")
     script = """
     local file = assert(io.open(source_path, "w"))
     file:write("data")
     file:close()
     local renamed = os.rename(source_path, target_path)
-    local ok, kind, code = os.execute("true")
+    local ok, kind, code = os.execute(ok_command)
     local env_value = os.getenv(env_var_name)
     local removed = os.remove(target_path)
     return renamed, ok, kind, code, env_value, removed
     """
     result = run_source(script, env)
     assert result == [True, True, "exit", 0.0, "value", True]
-
