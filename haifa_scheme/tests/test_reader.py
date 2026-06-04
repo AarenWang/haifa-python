@@ -5,7 +5,7 @@ import re
 import pytest
 
 from haifa_scheme import Char, SchemeSyntaxError, Symbol, Vector, parse_source
-from haifa_scheme.reader import DottedList
+from haifa_scheme.reader import DottedList, LocatedDatum, SourceSpan, parse_source_with_locations
 
 
 def test_parse_atoms():
@@ -124,6 +124,73 @@ def test_string_escapes():
     assert expressions == ['hello\n"scheme"']
 
 
+def test_parse_source_with_locations_tracks_atoms():
+    expressions = parse_source_with_locations('42 hello "world"', source_name="atoms.scm")
+
+    assert expressions == [
+        LocatedDatum(42, SourceSpan("atoms.scm", 1, 1, 1, 3)),
+        LocatedDatum(Symbol("hello"), SourceSpan("atoms.scm", 1, 4, 1, 9)),
+        LocatedDatum("world", SourceSpan("atoms.scm", 1, 10, 1, 17)),
+    ]
+
+
+def test_parse_source_with_locations_tracks_nested_lists():
+    expressions = parse_source_with_locations("(define square (lambda (x) (* x x)))")
+
+    assert len(expressions) == 1
+    expression = expressions[0]
+    assert expression.span == SourceSpan("<input>", 1, 1, 1, 37)
+    assert isinstance(expression.value, list)
+
+    define_form = expression.value
+    assert define_form[0] == LocatedDatum(Symbol("define"), SourceSpan("<input>", 1, 2, 1, 8))
+    assert define_form[1] == LocatedDatum(Symbol("square"), SourceSpan("<input>", 1, 9, 1, 15))
+
+    lambda_expression = define_form[2]
+    assert lambda_expression.span == SourceSpan("<input>", 1, 16, 1, 36)
+    assert isinstance(lambda_expression.value, list)
+    assert lambda_expression.value[0] == LocatedDatum(
+        Symbol("lambda"), SourceSpan("<input>", 1, 17, 1, 23)
+    )
+
+    parameters = lambda_expression.value[1]
+    assert parameters.span == SourceSpan("<input>", 1, 24, 1, 27)
+    assert parameters.value == [LocatedDatum(Symbol("x"), SourceSpan("<input>", 1, 25, 1, 26))]
+
+
+def test_parse_source_with_locations_tracks_quote_shorthand():
+    expressions = parse_source_with_locations("'(1 . answer)")
+
+    assert len(expressions) == 1
+    quoted_expression = expressions[0]
+    assert quoted_expression.span == SourceSpan("<input>", 1, 1, 1, 14)
+    assert isinstance(quoted_expression.value, list)
+    assert quoted_expression.value[0] == LocatedDatum(Symbol("quote"), SourceSpan("<input>", 1, 1, 1, 2))
+
+    dotted = quoted_expression.value[1]
+    assert isinstance(dotted.value, DottedList)
+    assert dotted.span == SourceSpan("<input>", 1, 2, 1, 14)
+    assert dotted.value.items == [LocatedDatum(1, SourceSpan("<input>", 1, 3, 1, 4))]
+    assert dotted.value.tail == LocatedDatum(Symbol("answer"), SourceSpan("<input>", 1, 7, 1, 13))
+
+
+def test_parse_source_with_locations_tracks_vectors_and_multiline_spans():
+    expressions = parse_source_with_locations("\n  #(1\n     (2 3))", source_name="vectors.scm")
+
+    assert len(expressions) == 1
+    vector_expression = expressions[0]
+    assert vector_expression.span == SourceSpan("vectors.scm", 2, 3, 3, 12)
+    assert isinstance(vector_expression.value, Vector)
+    assert vector_expression.value.items[0] == LocatedDatum(1, SourceSpan("vectors.scm", 2, 5, 2, 6))
+
+    nested_list = vector_expression.value.items[1]
+    assert nested_list.span == SourceSpan("vectors.scm", 3, 6, 3, 11)
+    assert nested_list.value == [
+        LocatedDatum(2, SourceSpan("vectors.scm", 3, 7, 3, 8)),
+        LocatedDatum(3, SourceSpan("vectors.scm", 3, 9, 3, 10)),
+    ]
+
+
 @pytest.mark.parametrize(
     "source, message",
     [
@@ -139,6 +206,11 @@ def test_string_escapes():
 def test_syntax_errors(source: str, message: str):
     with pytest.raises(SchemeSyntaxError, match=re.escape(message)):
         parse_source(source)
+
+
+def test_parse_source_with_locations_keeps_syntax_errors_clear():
+    with pytest.raises(SchemeSyntaxError, match="unclosed '\\('"):
+        parse_source_with_locations("(define x 1")
 
 
 @pytest.mark.parametrize(

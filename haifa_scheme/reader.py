@@ -58,10 +58,29 @@ class DottedList:
 
 
 @dataclass(frozen=True)
+class SourceSpan:
+    file: str
+    line: int
+    column: int
+    end_line: int | None = None
+    end_column: int | None = None
+
+
+@dataclass(frozen=True)
+class LocatedDatum:
+    value: object
+    span: SourceSpan
+
+
+@dataclass(frozen=True)
 class _Token:
     kind: str
     value: Any
     position: int
+    line: int
+    column: int
+    end_line: int
+    end_column: int
 
 
 _INT_RE = re.compile(r"[+-]?\d+")
@@ -85,90 +104,147 @@ def parse_source(source: str) -> list[object]:
     return parser.parse_all()
 
 
+def parse_source_with_locations(source: str, source_name: str = "<input>") -> list[LocatedDatum]:
+    """Parse all top-level Scheme expressions and retain source spans."""
+
+    parser = _Parser(_tokenize(source), source_name=source_name, with_locations=True)
+    expressions = parser.parse_all()
+    return expressions
+
+
 def _tokenize(source: str) -> list[_Token]:
     tokens: list[_Token] = []
     index = 0
+    line = 1
+    column = 1
     length = len(source)
 
     while index < length:
         char = source[index]
 
         if char.isspace():
-            index += 1
+            index, line, column = _advance_position(source, index, line, column)
             continue
 
         if char == ";":
             while index < length and source[index] != "\n":
-                index += 1
+                index, line, column = _advance_position(source, index, line, column)
             continue
 
         if char == "(":
-            tokens.append(_Token("open", char, index))
-            index += 1
+            start_line = line
+            start_column = column
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(_Token("open", char, index - 1, start_line, start_column, line, column))
             continue
 
         if index + 1 < length and source[index : index + 2] == "#(":
-            tokens.append(_Token("vector-open", "#(", index))
-            index += 2
+            start = index
+            start_line = line
+            start_column = column
+            index, line, column = _advance_position(source, index, line, column)
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(_Token("vector-open", "#(", start, start_line, start_column, line, column))
             continue
 
         if char == ")":
-            tokens.append(_Token("close", char, index))
-            index += 1
+            start_line = line
+            start_column = column
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(_Token("close", char, index - 1, start_line, start_column, line, column))
             continue
 
         if char == "'":
-            tokens.append(_Token("quote", char, index))
-            index += 1
+            start_line = line
+            start_column = column
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(_Token("quote", char, index - 1, start_line, start_column, line, column))
             continue
 
         if char == "`":
-            tokens.append(_Token("quasiquote", char, index))
-            index += 1
+            start_line = line
+            start_column = column
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(
+                _Token("quasiquote", char, index - 1, start_line, start_column, line, column)
+            )
             continue
 
         if char == ",":
+            start = index
+            start_line = line
+            start_column = column
             if index + 1 < length and source[index + 1] == "@":
-                tokens.append(_Token("unquote-splicing", ",@", index))
-                index += 2
+                index, line, column = _advance_position(source, index, line, column)
+                index, line, column = _advance_position(source, index, line, column)
+                tokens.append(
+                    _Token(
+                        "unquote-splicing",
+                        ",@",
+                        start,
+                        start_line,
+                        start_column,
+                        line,
+                        column,
+                    )
+                )
                 continue
-            tokens.append(_Token("unquote", char, index))
-            index += 1
+            index, line, column = _advance_position(source, index, line, column)
+            tokens.append(_Token("unquote", char, start, start_line, start_column, line, column))
             continue
 
         if char == '"':
             start = index
-            value, index = _read_string(source, index)
-            tokens.append(_Token("literal", value, start))
+            start_line = line
+            start_column = column
+            value, index, line, column = _read_string(source, index, line, column)
+            tokens.append(
+                _Token("literal", value, start, start_line, start_column, line, column)
+            )
             continue
 
         start = index
+        start_line = line
+        start_column = column
         while index < length and not source[index].isspace() and source[index] not in "();'`,":
-            index += 1
+            index, line, column = _advance_position(source, index, line, column)
         atom = source[start:index]
-        tokens.append(_Token("literal", _parse_atom(atom), start))
+        tokens.append(_Token("literal", _parse_atom(atom), start, start_line, start_column, line, column))
 
     return tokens
 
 
-def _read_string(source: str, start: int) -> tuple[str, int]:
+def _advance_position(source: str, index: int, line: int, column: int) -> tuple[int, int, int]:
+    if source[index] == "\n":
+        return index + 1, line + 1, 1
+    return index + 1, line, column + 1
+
+
+def _read_string(source: str, start: int, line: int, column: int) -> tuple[str, int, int, int]:
     chars: list[str] = []
     index = start + 1
+    current_line = line
+    current_column = column + 1
     length = len(source)
 
     while index < length:
         char = source[index]
         if char == '"':
-            return "".join(chars), index + 1
+            return "".join(chars), index + 1, current_line, current_column + 1
         if char == "\\":
             index += 1
+            current_column += 1
             if index >= length:
                 raise SchemeSyntaxError(f"unterminated string starting at character {start}")
             chars.append(_escape_char(source[index]))
-            index += 1
+            index, current_line, current_column = _advance_position(
+                source, index, current_line, current_column
+            )
             continue
         chars.append(char)
-        index += 1
+        index, current_line, current_column = _advance_position(
+            source, index, current_line, current_column
+        )
 
     raise SchemeSyntaxError(f"unterminated string starting at character {start}")
 
@@ -251,12 +327,16 @@ def _parse_character(atom: str) -> object:
 
 
 class _Parser:
-    def __init__(self, tokens: list[_Token]) -> None:
+    def __init__(
+        self, tokens: list[_Token], source_name: str = "<input>", with_locations: bool = False
+    ) -> None:
         self._tokens = tokens
         self._position = 0
+        self._source_name = source_name
+        self._with_locations = with_locations
 
-    def parse_all(self) -> list[object]:
-        expressions: list[object] = []
+    def parse_all(self) -> list[object] | list[LocatedDatum]:
+        expressions: list[object] | list[LocatedDatum] = []
         while not self._is_at_end():
             expressions.append(self._parse_expression())
         return expressions
@@ -267,7 +347,7 @@ class _Parser:
 
         token = self._advance()
         if token.kind == "literal":
-            return token.value
+            return self._wrap(token.value, self._token_span(token))
         if token.kind == "open":
             return self._parse_list(token.position)
         if token.kind == "vector-open":
@@ -282,14 +362,30 @@ class _Parser:
     def _parse_reader_form(self, token: _Token) -> list[object]:
         if self._is_at_end():
             raise SchemeSyntaxError(f"{token.kind} at character {token.position} has no expression")
-        return [Symbol(token.kind), self._parse_expression()]
+        expression = self._parse_expression()
+        if not self._with_locations:
+            return [Symbol(token.kind), expression]
+
+        token_span = self._token_span(token)
+        expression_span = self._located(expression).span
+        return LocatedDatum(
+            [
+                LocatedDatum(Symbol(token.kind), token_span),
+                self._located(expression),
+            ],
+            self._combine_spans(token_span, expression_span),
+        )
 
     def _parse_list(self, start_position: int) -> list[object] | DottedList:
         items: list[object] = []
+        opening_token = self._tokens[self._position - 1]
         while not self._is_at_end():
             if self._peek().kind == "close":
-                self._advance()
-                return items
+                closing_token = self._advance()
+                return self._wrap(
+                    items,
+                    self._span_from_tokens(opening_token, closing_token),
+                )
             if self._is_dot_token(self._peek()):
                 dot_token = self._advance()
                 if not items:
@@ -308,8 +404,11 @@ class _Parser:
                     raise SchemeSyntaxError(
                         f"dotted list at character {dot_token.position} must have exactly one tail"
                     )
-                self._advance()
-                return DottedList(items, tail)
+                closing_token = self._advance()
+                return self._wrap(
+                    DottedList(items, tail),
+                    self._span_from_tokens(opening_token, closing_token),
+                )
             items.append(self._parse_expression())
 
         raise SchemeSyntaxError(f"unclosed '(' at character {start_position}")
@@ -318,10 +417,14 @@ class _Parser:
         from haifa_scheme.values import Vector
 
         items: list[object] = []
+        opening_token = self._tokens[self._position - 1]
         while not self._is_at_end():
             if self._peek().kind == "close":
-                self._advance()
-                return Vector(tuple(items))
+                closing_token = self._advance()
+                return self._wrap(
+                    Vector(tuple(items)),
+                    self._span_from_tokens(opening_token, closing_token),
+                )
             items.append(self._parse_expression())
 
         raise SchemeSyntaxError(f"unclosed vector literal at character {start_position}")
@@ -336,6 +439,38 @@ class _Parser:
         token = self._tokens[self._position]
         self._position += 1
         return token
+
+    def _wrap(self, value: object, span: SourceSpan) -> object:
+        if not self._with_locations:
+            return value
+        return LocatedDatum(value, span)
+
+    def _token_span(self, token: _Token) -> SourceSpan:
+        return SourceSpan(
+            self._source_name,
+            token.line,
+            token.column,
+            token.end_line,
+            token.end_column,
+        )
+
+    def _span_from_tokens(self, start_token: _Token, end_token: _Token) -> SourceSpan:
+        return SourceSpan(
+            self._source_name,
+            start_token.line,
+            start_token.column,
+            end_token.end_line,
+            end_token.end_column,
+        )
+
+    @staticmethod
+    def _combine_spans(start: SourceSpan, end: SourceSpan) -> SourceSpan:
+        return SourceSpan(start.file, start.line, start.column, end.end_line, end.end_column)
+
+    @staticmethod
+    def _located(value: object) -> LocatedDatum:
+        assert isinstance(value, LocatedDatum)
+        return value
 
     @staticmethod
     def _is_dot_token(token: _Token) -> bool:
