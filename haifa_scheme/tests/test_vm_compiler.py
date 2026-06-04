@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import json
+import subprocess
 import sys
+import textwrap
 import types
+from pathlib import Path
 
 from compiler.bytecode import Opcode
 from compiler.bytecode_vm import BytecodeVM
@@ -15,6 +19,34 @@ from haifa_scheme.compiler import SchemeCompiler, compile_source, run_source_vm
 from haifa_scheme.runtime import run_source
 from haifa_scheme.values import to_scheme_string
 from haifa_scheme.vm_runtime import SchemeVMRuntime
+
+
+def _run_source_vm_in_subprocess(source: str, *, timeout_seconds: float = 2.0) -> list[object]:
+    repo_root = Path(__file__).resolve().parents[2]
+    script = textwrap.dedent(
+        f"""
+        import json
+        from haifa_scheme.compiler import run_source_vm
+
+        source = {source!r}
+        print(json.dumps(run_source_vm(source)))
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "VM subprocess failed unexpectedly:\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
+        )
+    return json.loads(completed.stdout)
 
 
 def test_vm_backend_builtin_call_matches_interpreter():
@@ -88,6 +120,70 @@ def test_vm_backend_parent_environment_exposes_parent_globals():
     assert run_source_vm("x", environment=environment) == [7]
 
 
+def test_vm_backend_simple_lambda_call():
+    source = "((lambda (x) (* x x)) 9)"
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_function_define_shorthand_and_recursive_factorial():
+    source = """
+    (define (fact n)
+      (if (= n 0)
+          1
+          (* n (fact (- n 1)))))
+    (fact 5)
+    """
+
+    assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def test_vm_backend_closure_counter():
+    source = """
+    (define make-counter
+      (lambda ()
+        (let ((x 0))
+          (lambda ()
+            (set! x (+ x 1))
+            x))))
+    (define counter (make-counter))
+    (counter)
+    (counter)
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_set_mutation_is_visible_through_closure_capture():
+    source = """
+    (define bump
+      (let ((x 1))
+        (lambda ()
+          (set! x (+ x 2))
+          x)))
+    (bump)
+    (bump)
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_traceback_shows_function_name():
+    source = """
+    (define (explode n)
+      (/ 1 0))
+    (explode 3)
+    """
+
+    try:
+        run_source_vm(source)
+    except Exception as exc:
+        message = str(exc)
+        assert "explode" in message or "traceback" in message.lower()
+    else:  # pragma: no cover
+        raise AssertionError("expected runtime failure")
+
+
 def test_vm_backend_literal_values_match_interpreter():
     source = '42 "ok" #t #\\a #(1 2) \'()'
 
@@ -138,12 +234,12 @@ def test_visualizer_uses_scheme_source_debug_line():
     assert visualizer._current_source_line() == 2
 
 
-def test_scheme_compiler_rejects_phase_3_unsupported_forms():
+def test_scheme_compiler_rejects_phase_4_unsupported_forms():
     compiler = SchemeCompiler()
 
     try:
-        compiler.compile_source("(lambda (x) x)")
+        compiler.compile_source("(define-syntax m (syntax-rules () ((_ ) 1)))")
     except Exception as exc:
         assert "unsupported" in str(exc).lower() or "phase" in str(exc).lower()
     else:  # pragma: no cover
-        raise AssertionError("expected compile failure for lambda before phase 4")
+        raise AssertionError("expected compile failure for define-syntax in phase 4")
