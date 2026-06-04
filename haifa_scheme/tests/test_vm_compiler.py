@@ -7,7 +7,9 @@ import types
 from compiler.bytecode import Opcode
 from compiler.bytecode_vm import BytecodeVM
 
+from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
+from haifa_scheme.reader import Symbol
 from haifa_scheme.stdlib import create_global_environment
 from haifa_scheme.compiler import SchemeCompiler, compile_source, run_source_vm
 from haifa_scheme.runtime import run_source
@@ -69,6 +71,20 @@ def test_vm_backend_shared_environment_persists_globals_across_runs():
     environment = create_global_environment()
 
     assert run_source_vm("(define x 7)", environment=environment) == [None]
+    assert run_source_vm("x", environment=environment) == [7]
+
+
+def test_vm_backend_parent_environment_exposes_builtin_bindings():
+    environment = Environment(parent=create_global_environment())
+
+    assert run_source_vm("(+ 1 2)", environment=environment) == [3]
+
+
+def test_vm_backend_parent_environment_exposes_parent_globals():
+    parent = create_global_environment()
+    parent.define(Symbol("x"), 7)
+    environment = Environment(parent=parent)
+
     assert run_source_vm("x", environment=environment) == [7]
 
 

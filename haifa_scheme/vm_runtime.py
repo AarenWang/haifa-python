@@ -48,7 +48,7 @@ class SchemeVMRuntime:
 
     def to_vm_registers(self) -> dict[str, object]:
         registers: dict[str, object] = {}
-        for name, value in self.environment.values.items():
+        for name, value in self._flatten_environment_values().items():
             if isinstance(value, BuiltinFunction):
                 registers[mangle_global_name(str(name))] = self._get_builtin_adapter(value)
             else:
@@ -105,6 +105,18 @@ class SchemeVMRuntime:
             adapter = SchemeBuiltinAdapter(builtin, self)
             self._builtin_adapters[builtin.name] = adapter
         return adapter
+
+    def _flatten_environment_values(self) -> dict[Symbol, object]:
+        chain: list[Environment] = []
+        current: Environment | None = self.environment
+        while current is not None:
+            chain.append(current)
+            current = current.parent
+
+        flattened: dict[Symbol, object] = {}
+        for environment in reversed(chain):
+            flattened.update(environment.values)
+        return flattened
 
 
 __all__ = ["SchemeBuiltinAdapter", "SchemeVMRuntime", "mangle_global_name"]
