@@ -966,7 +966,7 @@ class BytecodeVM:
         if isinstance(result, tuple):
             return list(result)
         values = getattr(result, "values", None)
-        if values is not None:
+        if values is not None and not callable(values):
             return list(values)
         return [result]
 

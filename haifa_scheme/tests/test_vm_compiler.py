@@ -184,6 +184,108 @@ def test_vm_backend_traceback_shows_function_name():
         raise AssertionError("expected runtime failure")
 
 
+def test_vm_backend_only_false_is_falsey():
+    source = """
+    (if #f 1 2)
+    (if 0 1 2)
+    (if '() 1 2)
+    (if (if #f 10) 1 2)
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_and_short_circuits_and_returns_last_value():
+    source = '(and) (and 1 "ok") (and #f missing)'
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_or_short_circuits_and_returns_first_truthy_value():
+    source = '(or) (or #f 0 missing) (or "value" missing)'
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_cond_clauses_match_interpreter():
+    source = """
+    (cond ((= 1 2) 10)
+          ((= 2 2) 20)
+          (else 30))
+    (cond ((+ 1 2)))
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_case_matches_interpreter():
+    source = """
+    (case 2
+      ((1) 'one)
+      ((2 3) 'small)
+      (else 'other))
+    (case '(a b)
+      (((x y) (a b)) 'list-match)
+      (else 'other))
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_let_star_matches_interpreter():
+    source = """
+    (define x 10)
+    (let* ((x 1)
+           (y x))
+      y)
+    """
+
+    assert run_source_vm(source) == run_source(source)
+
+
+def test_vm_backend_named_let_factorial_matches_interpreter():
+    source = """
+    (let fact ((n 5)
+               (acc 1))
+      (if (= n 0)
+          acc
+          (fact (- n 1) (* acc n))))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def test_vm_backend_letrec_supports_recursive_function():
+    source = """
+    (letrec ((fact (lambda (n)
+                     (if (= n 0)
+                         1
+                         (* n (fact (- n 1)))))))
+      (fact 5))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
+def test_vm_backend_letrec_rejects_read_before_initialization():
+    try:
+        run_source_vm("(letrec ((x y) (y 1)) x)")
+    except SchemeRuntimeError as exc:
+        assert "read before initialization" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected letrec read-before-initialization failure")
+
+
+def test_vm_backend_do_matches_interpreter():
+    source = """
+    (do ((i 0 (+ i 1))
+         (total 0 (+ total i)))
+        ((= i 5) total))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == run_source(source)
+
+
 def test_vm_backend_literal_values_match_interpreter():
     source = '42 "ok" #t #\\a #(1 2) \'()'
 

@@ -17,6 +17,10 @@ def mangle_global_name(name: str) -> str:
     return f"G_SCHEME_{name}"
 
 
+def mangle_internal_name(name: str) -> str:
+    return f"G_INTERNAL_SCHEME_{name}"
+
+
 class SchemeBuiltinAdapter:
     """Adapts Scheme builtins to the VM's builtin calling convention."""
 
@@ -53,6 +57,9 @@ class SchemeVMRuntime:
                 registers[mangle_global_name(str(name))] = self._get_builtin_adapter(value)
             else:
                 registers[mangle_global_name(str(name))] = value
+        registers[mangle_internal_name("ensure_initialized")] = self._ensure_initialized
+        registers[mangle_internal_name("is_false")] = self._is_false
+        registers[mangle_internal_name("lookup_global")] = _LookupGlobalHelper(self)
         return registers
 
     def install_into_vm(self, vm: BytecodeVM) -> BytecodeVM:
@@ -96,6 +103,16 @@ class SchemeVMRuntime:
         ) or callable(value) or (isinstance(value, dict) and "label" in value)
 
     @staticmethod
+    def _ensure_initialized(value: Any, name: str) -> Any:
+        if value is _LETREC_UNINITIALIZED:
+            raise SchemeRuntimeError(f"letrec binding '{name}' read before initialization")
+        return value
+
+    @staticmethod
+    def _is_false(value: Any) -> bool:
+        return value is False
+
+    @staticmethod
     def _call_cc_unsupported(procedure: Any) -> Any:
         raise SchemeRuntimeError("call/cc is not supported by the Scheme VM backend yet")
 
@@ -119,4 +136,39 @@ class SchemeVMRuntime:
         return flattened
 
 
-__all__ = ["SchemeBuiltinAdapter", "SchemeVMRuntime", "mangle_global_name"]
+_LETREC_UNINITIALIZED = object()
+_MISSING = object()
+
+
+class _LookupGlobalHelper:
+    __lua_builtin__ = True
+
+    def __init__(self, runtime: SchemeVMRuntime) -> None:
+        self.runtime = runtime
+
+    def __call__(self, args: Sequence[object], vm: BytecodeVM) -> object:
+        if len(args) != 1:
+            raise SchemeRuntimeError(f"lookup_global expected 1 argument(s), got {len(args)}")
+        name = args[0]
+        if not isinstance(name, str):
+            raise SchemeRuntimeError("lookup_global expected a symbol name")
+        register_name = mangle_global_name(name)
+        value = vm.registers.get(register_name, _MISSING)
+        if value is not _MISSING:
+            return value
+        try:
+            return self.runtime.environment.lookup(Symbol(name))
+        except SchemeRuntimeError as exc:
+            raise SchemeRuntimeError(f"unbound symbol: {name}") from exc
+
+    def __repr__(self) -> str:
+        return "<SchemeLookupGlobalHelper>"
+
+
+__all__ = [
+    "SchemeBuiltinAdapter",
+    "SchemeVMRuntime",
+    "_LETREC_UNINITIALIZED",
+    "mangle_global_name",
+    "mangle_internal_name",
+]
