@@ -32,6 +32,20 @@ def test_vm_backend_begin_returns_last_expression():
     assert run_source_vm("(begin 1 2 3)") == [3]
 
 
+def test_vm_backend_apply_accepts_builtin_symbol_value():
+    assert run_source_vm("(apply + '(1 2 3))") == [6]
+
+
+def test_vm_backend_procedure_predicate_accepts_builtin_symbol_value():
+    assert run_source_vm("(procedure? +)") == [True]
+
+
+def test_vm_backend_map_accepts_builtin_symbol_value():
+    [value] = run_source_vm("(map + '(1 2) '(10 20))")
+
+    assert to_scheme_string(value) == "(11 22)"
+
+
 def test_vm_backend_literal_values_match_interpreter():
     source = '42 "ok" #t #\\a #(1 2) \'()'
 

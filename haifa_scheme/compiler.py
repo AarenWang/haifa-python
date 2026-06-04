@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
@@ -11,12 +10,8 @@ from haifa_scheme.values import EMPTY_LIST, Pair, Vector
 from haifa_scheme.vm_runtime import SchemeVMRuntime, mangle_global_name
 
 
-@dataclass(frozen=True)
 class SchemeCompileError(RuntimeError):
-    message: str
-
-    def __str__(self) -> str:
-        return self.message
+    pass
 
 
 class SchemeCompiler:
@@ -61,6 +56,9 @@ class SchemeCompiler:
         if isinstance(value, list):
             return self._compile_list_expression(expression)
         if isinstance(value, Symbol):
+            builtin_name = str(value)
+            if builtin_name in self._builtin_names:
+                return mangle_global_name(builtin_name)
             raise SchemeCompileError(
                 f"symbol lookup is unsupported in Phase 2 VM backend: {value}"
             )
