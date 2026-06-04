@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Iterable, Sequence
 
 from compiler.bytecode import Instruction, InstructionDebug, Opcode, SourceLocation
+from haifa_scheme.environment import Environment
+from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import DottedList, LocatedDatum, Symbol, parse_source_with_locations
 from haifa_scheme.values import EMPTY_LIST, Pair, Vector
 from haifa_scheme.vm_runtime import SchemeVMRuntime, mangle_global_name
@@ -15,13 +17,16 @@ class SchemeCompileError(RuntimeError):
 
 
 class SchemeCompiler:
-    def __init__(self) -> None:
+    def __init__(self, runtime: SchemeVMRuntime | None = None) -> None:
+        self.runtime = runtime or SchemeVMRuntime()
         self.instructions: list[Instruction] = []
         self.temp_counter = 0
         self.source_name = "<input>"
         self.function_name = "<chunk>"
-        self._builtin_names = {
-            name[len("G_SCHEME_") :] for name in SchemeVMRuntime().to_vm_registers().keys()
+        self._known_globals = {
+            name[len("G_SCHEME_") :]
+            for name in self.runtime.to_vm_registers().keys()
+            if name.startswith("G_SCHEME_")
         }
 
     def compile_source(self, source: str, *, source_name: str = "<input>") -> list[Instruction]:
@@ -56,12 +61,10 @@ class SchemeCompiler:
         if isinstance(value, list):
             return self._compile_list_expression(expression)
         if isinstance(value, Symbol):
-            builtin_name = str(value)
-            if builtin_name in self._builtin_names:
-                return mangle_global_name(builtin_name)
-            raise SchemeCompileError(
-                f"symbol lookup is unsupported in Phase 2 VM backend: {value}"
-            )
+            symbol_name = str(value)
+            if symbol_name in self._known_globals:
+                return mangle_global_name(symbol_name)
+            raise SchemeRuntimeError(f"unbound symbol: {value}")
         return self._emit_literal(self._literal_to_runtime_value(expression), expression)
 
     def _compile_list_expression(self, expression: LocatedDatum) -> str:
@@ -76,9 +79,13 @@ class SchemeCompiler:
                 return self._compile_quote(items, expression)
             if operator_value == "begin":
                 return self._compile_begin(items, expression)
-            if operator_value in {"define", "lambda", "set!", "if", "define-syntax"}:
+            if operator_value == "define":
+                return self._compile_define(items, expression)
+            if operator_value == "set!":
+                return self._compile_set(items, expression)
+            if operator_value in {"lambda", "if", "define-syntax"}:
                 raise SchemeCompileError(
-                    f"unsupported special form in Phase 2 VM backend: {operator_value}"
+                    f"unsupported special form in Phase 3 VM backend: {operator_value}"
                 )
         return self._compile_call(items, expression)
 
@@ -97,21 +104,39 @@ class SchemeCompiler:
             self._compile_expression(self._as_located(subexpression))
         return self._compile_expression(self._as_located(body[-1]))
 
+    def _compile_define(self, items: Sequence[object], expression: LocatedDatum) -> str:
+        if len(items) != 3:
+            raise SchemeCompileError("define expected a target and value")
+        target = self._unwrap(items[1])
+        if not isinstance(target, Symbol):
+            raise SchemeCompileError("Phase 3 only supports variable define")
+        value_reg = self._compile_expression(self._as_located(items[2]))
+        global_name = str(target)
+        self._known_globals.add(global_name)
+        self._emit(Opcode.MOV, [mangle_global_name(global_name), value_reg], expression)
+        return self._emit_literal(None, expression)
+
+    def _compile_set(self, items: Sequence[object], expression: LocatedDatum) -> str:
+        if len(items) != 3:
+            raise SchemeCompileError("set! expected a symbol and value")
+        target = self._unwrap(items[1])
+        if not isinstance(target, Symbol):
+            raise SchemeCompileError("set! expected a symbol")
+        target_name = str(target)
+        if target_name not in self._known_globals:
+            raise SchemeRuntimeError(f"unbound symbol: {target}")
+        value_reg = self._compile_expression(self._as_located(items[2]))
+        self._emit(Opcode.MOV, [mangle_global_name(target_name), value_reg], expression)
+        return self._emit_literal(None, expression)
+
     def _compile_call(self, items: Sequence[object], expression: LocatedDatum) -> str:
         operator = self._as_located(items[0])
-        operator_value = self._unwrap(operator)
-        if not isinstance(operator_value, Symbol):
-            raise SchemeCompileError("Phase 2 only supports builtin procedure calls")
-        builtin_name = str(operator_value)
-        if builtin_name not in self._builtin_names:
-            raise SchemeCompileError(
-                f"unsupported procedure call in Phase 2 VM backend: {builtin_name}"
-            )
+        callee_reg = self._compile_expression(operator)
 
         for argument in items[1:]:
             argument_reg = self._compile_expression(self._as_located(argument))
             self._emit(Opcode.PARAM, [argument_reg], self._as_located(argument))
-        self._emit(Opcode.CALL_VALUE, [mangle_global_name(builtin_name)], operator)
+        self._emit(Opcode.CALL_VALUE, [callee_reg], operator)
         result_reg = self._new_temp()
         self._emit(Opcode.RESULT, [result_reg], expression)
         return result_reg
@@ -190,14 +215,15 @@ def run_source_vm(
     source: str,
     runtime: SchemeVMRuntime | None = None,
     *,
+    environment: Environment | None = None,
     source_name: str = "<input>",
 ) -> list[object]:
     expressions = parse_source_with_locations(source, source_name=source_name)
     if not expressions:
         return []
 
-    runtime = runtime or SchemeVMRuntime()
-    compiler = SchemeCompiler()
+    runtime = runtime or SchemeVMRuntime(environment=environment)
+    compiler = SchemeCompiler(runtime)
     results: list[object] = []
     for expression in expressions:
         instructions = compiler.compile_expression_chunk(expression, source_name=source_name)

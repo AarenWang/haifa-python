@@ -51,6 +51,8 @@ class SchemeVMRuntime:
         for name, value in self.environment.values.items():
             if isinstance(value, BuiltinFunction):
                 registers[mangle_global_name(str(name))] = self._get_builtin_adapter(value)
+            else:
+                registers[mangle_global_name(str(name))] = value
         return registers
 
     def install_into_vm(self, vm: BytecodeVM) -> BytecodeVM:

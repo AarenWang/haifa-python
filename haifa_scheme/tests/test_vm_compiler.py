@@ -7,6 +7,8 @@ import types
 from compiler.bytecode import Opcode
 from compiler.bytecode_vm import BytecodeVM
 
+from haifa_scheme.errors import SchemeRuntimeError
+from haifa_scheme.stdlib import create_global_environment
 from haifa_scheme.compiler import SchemeCompiler, compile_source, run_source_vm
 from haifa_scheme.runtime import run_source
 from haifa_scheme.values import to_scheme_string
@@ -44,6 +46,30 @@ def test_vm_backend_map_accepts_builtin_symbol_value():
     [value] = run_source_vm("(map + '(1 2) '(10 20))")
 
     assert to_scheme_string(value) == "(11 22)"
+
+
+def test_vm_backend_global_define_and_lookup():
+    assert run_source_vm("(define x 1) x") == [None, 1]
+
+
+def test_vm_backend_global_set_updates_existing_binding():
+    assert run_source_vm("(define x 1) (set! x 2) x") == [None, None, 2]
+
+
+def test_vm_backend_unbound_symbol_error_is_clear():
+    try:
+        run_source_vm("missing")
+    except SchemeRuntimeError as exc:
+        assert "unbound symbol: missing" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected unbound symbol failure")
+
+
+def test_vm_backend_shared_environment_persists_globals_across_runs():
+    environment = create_global_environment()
+
+    assert run_source_vm("(define x 7)", environment=environment) == [None]
+    assert run_source_vm("x", environment=environment) == [7]
 
 
 def test_vm_backend_literal_values_match_interpreter():
@@ -96,12 +122,12 @@ def test_visualizer_uses_scheme_source_debug_line():
     assert visualizer._current_source_line() == 2
 
 
-def test_scheme_compiler_rejects_unsupported_forms_in_phase_2():
+def test_scheme_compiler_rejects_phase_3_unsupported_forms():
     compiler = SchemeCompiler()
 
     try:
-        compiler.compile_source("(define x 1)")
+        compiler.compile_source("(lambda (x) x)")
     except Exception as exc:
-        assert "unsupported" in str(exc).lower() or "phase 2" in str(exc).lower()
+        assert "unsupported" in str(exc).lower() or "phase" in str(exc).lower()
     else:  # pragma: no cover
-        raise AssertionError("expected compile failure for define in phase 2")
+        raise AssertionError("expected compile failure for lambda before phase 4")
