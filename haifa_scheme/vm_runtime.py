@@ -6,7 +6,8 @@ import dataclasses
 import io
 from typing import Any, Sequence
 
-from compiler.bytecode_vm import BytecodeVM
+from compiler.bytecode import Opcode
+from compiler.bytecode_vm import BytecodeVM, VMContinuationSnapshot
 from haifa_scheme.environment import Environment
 from haifa_scheme.errors import SchemeRuntimeError
 from haifa_scheme.reader import Symbol
@@ -41,25 +42,28 @@ class SchemeBuiltinAdapter:
 class _ContinuationJump(Exception):
     __vm_control_flow__ = True
 
-    def __init__(self, value: Any, token: object) -> None:
+    def __init__(self, vm: BytecodeVM, snapshot: VMContinuationSnapshot, value: Any) -> None:
         super().__init__()
-        self.value = value
-        self.token = token
+        self.__vm_resume_target__ = vm
+        self.__vm_resume_snapshot__ = snapshot.clone()
+        self.__vm_resume_values__ = [value]
 
 
 @dataclasses.dataclass
 class _VMEscapeContinuation:
-    token: object
-    active: bool = True
+    vm: BytecodeVM
+    snapshot: VMContinuationSnapshot
 
-    def __call__(self, *args: object) -> object:
+    __lua_builtin__ = True
+
+    def __call__(self, args: Sequence[object], vm: BytecodeVM) -> object:
         if len(args) != 1:
             raise SchemeRuntimeError(
                 f"continuation expected 1 argument(s), got {len(args)}"
             )
-        if not self.active:
-            raise SchemeRuntimeError("continuation has escaped")
-        raise _ContinuationJump(args[0], self.token)
+        if vm is not self.vm:
+            raise SchemeRuntimeError("continuation belongs to a different VM execution")
+        raise _ContinuationJump(self.vm, self.snapshot, args[0])
 
 
 class SchemeVMRuntime:
@@ -140,16 +144,15 @@ class SchemeVMRuntime:
 
     @staticmethod
     def _call_with_current_continuation(vm: BytecodeVM, procedure: Any) -> Any:
-        token = object()
-        continuation = _VMEscapeContinuation(token)
-        try:
-            return SchemeVMRuntime._apply_func_static(vm, procedure, [continuation])
-        except _ContinuationJump as jump:
-            if jump.token is token:
-                return jump.value
-            raise
-        finally:
-            continuation.active = False
+        opcode = vm.instructions[vm.pc].opcode if 0 <= vm.pc < len(vm.instructions) else None
+        if opcode == Opcode.TAIL_CALL_VALUE:
+            snapshot = VMContinuationSnapshot(vm.capture_execution_state(), "tail_call")
+        else:
+            snapshot = VMContinuationSnapshot(
+                vm.capture_execution_state(), "call", resume_pc=vm.pc + 1
+            )
+        continuation = _VMEscapeContinuation(vm, snapshot)
+        return SchemeVMRuntime._apply_func_static(vm, procedure, [continuation])
 
     @staticmethod
     def _apply_func_static(vm: BytecodeVM, procedure: Any, args: Sequence[Any]) -> Any:

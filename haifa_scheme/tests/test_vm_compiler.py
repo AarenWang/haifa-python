@@ -318,22 +318,59 @@ def test_vm_backend_continuation_escapes_through_for_each_callback():
     assert run_source_vm(source) == [None, 1, 1]
 
 
-def test_vm_backend_saved_continuation_cannot_be_reentered():
+def test_vm_backend_saved_continuation_can_be_reentered_multiple_times():
     source = """
-    (define saved #f)
-    (call/cc
-     (lambda (k)
-       (set! saved k)
-       1))
-    (saved 2)
+    (begin
+      (define saved #f)
+      (define total 0)
+      (define x
+        (call/cc
+         (lambda (k)
+           (set! saved k)
+           1)))
+      (set! total (+ total x))
+      (if (< total 6)
+          (saved (+ x 1))
+          (+ (* x 10) total)))
     """
 
-    try:
-        run_source_vm(source)
-    except SchemeVMRuntimeError as exc:
-        assert "continuation has escaped" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("expected continuation reentry failure")
+    assert _run_source_vm_in_subprocess(source) == [36]
+
+
+def test_vm_backend_continuation_preserves_global_mutations_across_reentry():
+    source = """
+    (begin
+      (define saved #f)
+      (define counter 0)
+      (call/cc
+       (lambda (k)
+         (set! saved k)
+         0))
+      (set! counter (+ counter 1))
+      (if (< counter 3)
+          (saved counter)
+          counter))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == [3]
+
+
+def test_vm_backend_tail_position_continuation_can_be_resumed_multiple_times():
+    source = """
+    (begin
+      (define saved #f)
+      (define (capture value)
+        (call/cc
+         (lambda (k)
+           (set! saved k)
+           value)))
+      (define total (capture 1))
+      (if (< total 3)
+          (saved (+ total 1))
+          total))
+    """
+
+    assert _run_source_vm_in_subprocess(source) == [3]
 
 
 def test_vm_backend_closure_counter():

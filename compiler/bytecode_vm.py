@@ -52,6 +52,73 @@ class CallFrame:
     pending_params: List[object]
     caller_debug: InstructionDebug | None
 
+
+@dataclass
+class VMExecutionSnapshot:
+    pc: int
+    registers: Dict[str, object]
+    stack: List[object]
+    arrays: Dict[str, List[object]]
+    call_stack: List[CallFrame]
+    param_stack: List[object]
+    pending_params: List[object]
+    return_value: object
+    emit_stack: List[object]
+    try_stack: List[Tuple[str, str, int, Optional[str]]]
+    current_upvalues: List[object]
+    last_return: List[object]
+    yield_values: List[object]
+    awaiting_resume: bool
+    current_coroutine: object
+    main_coroutine: object
+    non_yieldable_depth: int
+
+    def clone(self) -> "VMExecutionSnapshot":
+        return VMExecutionSnapshot(
+            pc=self.pc,
+            registers=dict(self.registers),
+            stack=list(self.stack),
+            arrays={name: list(values) for name, values in self.arrays.items()},
+            call_stack=[_copy_call_frame(frame) for frame in self.call_stack],
+            param_stack=list(self.param_stack),
+            pending_params=list(self.pending_params),
+            return_value=self.return_value,
+            emit_stack=list(self.emit_stack),
+            try_stack=list(self.try_stack),
+            current_upvalues=list(self.current_upvalues),
+            last_return=list(self.last_return),
+            yield_values=list(self.yield_values),
+            awaiting_resume=self.awaiting_resume,
+            current_coroutine=self.current_coroutine,
+            main_coroutine=self.main_coroutine,
+            non_yieldable_depth=self.non_yieldable_depth,
+        )
+
+
+@dataclass
+class VMContinuationSnapshot:
+    state: VMExecutionSnapshot
+    resume_mode: str
+    resume_pc: int | None = None
+
+    def clone(self) -> "VMContinuationSnapshot":
+        return VMContinuationSnapshot(
+            state=self.state.clone(),
+            resume_mode=self.resume_mode,
+            resume_pc=self.resume_pc,
+        )
+
+
+def _copy_call_frame(frame: CallFrame) -> CallFrame:
+    return CallFrame(
+        return_pc=frame.return_pc,
+        param_stack=list(frame.param_stack),
+        registers=dict(frame.registers),
+        upvalues=list(frame.upvalues),
+        pending_params=list(frame.pending_params),
+        caller_debug=frame.caller_debug,
+    )
+
 class BytecodeVM:
     def __init__(self, instructions):
         self.instructions = instructions
@@ -244,6 +311,75 @@ class BytecodeVM:
             output=list(self.output),
         )
 
+    def capture_execution_state(self) -> VMExecutionSnapshot:
+        return VMExecutionSnapshot(
+            pc=self.pc,
+            registers=dict(self.registers),
+            stack=list(self.stack),
+            arrays={name: list(values) for name, values in self.arrays.items()},
+            call_stack=[_copy_call_frame(frame) for frame in self.call_stack],
+            param_stack=list(self.param_stack),
+            pending_params=list(self.pending_params),
+            return_value=self.return_value,
+            emit_stack=list(self.emit_stack),
+            try_stack=list(self.try_stack),
+            current_upvalues=list(self.current_upvalues),
+            last_return=list(self.last_return),
+            yield_values=list(self.yield_values),
+            awaiting_resume=self.awaiting_resume,
+            current_coroutine=self.current_coroutine,
+            main_coroutine=self.main_coroutine,
+            non_yieldable_depth=self._non_yieldable_depth,
+        )
+
+    def restore_execution_state(self, snapshot: VMExecutionSnapshot) -> None:
+        current_globals = {
+            name: value for name, value in self.registers.items() if name.startswith("G_SCHEME_")
+        }
+        self.pc = snapshot.pc
+        self.registers = dict(snapshot.registers)
+        self.registers.update(current_globals)
+        self.stack = list(snapshot.stack)
+        self.arrays = {name: list(values) for name, values in snapshot.arrays.items()}
+        self.call_stack = [_copy_call_frame(frame) for frame in snapshot.call_stack]
+        for frame in self.call_stack:
+            frame.registers.update(current_globals)
+        self.param_stack = list(snapshot.param_stack)
+        self.pending_params = list(snapshot.pending_params)
+        self.return_value = snapshot.return_value
+        self.emit_stack = list(snapshot.emit_stack)
+        self.try_stack = list(snapshot.try_stack)
+        self.current_upvalues = list(snapshot.current_upvalues)
+        self.last_return = list(snapshot.last_return)
+        self.yield_values = list(snapshot.yield_values)
+        self.awaiting_resume = snapshot.awaiting_resume
+        self.current_coroutine = snapshot.current_coroutine
+        self.main_coroutine = snapshot.main_coroutine
+        self._non_yieldable_depth = snapshot.non_yieldable_depth
+
+    def resume_continuation(self, snapshot: VMContinuationSnapshot, values: Sequence[object]) -> None:
+        self.restore_execution_state(snapshot.state)
+        resumed_values = list(values)
+        if snapshot.resume_mode == "call":
+            self.last_return = resumed_values
+            self.return_value = resumed_values[0] if resumed_values else None
+            self.awaiting_resume = False
+            self.pc = snapshot.resume_pc if snapshot.resume_pc is not None else self.pc + 1
+            return
+        if snapshot.resume_mode == "tail_call":
+            self.awaiting_resume = False
+            self._return_with(resumed_values)
+            return
+        raise RuntimeError(f"unsupported continuation resume mode: {snapshot.resume_mode}")
+
+    def _handle_vm_control_flow(self, exc: Exception) -> bool:
+        snapshot = getattr(exc, "__vm_resume_snapshot__", None)
+        values = getattr(exc, "__vm_resume_values__", None)
+        if snapshot is None or values is None:
+            return False
+        self.resume_continuation(snapshot, values)
+        return True
+
     def _capture_traceback(self) -> List[TraceFrame]:
         frames: List[TraceFrame] = []
         coroutine_id = getattr(self.current_coroutine, "coroutine_id", None)
@@ -373,7 +509,12 @@ class BytecodeVM:
                 print(f"  REGISTERS: {self.registers}")
                 print(f"  OUTPUT: {self.output}\n")
 
-            status = self.step()
+            try:
+                status = self.step()
+            except Exception as exc:
+                if self._handle_vm_control_flow(exc):
+                    continue
+                raise
             if status == "halt":
                 self.last_event = "halt"
                 break
