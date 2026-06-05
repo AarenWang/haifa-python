@@ -25,6 +25,25 @@ def run_armv9_lowered(instructions, *, stack_size=128):
     return result, vm, output
 
 
+def run_armv9_lowered_optimized(instructions, *, stack_size=128):
+    result = lower_to_armv9(instructions, optimize_registers=True)
+    vm = HaifaArmV9VM(
+        result.instructions,
+        stack_size=stack_size,
+        const_pool=result.const_pool,
+    )
+    output = vm.run()
+    return result, vm, output
+
+
+def count_memory_ops(result):
+    return sum(
+        1
+        for instruction in result.instructions
+        if instruction.opcode in {ArmV9Opcode.LDR, ArmV9Opcode.STR}
+    )
+
+
 def test_lowering_arithmetic_print_matches_bytecode_vm():
     instructions = [
         Instruction(Opcode.LOAD_IMM, ["a", 2]),
@@ -40,6 +59,7 @@ def test_lowering_arithmetic_print_matches_bytecode_vm():
     assert bytecode_output == [5]
     assert arm_output == bytecode_output
     assert result.stack_slots == {"a": -1, "b": -2, "sum": -3}
+    assert result.allocation_report.enabled is False
     assert [instruction.opcode for instruction in result.instructions][-2:] == [
         ArmV9Opcode.CALL_RUNTIME,
         ArmV9Opcode.HALT,
@@ -239,3 +259,68 @@ def test_lowering_lua_compiled_table_field_matches_bytecode_register():
 def test_lowering_rejects_unsupported_opcodes():
     with pytest.raises(NotImplementedError, match="DIV"):
         lower_to_armv9([Instruction(Opcode.DIV, ["out", "a", "b"])])
+
+
+def test_optimized_register_allocation_preserves_output_and_reduces_memory_ops():
+    instructions = [
+        Instruction(Opcode.LOAD_IMM, ["a", 2]),
+        Instruction(Opcode.LOAD_IMM, ["b", 3]),
+        Instruction(Opcode.ADD, ["sum", "a", "b"]),
+        Instruction(Opcode.MUL, ["scaled", "sum", "b"]),
+        Instruction(Opcode.PRINT, ["scaled"]),
+        Instruction(Opcode.HALT, []),
+    ]
+
+    _, bytecode_output = run_bytecode_vm(instructions)
+    naive_result, _, naive_output = run_armv9_lowered(instructions)
+    optimized_result, _, optimized_output = run_armv9_lowered_optimized(instructions)
+
+    assert bytecode_output == [15]
+    assert naive_output == bytecode_output
+    assert optimized_output == bytecode_output
+    assert count_memory_ops(optimized_result) < count_memory_ops(naive_result)
+    assert optimized_result.allocation_report.enabled is True
+    assert optimized_result.allocation_report.loads_elided > 0
+    assert optimized_result.allocation_report.stores_elided > 0
+
+
+def test_optimized_register_allocation_flushes_at_branch_boundaries():
+    instructions = [
+        Instruction(Opcode.LOAD_IMM, ["a", 4]),
+        Instruction(Opcode.LOAD_IMM, ["b", 4]),
+        Instruction(Opcode.EQ, ["cond", "a", "b"]),
+        Instruction(Opcode.JZ, ["cond", "else"]),
+        Instruction(Opcode.ADD, ["out", "a", "b"]),
+        Instruction(Opcode.JMP, ["done"]),
+        Instruction(Opcode.LABEL, ["else"]),
+        Instruction(Opcode.LOAD_IMM, ["out", 0]),
+        Instruction(Opcode.LABEL, ["done"]),
+        Instruction(Opcode.PRINT, ["out"]),
+        Instruction(Opcode.HALT, []),
+    ]
+
+    _, bytecode_output = run_bytecode_vm(instructions)
+    optimized_result, _, optimized_output = run_armv9_lowered_optimized(instructions)
+
+    assert optimized_output == bytecode_output
+    assert optimized_result.allocation_report.flushes >= 1
+    assert "branch" in optimized_result.allocation_report.readable_text()
+
+
+def test_register_allocation_report_is_readable_for_teaching():
+    instructions = [
+        Instruction(Opcode.LOAD_IMM, ["a", 1]),
+        Instruction(Opcode.LOAD_IMM, ["b", 2]),
+        Instruction(Opcode.ADD, ["out", "a", "b"]),
+        Instruction(Opcode.PRINT, ["out"]),
+        Instruction(Opcode.HALT, []),
+    ]
+
+    result, _, output = run_armv9_lowered_optimized(instructions)
+    text = result.allocation_report.readable_text()
+
+    assert output == [3]
+    assert "register allocation: basic-block-register-cache" in text
+    assert "physical registers: X12, X13, X14, X15" in text
+    assert "loads elided:" in text
+    assert "stores elided:" in text
