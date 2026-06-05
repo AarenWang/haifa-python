@@ -58,12 +58,31 @@ class ArmV9HeapRef:
 
 
 @dataclass
+class ArmV9Cell:
+    value: Any
+
+
+@dataclass(frozen=True)
+class ArmV9Closure:
+    label: str
+    upvalues: tuple[ArmV9HeapRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class ArmV9MultiReturn:
+    values: tuple[Any, ...]
+
+
+@dataclass
 class ArmV9CallFrame:
     label: str
     return_pc: int
     caller_fp: int
     caller_sp: int
     caller_lr: Any
+    caller_upvalues: list[ArmV9HeapRef] = field(default_factory=list)
+    caller_param_stack: list[Any] = field(default_factory=list)
+    caller_pending_params: list[Any] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +123,11 @@ class HaifaArmV9VM:
         self.halted = False
         self.output: list[Any] = []
         self.frames: list[ArmV9CallFrame] = []
+        self.current_upvalues: list[ArmV9HeapRef] = []
+        self.param_stack: list[Any] = []
+        self.pending_params: list[Any] = []
+        self.last_return: list[Any] = []
+        self.return_value: Any = None
         self._next_heap_id = 1
         self.regs["SP"] = stack_size
         self.regs["FP"] = stack_size
@@ -131,6 +155,23 @@ class HaifaArmV9VM:
             ArmV9Opcode.NEW_TABLE: self._op_NEW_TABLE,
             ArmV9Opcode.TABLE_GET: self._op_TABLE_GET,
             ArmV9Opcode.TABLE_SET: self._op_TABLE_SET,
+            ArmV9Opcode.NEW_CELL: self._op_NEW_CELL,
+            ArmV9Opcode.NEW_CLOSURE: self._op_NEW_CLOSURE,
+            ArmV9Opcode.CELL_GET: self._op_CELL_GET,
+            ArmV9Opcode.CELL_SET: self._op_CELL_SET,
+            ArmV9Opcode.BIND_UPVALUE: self._op_BIND_UPVALUE,
+            ArmV9Opcode.PARAM: self._op_PARAM,
+            ArmV9Opcode.PARAM_EXPAND: self._op_PARAM_EXPAND,
+            ArmV9Opcode.ARG: self._op_ARG,
+            ArmV9Opcode.VARARG: self._op_VARARG,
+            ArmV9Opcode.VARARG_FIRST: self._op_VARARG_FIRST,
+            ArmV9Opcode.LIST_GET: self._op_LIST_GET,
+            ArmV9Opcode.CALL_VALUE: self._op_CALL_VALUE,
+            ArmV9Opcode.RETURN_VALUE: self._op_RETURN_VALUE,
+            ArmV9Opcode.RETURN_MULTI: self._op_RETURN_MULTI,
+            ArmV9Opcode.RESULT: self._op_RESULT,
+            ArmV9Opcode.RESULT_MULTI: self._op_RESULT_MULTI,
+            ArmV9Opcode.RESULT_LIST: self._op_RESULT_LIST,
             ArmV9Opcode.CALL_RUNTIME: self._op_CALL_RUNTIME,
             ArmV9Opcode.HALT: self._op_HALT,
         }
@@ -181,6 +222,11 @@ class HaifaArmV9VM:
             "nzcv": self.nzcv.to_dict(),
             "memory": self._memory_snapshot(),
             "frames": [frame.to_dict() for frame in self.frames],
+            "upvalues": [self._snapshot_value(value) for value in self.current_upvalues],
+            "param_stack": [self._snapshot_value(value) for value in self.param_stack],
+            "pending_params": [self._snapshot_value(value) for value in self.pending_params],
+            "last_return": [self._snapshot_value(value) for value in self.last_return],
+            "return_value": self._snapshot_value(self.return_value),
             "output": [self._snapshot_value(value) for value in self.output],
         }
 
@@ -287,6 +333,7 @@ class HaifaArmV9VM:
                 caller_fp=caller_fp,
                 caller_sp=caller_sp,
                 caller_lr=caller_lr,
+                caller_upvalues=list(self.current_upvalues),
             )
         )
         self._branch_to(str(label))
@@ -295,11 +342,7 @@ class HaifaArmV9VM:
         if not self.frames:
             self.halted = True
             return
-        frame = self.frames.pop()
-        self.regs["FP"] = frame.caller_fp
-        self.regs["SP"] = frame.caller_sp
-        self.regs["LR"] = frame.caller_lr
-        self.pc = frame.return_pc
+        self._restore_call_frame()
 
     def _op_NEW_TABLE(self, instruction: ArmV9Instruction) -> None:
         (dst,) = self._expect_args(instruction, 1)
@@ -316,12 +359,122 @@ class HaifaArmV9VM:
         table = self._table_from_ref(self.read_reg(str(table_reg)))
         table[self.read_reg(str(key_reg))] = self.read_reg(str(value_reg))
 
+    def _op_NEW_CELL(self, instruction: ArmV9Instruction) -> None:
+        dst, src = self._expect_args(instruction, 2)
+        ref = self._allocate_heap_object(ArmV9Cell(self.read_reg(str(src))))
+        self.write_reg(str(dst), ref)
+
+    def _op_NEW_CLOSURE(self, instruction: ArmV9Instruction) -> None:
+        if len(instruction.args) < 2:
+            raise ArmV9RuntimeError("NEW_CLOSURE requires destination and label")
+        dst = str(instruction.args[0])
+        label = str(instruction.args[1])
+        upvalues: list[ArmV9HeapRef] = []
+        for cell_reg in instruction.args[2:]:
+            cell_ref = self.read_reg(str(cell_reg))
+            self._cell_from_ref(cell_ref)
+            upvalues.append(cell_ref)
+        ref = self._allocate_heap_object(ArmV9Closure(label=label, upvalues=tuple(upvalues)))
+        self.write_reg(dst, ref)
+
+    def _op_CELL_GET(self, instruction: ArmV9Instruction) -> None:
+        dst, cell_reg = self._expect_args(instruction, 2)
+        cell = self._cell_from_ref(self.read_reg(str(cell_reg)))
+        self.write_reg(str(dst), cell.value)
+
+    def _op_CELL_SET(self, instruction: ArmV9Instruction) -> None:
+        cell_reg, src = self._expect_args(instruction, 2)
+        cell = self._cell_from_ref(self.read_reg(str(cell_reg)))
+        cell.value = self.read_reg(str(src))
+
+    def _op_BIND_UPVALUE(self, instruction: ArmV9Instruction) -> None:
+        dst, index_arg = self._expect_args(instruction, 2)
+        index = self._as_int(index_arg, "upvalue index")
+        if index < 0 or index >= len(self.current_upvalues):
+            raise ArmV9RuntimeError(f"BIND_UPVALUE index out of range: {index}")
+        self.write_reg(str(dst), self.current_upvalues[index])
+
+    def _op_PARAM(self, instruction: ArmV9Instruction) -> None:
+        (src,) = self._expect_args(instruction, 1)
+        self.pending_params.append(self.read_reg(str(src)))
+
+    def _op_PARAM_EXPAND(self, instruction: ArmV9Instruction) -> None:
+        (src,) = self._expect_args(instruction, 1)
+        value = self.read_reg(str(src))
+        if isinstance(value, ArmV9HeapRef):
+            heap_value = self.memory.heap.get(value.object_id)
+            if isinstance(heap_value, ArmV9MultiReturn):
+                self.pending_params.extend(heap_value.values)
+                return
+        if isinstance(value, list):
+            self.pending_params.extend(value)
+            return
+        self.pending_params.append(value)
+
+    def _op_ARG(self, instruction: ArmV9Instruction) -> None:
+        (dst,) = self._expect_args(instruction, 1)
+        value = self.param_stack.pop(0) if self.param_stack else None
+        self.write_reg(str(dst), value)
+
+    def _op_VARARG(self, instruction: ArmV9Instruction) -> None:
+        (dst,) = self._expect_args(instruction, 1)
+        self.write_reg(str(dst), list(self.param_stack))
+
+    def _op_VARARG_FIRST(self, instruction: ArmV9Instruction) -> None:
+        dst, src = self._expect_args(instruction, 2)
+        value = self.read_reg(str(src))
+        first = value[0] if isinstance(value, list) and value else None
+        self.write_reg(str(dst), first)
+
+    def _op_LIST_GET(self, instruction: ArmV9Instruction) -> None:
+        dst, src, index_reg = self._expect_args(instruction, 3)
+        values = self.read_reg(str(src))
+        index = self._as_int(self.read_reg(str(index_reg)), str(index_reg))
+        if isinstance(values, list) and 0 <= index < len(values):
+            self.write_reg(str(dst), values[index])
+            return
+        self.write_reg(str(dst), None)
+
+    def _op_CALL_VALUE(self, instruction: ArmV9Instruction) -> None:
+        (callee_reg,) = self._expect_args(instruction, 1)
+        closure = self._closure_from_ref(self.read_reg(str(callee_reg)))
+        self._enter_call_frame(closure.label, closure.upvalues)
+
+    def _op_RETURN_VALUE(self, instruction: ArmV9Instruction) -> None:
+        (src,) = self._expect_args(instruction, 1)
+        self._return_with([self.read_reg(str(src))])
+
+    def _op_RETURN_MULTI(self, instruction: ArmV9Instruction) -> None:
+        values: list[Any] = []
+        for src in instruction.args:
+            value = self.read_reg(str(src))
+            if isinstance(value, list):
+                values.extend(value)
+            else:
+                values.append(value)
+        ref = self._allocate_heap_object(ArmV9MultiReturn(tuple(values)))
+        self.write_reg("X0", ref)
+        self._return_with(values, return_register_value=ref)
+
+    def _op_RESULT(self, instruction: ArmV9Instruction) -> None:
+        (dst,) = self._expect_args(instruction, 1)
+        self.write_reg(str(dst), self.last_return[0] if self.last_return else None)
+
+    def _op_RESULT_MULTI(self, instruction: ArmV9Instruction) -> None:
+        for index, dst in enumerate(instruction.args):
+            value = self.last_return[index] if index < len(self.last_return) else None
+            self.write_reg(str(dst), value)
+
+    def _op_RESULT_LIST(self, instruction: ArmV9Instruction) -> None:
+        (dst,) = self._expect_args(instruction, 1)
+        self.write_reg(str(dst), list(self.last_return))
+
     def _op_CALL_RUNTIME(self, instruction: ArmV9Instruction) -> None:
         name, *args = instruction.args
         if name == "print":
             if len(args) != 1:
                 raise ArmV9RuntimeError("CALL_RUNTIME print expects one register")
-            self.output.append(self.read_reg(str(args[0])))
+            self.output.append(self._runtime_value(self.read_reg(str(args[0]))))
             return
         raise ArmV9RuntimeError(f"unknown runtime call: {name}")
 
@@ -332,6 +485,71 @@ class HaifaArmV9VM:
         if label not in self.labels:
             raise ArmV9RuntimeError(f"unknown label: {label}")
         self.pc = self.labels[label]
+
+    def _enter_call_frame(
+        self,
+        label: str,
+        upvalues: Sequence[ArmV9HeapRef] = (),
+    ) -> None:
+        args_to_pass = list(self.pending_params)
+        self.pending_params.clear()
+        return_pc = self.pc + 1
+        caller_fp = self._as_int(self.read_reg("FP"), "FP")
+        caller_sp = self._as_int(self.read_reg("SP"), "SP")
+        caller_lr = self.read_reg("LR")
+        frame_sp = caller_sp - self.FRAME_STRIDE
+        if frame_sp < 0:
+            raise ArmV9RuntimeError("stack overflow while creating call frame")
+        self.memory.stack[frame_sp] = caller_fp
+        self.memory.stack[frame_sp + 1] = return_pc
+        self.regs["FP"] = frame_sp
+        self.regs["SP"] = frame_sp
+        self.regs["LR"] = return_pc
+        self.frames.append(
+            ArmV9CallFrame(
+                label=label,
+                return_pc=return_pc,
+                caller_fp=caller_fp,
+                caller_sp=caller_sp,
+                caller_lr=caller_lr,
+                caller_upvalues=list(self.current_upvalues),
+                caller_param_stack=list(self.param_stack),
+                caller_pending_params=list(self.pending_params),
+            )
+        )
+        self.current_upvalues = list(upvalues)
+        self.param_stack = args_to_pass
+        self.pending_params = []
+        self._branch_to(label)
+
+    def _restore_call_frame(self) -> None:
+        frame = self.frames.pop()
+        self.regs["FP"] = frame.caller_fp
+        self.regs["SP"] = frame.caller_sp
+        self.regs["LR"] = frame.caller_lr
+        self.current_upvalues = list(frame.caller_upvalues)
+        self.param_stack = list(frame.caller_param_stack)
+        self.pending_params = list(frame.caller_pending_params)
+        self.pc = frame.return_pc
+
+    def _return_with(
+        self,
+        values: Sequence[Any],
+        *,
+        return_register_value: Any | None = None,
+    ) -> None:
+        self.last_return = list(values)
+        self.return_value = self.last_return[0] if self.last_return else None
+        self.write_reg(
+            "X0",
+            return_register_value
+            if return_register_value is not None
+            else self.return_value,
+        )
+        if self.frames:
+            self._restore_call_frame()
+            return
+        self.halted = True
 
     def _condition_holds(self, condition: str) -> bool:
         normalized = condition.upper()
@@ -391,6 +609,37 @@ class HaifaArmV9VM:
             raise ArmV9RuntimeError(f"heap object is not a table: {value}")
         return table
 
+    def _cell_from_ref(self, value: Any) -> ArmV9Cell:
+        if not isinstance(value, ArmV9HeapRef):
+            raise ArmV9RuntimeError(f"expected heap cell reference, got {value!r}")
+        cell = self.memory.heap.get(value.object_id)
+        if not isinstance(cell, ArmV9Cell):
+            raise ArmV9RuntimeError(f"heap object is not a cell: {value}")
+        return cell
+
+    def _closure_from_ref(self, value: Any) -> ArmV9Closure:
+        if not isinstance(value, ArmV9HeapRef):
+            raise ArmV9RuntimeError(f"expected heap closure reference, got {value!r}")
+        closure = self.memory.heap.get(value.object_id)
+        if not isinstance(closure, ArmV9Closure):
+            raise ArmV9RuntimeError(f"heap object is not a closure: {value}")
+        return closure
+
+    def _multi_return_from_ref(self, value: Any) -> ArmV9MultiReturn:
+        if not isinstance(value, ArmV9HeapRef):
+            raise ArmV9RuntimeError(f"expected heap multi-return reference, got {value!r}")
+        multi_return = self.memory.heap.get(value.object_id)
+        if not isinstance(multi_return, ArmV9MultiReturn):
+            raise ArmV9RuntimeError(f"heap object is not a multi-return: {value}")
+        return multi_return
+
+    def _runtime_value(self, value: Any) -> Any:
+        if isinstance(value, ArmV9HeapRef):
+            heap_value = self.memory.heap.get(value.object_id)
+            if isinstance(heap_value, ArmV9MultiReturn):
+                return list(heap_value.values)
+        return value
+
     def _memory_snapshot(self) -> dict[str, Any]:
         return {
             "const_pool": [self._snapshot_value(value) for value in self.memory.const_pool],
@@ -408,6 +657,22 @@ class HaifaArmV9VM:
     def _snapshot_value(self, value: Any) -> Any:
         if isinstance(value, ArmV9HeapRef):
             return str(value)
+        if isinstance(value, ArmV9Cell):
+            return {
+                "type": "cell",
+                "value": self._snapshot_value(value.value),
+            }
+        if isinstance(value, ArmV9Closure):
+            return {
+                "type": "closure",
+                "label": value.label,
+                "upvalues": [self._snapshot_value(item) for item in value.upvalues],
+            }
+        if isinstance(value, ArmV9MultiReturn):
+            return {
+                "type": "multi_return",
+                "values": [self._snapshot_value(item) for item in value.values],
+            }
         if isinstance(value, dict):
             return {
                 self._snapshot_value(key): self._snapshot_value(item)

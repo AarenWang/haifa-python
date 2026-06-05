@@ -185,6 +185,101 @@ def test_armv9_vm_allocates_heap_tables_and_reads_fields():
     assert snapshot["memory"]["heap"] == {1: {"answer": 42}}
 
 
+def test_armv9_vm_supports_heap_cells_and_closure_upvalues():
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", 1),
+        armv9_inst(ArmV9Opcode.NEW_CELL, "X1", "X0"),
+        armv9_inst(ArmV9Opcode.NEW_CLOSURE, "X2", "inc", "X1"),
+        armv9_inst(ArmV9Opcode.CALL_VALUE, "X2"),
+        armv9_inst(ArmV9Opcode.RESULT, "X3"),
+        armv9_inst(ArmV9Opcode.CALL_VALUE, "X2"),
+        armv9_inst(ArmV9Opcode.RESULT, "X4"),
+        armv9_inst(ArmV9Opcode.HALT),
+        armv9_inst(ArmV9Opcode.LABEL, "inc"),
+        armv9_inst(ArmV9Opcode.BIND_UPVALUE, "X5", 0),
+        armv9_inst(ArmV9Opcode.CELL_GET, "X6", "X5"),
+        armv9_inst(ArmV9Opcode.MOVI, "X7", 1),
+        armv9_inst(ArmV9Opcode.ADD, "X6", "X6", "X7"),
+        armv9_inst(ArmV9Opcode.CELL_SET, "X5", "X6"),
+        armv9_inst(ArmV9Opcode.RETURN_VALUE, "X6"),
+    ]
+
+    vm = HaifaArmV9VM(program, stack_size=128)
+    vm.run()
+    snapshot = vm.snapshot()
+
+    assert vm.read_reg("X3") == 2
+    assert vm.read_reg("X4") == 3
+    assert snapshot["memory"]["heap"][1] == {"type": "cell", "value": 3}
+    assert snapshot["memory"]["heap"][2] == {
+        "type": "closure",
+        "label": "inc",
+        "upvalues": ["heap:1"],
+    }
+    assert snapshot["last_return"] == [3]
+    assert snapshot["frames"] == []
+
+
+def test_armv9_vm_supports_multi_return_heap_object_and_result_list():
+    program = [
+        armv9_inst(ArmV9Opcode.NEW_CLOSURE, "X0", "pair"),
+        armv9_inst(ArmV9Opcode.CALL_VALUE, "X0"),
+        armv9_inst(ArmV9Opcode.RESULT, "X1"),
+        armv9_inst(ArmV9Opcode.RESULT_MULTI, "X2", "X3"),
+        armv9_inst(ArmV9Opcode.RESULT_LIST, "X4"),
+        armv9_inst(ArmV9Opcode.CALL_RUNTIME, "print", "X4"),
+        armv9_inst(ArmV9Opcode.HALT),
+        armv9_inst(ArmV9Opcode.LABEL, "pair"),
+        armv9_inst(ArmV9Opcode.MOVI, "X5", 7),
+        armv9_inst(ArmV9Opcode.MOVI, "X6", 9),
+        armv9_inst(ArmV9Opcode.RETURN_MULTI, "X5", "X6"),
+    ]
+
+    vm = HaifaArmV9VM(program, stack_size=128)
+    output = vm.run()
+    snapshot = vm.snapshot()
+
+    assert output == [[7, 9]]
+    assert vm.read_reg("X1") == 7
+    assert vm.read_reg("X2") == 7
+    assert vm.read_reg("X3") == 9
+    assert vm.read_reg("X4") == [7, 9]
+    assert snapshot["memory"]["heap"][2] == {
+        "type": "multi_return",
+        "values": [7, 9],
+    }
+
+
+def test_armv9_vm_supports_params_and_vararg_return_expansion():
+    program = [
+        armv9_inst(ArmV9Opcode.NEW_CLOSURE, "X0", "collect"),
+        armv9_inst(ArmV9Opcode.MOVI, "X1", 4),
+        armv9_inst(ArmV9Opcode.PARAM, "X1"),
+        armv9_inst(ArmV9Opcode.MOVI, "X2", 5),
+        armv9_inst(ArmV9Opcode.PARAM, "X2"),
+        armv9_inst(ArmV9Opcode.CALL_VALUE, "X0"),
+        armv9_inst(ArmV9Opcode.RESULT_LIST, "X3"),
+        armv9_inst(ArmV9Opcode.CALL_RUNTIME, "print", "X3"),
+        armv9_inst(ArmV9Opcode.HALT),
+        armv9_inst(ArmV9Opcode.LABEL, "collect"),
+        armv9_inst(ArmV9Opcode.VARARG, "X4"),
+        armv9_inst(ArmV9Opcode.RETURN_MULTI, "X4"),
+    ]
+
+    vm = HaifaArmV9VM(program, stack_size=128)
+    output = vm.run()
+    snapshot = vm.snapshot()
+
+    assert output == [[4, 5]]
+    assert vm.read_reg("X3") == [4, 5]
+    assert snapshot["param_stack"] == []
+    assert snapshot["pending_params"] == []
+    assert snapshot["memory"]["heap"][2] == {
+        "type": "multi_return",
+        "values": [4, 5],
+    }
+
+
 def test_armv9_vm_rejects_unknown_registers_and_labels():
     with pytest.raises(ArmV9RuntimeError, match="unknown register"):
         HaifaArmV9VM([armv9_inst(ArmV9Opcode.MOVI, "R0", 1)]).run()

@@ -20,6 +20,7 @@ class ArmV9Lowerer:
     SCRATCH0 = "X9"
     SCRATCH1 = "X10"
     SCRATCH2 = "X11"
+    SCRATCH_REGISTERS = ("X9", "X10", "X11", "X12", "X13", "X14", "X15")
 
     def __init__(self) -> None:
         self.instructions: list[ArmV9Instruction] = []
@@ -117,6 +118,122 @@ class ArmV9Lowerer:
                 self.SCRATCH1,
             )
             self._store_register(instruction, str(dst), self.SCRATCH2)
+            return
+        if opcode == Opcode.MAKE_CELL:
+            dst, src = self._expect_args(instruction, 2)
+            self._load_operand(instruction, src, self.SCRATCH0)
+            self._emit(instruction, ArmV9Opcode.NEW_CELL, self.SCRATCH1, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH1)
+            return
+        if opcode == Opcode.CELL_GET:
+            dst, cell = self._expect_args(instruction, 2)
+            self._load_operand(instruction, cell, self.SCRATCH0)
+            self._emit(instruction, ArmV9Opcode.CELL_GET, self.SCRATCH1, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH1)
+            return
+        if opcode == Opcode.CELL_SET:
+            cell, src = self._expect_args(instruction, 2)
+            self._load_operand(instruction, cell, self.SCRATCH0)
+            self._load_operand(instruction, src, self.SCRATCH1)
+            self._emit(instruction, ArmV9Opcode.CELL_SET, self.SCRATCH0, self.SCRATCH1)
+            return
+        if opcode == Opcode.CLOSURE:
+            if len(args) < 2:
+                raise ValueError("CLOSURE requires destination and label")
+            dst = str(args[0])
+            label = str(args[1])
+            upvalue_regs: list[str] = []
+            for index, cell in enumerate(args[2:]):
+                if index >= len(self.SCRATCH_REGISTERS):
+                    raise NotImplementedError("ArmV9 lowering supports up to seven closure upvalues")
+                scratch = self.SCRATCH_REGISTERS[index]
+                self._load_operand(instruction, cell, scratch)
+                upvalue_regs.append(scratch)
+            self._emit(
+                instruction,
+                ArmV9Opcode.NEW_CLOSURE,
+                self.SCRATCH0,
+                label,
+                *upvalue_regs,
+            )
+            self._store_register(instruction, dst, self.SCRATCH0)
+            return
+        if opcode == Opcode.BIND_UPVALUE:
+            dst, index_arg = self._expect_args(instruction, 2)
+            index = int(index_arg)
+            self._emit(instruction, ArmV9Opcode.BIND_UPVALUE, self.SCRATCH0, index)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.PARAM:
+            (src,) = self._expect_args(instruction, 1)
+            self._load_operand(instruction, src, "X0")
+            self._emit(instruction, ArmV9Opcode.PARAM, "X0")
+            return
+        if opcode == Opcode.PARAM_EXPAND:
+            (src,) = self._expect_args(instruction, 1)
+            self._load_operand(instruction, src, "X0")
+            self._emit(instruction, ArmV9Opcode.PARAM_EXPAND, "X0")
+            return
+        if opcode == Opcode.ARG:
+            (dst,) = self._expect_args(instruction, 1)
+            self._emit(instruction, ArmV9Opcode.ARG, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.VARARG:
+            (dst,) = self._expect_args(instruction, 1)
+            self._emit(instruction, ArmV9Opcode.VARARG, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.VARARG_FIRST:
+            dst, src = self._expect_args(instruction, 2)
+            self._load_operand(instruction, src, "X0")
+            self._emit(instruction, ArmV9Opcode.VARARG_FIRST, self.SCRATCH0, "X0")
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.LIST_GET:
+            dst, src, index_arg = self._expect_args(instruction, 3)
+            self._load_operand(instruction, src, "X0")
+            self._load_operand(instruction, index_arg, "X1")
+            self._emit(instruction, ArmV9Opcode.LIST_GET, self.SCRATCH0, "X0", "X1")
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.CALL_VALUE:
+            (callee,) = self._expect_args(instruction, 1)
+            self._load_operand(instruction, callee, "X0")
+            self._emit(instruction, ArmV9Opcode.CALL_VALUE, "X0")
+            return
+        if opcode == Opcode.RETURN:
+            (src,) = self._expect_args(instruction, 1)
+            self._load_operand(instruction, src, "X0")
+            self._emit(instruction, ArmV9Opcode.RETURN_VALUE, "X0")
+            return
+        if opcode == Opcode.RETURN_MULTI:
+            return_regs: list[str] = []
+            for index, src in enumerate(args):
+                if index >= 8:
+                    raise NotImplementedError("ArmV9 lowering supports up to eight return values")
+                register = f"X{index}"
+                self._load_operand(instruction, src, register)
+                return_regs.append(register)
+            self._emit(instruction, ArmV9Opcode.RETURN_MULTI, *return_regs)
+            return
+        if opcode == Opcode.RESULT:
+            (dst,) = self._expect_args(instruction, 1)
+            self._emit(instruction, ArmV9Opcode.RESULT, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.RESULT_MULTI:
+            if len(args) > len(self.SCRATCH_REGISTERS):
+                raise NotImplementedError("ArmV9 lowering supports up to seven RESULT_MULTI targets")
+            result_regs = list(self.SCRATCH_REGISTERS[: len(args)])
+            self._emit(instruction, ArmV9Opcode.RESULT_MULTI, *result_regs)
+            for dst, scratch in zip(args, result_regs):
+                self._store_register(instruction, str(dst), scratch)
+            return
+        if opcode == Opcode.RESULT_LIST:
+            (dst,) = self._expect_args(instruction, 1)
+            self._emit(instruction, ArmV9Opcode.RESULT_LIST, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
             return
         if opcode == Opcode.JMP:
             (label,) = self._expect_args(instruction, 1)
