@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lua Bytecode VM Teaching Demo</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Lua Bytecode VM Teaching Demo</h1>
+        <p>Step through real snapshots recorded from Haifa's BytecodeVM.</p>
+      </div>
+      <div class="demo-picker">
+        <label for="demoSelect">Demo</label>
+        <select id="demoSelect"></select>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel source-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Lua Source</h2>
+            <p id="demoSummary"></p>
+          </div>
+          <div id="focusTags" class="tags"></div>
+        </div>
+        <ol id="sourceView" class="source-view"></ol>
+      </section>
+
+      <section class="panel bytecode-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Bytecode</h2>
+            <p id="stepLabel"></p>
+          </div>
+          <div id="statusPill" class="status-pill">ready</div>
+        </div>
+        <div id="instructionView" class="instruction-view"></div>
+      </section>
+
+      <section class="panel state-panel">
+        <div class="panel-head">
+          <div>
+            <h2>VM State</h2>
+            <p id="pcLabel"></p>
+          </div>
+        </div>
+        <div class="state-grid">
+          <div>
+            <h3>Registers</h3>
+            <div id="registerView" class="register-view"></div>
+          </div>
+          <div>
+            <h3>Call Stack</h3>
+            <div id="callStackView" class="mini-list"></div>
+            <h3>Upvalues</h3>
+            <div id="upvalueView" class="mini-list"></div>
+            <h3>Output</h3>
+            <div id="outputView" class="mini-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel explanation-panel">
+        <div class="panel-head">
+          <div>
+            <h2>What Just Happened</h2>
+            <p id="instructionTitle"></p>
+          </div>
+        </div>
+        <p id="opcodeExplanation" class="explanation"></p>
+        <div id="changeView" class="change-view"></div>
+      </section>
+    </main>
+
+    <footer class="controls">
+      <button id="resetBtn" type="button">Reset</button>
+      <button id="prevBtn" type="button">Back</button>
+      <button id="stepBtn" type="button">Step</button>
+      <button id="runBtn" type="button">Run</button>
+      <label class="speed-control">
+        Speed
+        <input id="speedSlider" type="range" min="80" max="1200" step="40" value="420" />
+      </label>
+      <span id="speedLabel">420 ms</span>
+    </footer>
+
+    <script src="demo-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
