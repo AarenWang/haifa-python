@@ -166,12 +166,42 @@ def test_armv9_vm_runs_recursive_factorial_with_stack_spill():
     assert vm.snapshot()["frames"] == []
 
 
+def test_armv9_vm_allocates_heap_tables_and_reads_fields():
+    program = [
+        armv9_inst(ArmV9Opcode.NEW_TABLE, "X0"),
+        armv9_inst(ArmV9Opcode.LDRC, "X1", 0),
+        armv9_inst(ArmV9Opcode.MOVI, "X2", 42),
+        armv9_inst(ArmV9Opcode.TABLE_SET, "X0", "X1", "X2"),
+        armv9_inst(ArmV9Opcode.TABLE_GET, "X3", "X0", "X1"),
+        armv9_inst(ArmV9Opcode.HALT),
+    ]
+
+    vm = HaifaArmV9VM(program, const_pool=["answer"])
+    vm.run()
+    snapshot = vm.snapshot()
+
+    assert vm.read_reg("X3") == 42
+    assert snapshot["registers"]["X0"] == "heap:1"
+    assert snapshot["memory"]["heap"] == {1: {"answer": 42}}
+
+
 def test_armv9_vm_rejects_unknown_registers_and_labels():
     with pytest.raises(ArmV9RuntimeError, match="unknown register"):
         HaifaArmV9VM([armv9_inst(ArmV9Opcode.MOVI, "R0", 1)]).run()
 
     with pytest.raises(ArmV9RuntimeError, match="unknown label"):
         HaifaArmV9VM([armv9_inst(ArmV9Opcode.B, "missing")]).run()
+
+
+def test_armv9_vm_rejects_table_ops_on_non_heap_refs():
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", 0),
+        armv9_inst(ArmV9Opcode.LDRC, "X1", 0),
+        armv9_inst(ArmV9Opcode.TABLE_GET, "X2", "X0", "X1"),
+    ]
+
+    with pytest.raises(ArmV9RuntimeError, match="expected heap table reference"):
+        HaifaArmV9VM(program, const_pool=["answer"]).run()
 
 
 def test_armv9_vm_rejects_infinite_programs_with_max_steps():

@@ -84,6 +84,26 @@ def test_lowering_load_const_and_debug_metadata():
     assert result.instructions[0].debug.source_opcode == "LOAD_CONST"
 
 
+def test_lowering_table_ops_match_bytecode_vm_output():
+    instructions = [
+        Instruction(Opcode.TABLE_NEW, ["tbl"]),
+        Instruction(Opcode.LOAD_CONST, ["key", "answer"]),
+        Instruction(Opcode.LOAD_IMM, ["value", 42]),
+        Instruction(Opcode.TABLE_SET, ["tbl", "key", "value"]),
+        Instruction(Opcode.TABLE_GET, ["out", "tbl", "key"]),
+        Instruction(Opcode.PRINT, ["out"]),
+        Instruction(Opcode.HALT, []),
+    ]
+
+    _, bytecode_output = run_bytecode_vm(instructions)
+    result, arm_vm, arm_output = run_armv9_lowered(instructions)
+
+    assert bytecode_output == [42]
+    assert arm_output == bytecode_output
+    assert ArmV9Opcode.NEW_TABLE in [inst.opcode for inst in result.instructions]
+    assert arm_vm.snapshot()["memory"]["heap"] == {1: {"answer": 42}}
+
+
 def test_lowering_lua_compiled_arithmetic_matches_bytecode_register():
     instructions = list(compile_source("local x = 2 + 3", source_name="<test>"))
     bytecode_vm, _ = run_bytecode_vm(instructions)
@@ -96,7 +116,22 @@ def test_lowering_lua_compiled_arithmetic_matches_bytecode_register():
     assert stack_value == bytecode_vm.registers["L_1_x_3"]
 
 
+def test_lowering_lua_compiled_table_field_matches_bytecode_register():
+    instructions = list(
+        compile_source("local t = {a = 42}; local x = t.a", source_name="<test>")
+    )
+    bytecode_vm, _ = run_bytecode_vm(instructions)
+
+    result, arm_vm, _ = run_armv9_lowered(instructions)
+    slot = result.stack_slots["L_1_x_6"]
+    snapshot = arm_vm.snapshot()
+    stack_value = snapshot["memory"]["stack"][arm_vm.read_reg("FP") + slot]
+
+    assert bytecode_vm.registers["L_1_x_6"] == 42
+    assert stack_value == 42
+    assert snapshot["memory"]["heap"] == {1: {"a": 42}}
+
+
 def test_lowering_rejects_unsupported_opcodes():
     with pytest.raises(NotImplementedError, match="DIV"):
         lower_to_armv9([Instruction(Opcode.DIV, ["out", "a", "b"])])
-

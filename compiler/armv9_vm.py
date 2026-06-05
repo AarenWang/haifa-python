@@ -49,6 +49,14 @@ class ArmV9Memory:
         }
 
 
+@dataclass(frozen=True)
+class ArmV9HeapRef:
+    object_id: int
+
+    def __str__(self) -> str:
+        return f"heap:{self.object_id}"
+
+
 @dataclass
 class ArmV9CallFrame:
     label: str
@@ -96,6 +104,7 @@ class HaifaArmV9VM:
         self.halted = False
         self.output: list[Any] = []
         self.frames: list[ArmV9CallFrame] = []
+        self._next_heap_id = 1
         self.regs["SP"] = stack_size
         self.regs["FP"] = stack_size
         self.regs["LR"] = None
@@ -119,6 +128,9 @@ class HaifaArmV9VM:
             ArmV9Opcode.B_GT: self._op_B_GT,
             ArmV9Opcode.BL: self._op_BL,
             ArmV9Opcode.RET: self._op_RET,
+            ArmV9Opcode.NEW_TABLE: self._op_NEW_TABLE,
+            ArmV9Opcode.TABLE_GET: self._op_TABLE_GET,
+            ArmV9Opcode.TABLE_SET: self._op_TABLE_SET,
             ArmV9Opcode.CALL_RUNTIME: self._op_CALL_RUNTIME,
             ArmV9Opcode.HALT: self._op_HALT,
         }
@@ -165,11 +177,11 @@ class HaifaArmV9VM:
         return {
             "pc": self.pc,
             "halted": self.halted,
-            "registers": dict(self.regs),
+            "registers": self._snapshot_mapping(self.regs),
             "nzcv": self.nzcv.to_dict(),
-            "memory": self.memory.to_snapshot(),
+            "memory": self._memory_snapshot(),
             "frames": [frame.to_dict() for frame in self.frames],
-            "output": list(self.output),
+            "output": [self._snapshot_value(value) for value in self.output],
         }
 
     def read_reg(self, name: str) -> Any:
@@ -289,6 +301,21 @@ class HaifaArmV9VM:
         self.regs["LR"] = frame.caller_lr
         self.pc = frame.return_pc
 
+    def _op_NEW_TABLE(self, instruction: ArmV9Instruction) -> None:
+        (dst,) = self._expect_args(instruction, 1)
+        ref = self._allocate_heap_object({})
+        self.write_reg(str(dst), ref)
+
+    def _op_TABLE_GET(self, instruction: ArmV9Instruction) -> None:
+        dst, table_reg, key_reg = self._expect_args(instruction, 3)
+        table = self._table_from_ref(self.read_reg(str(table_reg)))
+        self.write_reg(str(dst), table.get(self.read_reg(str(key_reg))))
+
+    def _op_TABLE_SET(self, instruction: ArmV9Instruction) -> None:
+        table_reg, key_reg, value_reg = self._expect_args(instruction, 3)
+        table = self._table_from_ref(self.read_reg(str(table_reg)))
+        table[self.read_reg(str(key_reg))] = self.read_reg(str(value_reg))
+
     def _op_CALL_RUNTIME(self, instruction: ArmV9Instruction) -> None:
         name, *args = instruction.args
         if name == "print":
@@ -349,6 +376,46 @@ class HaifaArmV9VM:
         if index < 0 or index >= len(self.memory.stack):
             raise ArmV9RuntimeError(f"stack address out of bounds: {index}")
         return index
+
+    def _allocate_heap_object(self, value: Any) -> ArmV9HeapRef:
+        object_id = self._next_heap_id
+        self._next_heap_id += 1
+        self.memory.heap[object_id] = value
+        return ArmV9HeapRef(object_id)
+
+    def _table_from_ref(self, value: Any) -> dict[Any, Any]:
+        if not isinstance(value, ArmV9HeapRef):
+            raise ArmV9RuntimeError(f"expected heap table reference, got {value!r}")
+        table = self.memory.heap.get(value.object_id)
+        if not isinstance(table, dict):
+            raise ArmV9RuntimeError(f"heap object is not a table: {value}")
+        return table
+
+    def _memory_snapshot(self) -> dict[str, Any]:
+        return {
+            "const_pool": [self._snapshot_value(value) for value in self.memory.const_pool],
+            "stack": [self._snapshot_value(value) for value in self.memory.stack],
+            "heap": {
+                object_id: self._snapshot_value(value)
+                for object_id, value in self.memory.heap.items()
+            },
+            "globals": self._snapshot_mapping(self.memory.globals),
+        }
+
+    def _snapshot_mapping(self, mapping: Mapping[str, Any]) -> dict[str, Any]:
+        return {key: self._snapshot_value(value) for key, value in mapping.items()}
+
+    def _snapshot_value(self, value: Any) -> Any:
+        if isinstance(value, ArmV9HeapRef):
+            return str(value)
+        if isinstance(value, dict):
+            return {
+                self._snapshot_value(key): self._snapshot_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._snapshot_value(item) for item in value]
+        return value
 
     def _normalize_register(self, name: str) -> str:
         register = name.upper()

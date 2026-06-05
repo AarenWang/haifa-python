@@ -87,6 +87,37 @@ class ArmV9Lowerer:
             self._emit(instruction, ArmV9Opcode.CSET, self.SCRATCH2, condition)
             self._store_register(instruction, str(dst), self.SCRATCH2)
             return
+        if opcode == Opcode.TABLE_NEW:
+            (dst,) = self._expect_args(instruction, 1)
+            self._emit(instruction, ArmV9Opcode.NEW_TABLE, self.SCRATCH0)
+            self._store_register(instruction, str(dst), self.SCRATCH0)
+            return
+        if opcode == Opcode.TABLE_SET:
+            table, key, value = self._expect_args(instruction, 3)
+            self._load_operand(instruction, table, self.SCRATCH0)
+            self._load_operand(instruction, key, self.SCRATCH1)
+            self._load_operand(instruction, value, self.SCRATCH2)
+            self._emit(
+                instruction,
+                ArmV9Opcode.TABLE_SET,
+                self.SCRATCH0,
+                self.SCRATCH1,
+                self.SCRATCH2,
+            )
+            return
+        if opcode == Opcode.TABLE_GET:
+            dst, table, key = self._expect_args(instruction, 3)
+            self._load_operand(instruction, table, self.SCRATCH0)
+            self._load_operand(instruction, key, self.SCRATCH1)
+            self._emit(
+                instruction,
+                ArmV9Opcode.TABLE_GET,
+                self.SCRATCH2,
+                self.SCRATCH0,
+                self.SCRATCH1,
+            )
+            self._store_register(instruction, str(dst), self.SCRATCH2)
+            return
         if opcode == Opcode.JMP:
             (label,) = self._expect_args(instruction, 1)
             self._emit(instruction, ArmV9Opcode.B, str(label))
@@ -163,4 +194,3 @@ class ArmV9Lowerer:
 
 def lower_to_armv9(instructions: Sequence[Instruction]) -> ArmV9LoweringResult:
     return ArmV9Lowerer.lower(instructions)
-
