@@ -91,6 +91,9 @@ class ArmV9CallFrame:
             "caller_fp": self.caller_fp,
             "caller_sp": self.caller_sp,
             "caller_lr": self.caller_lr,
+            "caller_upvalues": [str(ref) for ref in self.caller_upvalues],
+            "caller_param_stack": list(self.caller_param_stack),
+            "caller_pending_params": list(self.caller_pending_params),
         }
 
 

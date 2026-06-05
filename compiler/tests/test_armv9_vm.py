@@ -126,6 +126,9 @@ def test_armv9_vm_supports_call_frames_and_return():
             "caller_fp": 64,
             "caller_sp": 64,
             "caller_lr": None,
+            "caller_upvalues": [],
+            "caller_param_stack": [],
+            "caller_pending_params": [],
         }
     ]
     assert snapshot_in_call["registers"]["FP"] == 48
