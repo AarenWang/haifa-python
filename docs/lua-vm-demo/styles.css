@@ -70,6 +70,14 @@ h3 {
   font-size: 13px;
 }
 
+.picker-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .demo-picker {
   display: flex;
   align-items: center;
@@ -298,6 +306,35 @@ select {
   margin-top: 6px;
 }
 
+.memory-view {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.memory-section {
+  min-width: 0;
+}
+
+.memory-title {
+  margin-bottom: 4px;
+  color: #475569;
+  font-weight: 700;
+}
+
+.memory-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #111827;
+}
+
 .explanation-panel .panel-head {
   border-bottom: 0;
   padding-bottom: 6px;
@@ -390,6 +427,10 @@ button.primary {
   .topbar,
   .controls {
     flex-wrap: wrap;
+  }
+
+  .picker-row {
+    justify-content: flex-start;
   }
 
   .speed-control {

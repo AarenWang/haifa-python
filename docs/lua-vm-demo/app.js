@@ -2,10 +2,13 @@ const data = window.LUA_VM_DEMO_DATA;
 
 const els = {
   demoSelect: document.querySelector("#demoSelect"),
+  modeSelect: document.querySelector("#modeSelect"),
   demoSummary: document.querySelector("#demoSummary"),
   focusTags: document.querySelector("#focusTags"),
   sourceView: document.querySelector("#sourceView"),
+  instructionHeading: document.querySelector("#instructionHeading"),
   instructionView: document.querySelector("#instructionView"),
+  stateHeading: document.querySelector("#stateHeading"),
   stepLabel: document.querySelector("#stepLabel"),
   statusPill: document.querySelector("#statusPill"),
   pcLabel: document.querySelector("#pcLabel"),
@@ -13,6 +16,7 @@ const els = {
   callStackView: document.querySelector("#callStackView"),
   upvalueView: document.querySelector("#upvalueView"),
   outputView: document.querySelector("#outputView"),
+  memoryView: document.querySelector("#memoryView"),
   instructionTitle: document.querySelector("#instructionTitle"),
   opcodeExplanation: document.querySelector("#opcodeExplanation"),
   changeView: document.querySelector("#changeView"),
@@ -25,6 +29,7 @@ const els = {
 };
 
 let demoIndex = 0;
+let mode = "bytecode";
 let stepIndex = 0;
 let runTimer = null;
 
@@ -32,8 +37,13 @@ function currentDemo() {
   return data.demos[demoIndex];
 }
 
+function currentTrace() {
+  const demo = currentDemo();
+  return demo.views?.[mode] || demo;
+}
+
 function currentStep() {
-  return currentDemo().steps[stepIndex];
+  return currentTrace().steps[stepIndex];
 }
 
 function init() {
@@ -47,6 +57,12 @@ function init() {
   els.demoSelect.addEventListener("change", () => {
     stopRun();
     demoIndex = Number(els.demoSelect.value);
+    stepIndex = 0;
+    render();
+  });
+  els.modeSelect.addEventListener("change", () => {
+    stopRun();
+    mode = els.modeSelect.value;
     stepIndex = 0;
     render();
   });
@@ -84,7 +100,8 @@ function init() {
 }
 
 function startRun() {
-  if (stepIndex >= currentDemo().steps.length - 1) {
+  const trace = currentTrace();
+  if (stepIndex >= trace.steps.length - 1) {
     stepIndex = 0;
   }
   els.runBtn.textContent = "Pause";
@@ -106,21 +123,25 @@ function stopRun() {
 }
 
 function stepForward() {
-  const demo = currentDemo();
-  if (stepIndex >= demo.steps.length - 1) {
+  const trace = currentTrace();
+  if (stepIndex >= trace.steps.length - 1) {
     render();
     return false;
   }
   stepIndex += 1;
   render();
-  return stepIndex < demo.steps.length - 1;
+  return stepIndex < trace.steps.length - 1;
 }
 
 function render() {
   const demo = currentDemo();
+  const trace = currentTrace();
   const step = currentStep();
   els.demoSelect.value = String(demoIndex);
-  els.demoSummary.textContent = demo.summary;
+  els.modeSelect.value = mode;
+  els.demoSummary.textContent = `${demo.summary} ${trace.summary || ""}`;
+  els.instructionHeading.textContent = trace.title || "Bytecode";
+  els.stateHeading.textContent = `${trace.title || "VM"} State`;
   els.focusTags.replaceChildren(
     ...demo.focus.map((tag) => {
       const span = document.createElement("span");
@@ -130,10 +151,10 @@ function render() {
     }),
   );
   renderSource(demo, step);
-  renderInstructions(demo, step);
-  renderState(step);
-  renderExplanation(step);
-  updateControls(demo, step);
+  renderInstructions(trace, step);
+  renderState(trace, step);
+  renderExplanation(trace, step);
+  updateControls(trace, step);
 }
 
 function renderSource(demo, step) {
@@ -155,8 +176,8 @@ function renderSource(demo, step) {
   }
 }
 
-function renderInstructions(demo, step) {
-  const rows = demo.instructions.map((inst) => {
+function renderInstructions(trace, step) {
+  const rows = trace.instructions.map((inst) => {
     const row = document.createElement("div");
     row.className = "instruction-row";
     if (inst.pc === step.pc) {
@@ -167,7 +188,7 @@ function renderInstructions(demo, step) {
     }
     row.innerHTML = `
       <span class="pc">${String(inst.pc).padStart(3, "0")}</span>
-      <span class="opcode">${escapeHtml(inst.opcode)}</span>
+      <span class="opcode">${escapeHtml(displayOpcode(inst))}</span>
       <span class="args">${escapeHtml(formatArgs(inst.args))}</span>
     `;
     return row;
@@ -179,8 +200,8 @@ function renderInstructions(demo, step) {
   }
 }
 
-function renderState(step) {
-  els.stepLabel.textContent = `Step ${step.step} of ${currentDemo().steps.length - 1}`;
+function renderState(trace, step) {
+  els.stepLabel.textContent = `Step ${step.step} of ${trace.steps.length - 1}`;
   els.pcLabel.textContent = `PC ${step.pc}${step.previousPc !== null ? `, last PC ${step.previousPc}` : ""}`;
   els.statusPill.textContent = step.status;
   els.statusPill.className = `status-pill ${step.status === "halted" ? "halted" : ""} ${
@@ -199,11 +220,78 @@ function renderState(step) {
   els.registerView.replaceChildren(...registers);
   renderMiniList(
     els.callStackView,
-    step.callStack.map((frame) => `${frame.function} @ pc=${frame.pc} (${frame.line}:${frame.column})`),
+    step.callStack.map(formatFrame),
     "<empty>",
   );
   renderMiniList(els.upvalueView, step.upvalues.map(formatValue), "<empty>");
   renderMiniList(els.outputView, step.output.map(formatValue), "<empty>");
+  renderMemory(trace, step.memorySections || {});
+}
+
+function renderMemory(trace, sections) {
+  const visibleSections = { ...sections };
+  if (trace.stackSlots && Object.keys(trace.stackSlots).length) {
+    visibleSections.stack_slots = trace.stackSlots;
+  }
+  const names = Object.keys(visibleSections).filter((name) => hasSectionContent(visibleSections[name]));
+  if (!names.length) {
+    const empty = document.createElement("div");
+    empty.className = "mini-item";
+    empty.textContent = "<empty>";
+    els.memoryView.replaceChildren(empty);
+    return;
+  }
+
+  els.memoryView.replaceChildren(
+    ...names.map((name) => {
+      const section = document.createElement("section");
+      section.className = "memory-section";
+      const title = document.createElement("div");
+      title.className = "memory-title";
+      title.textContent = name;
+      const body = document.createElement("div");
+      body.className = "memory-body";
+      body.textContent = formatMemorySection(visibleSections[name]);
+      section.replaceChildren(title, body);
+      return section;
+    }),
+  );
+}
+
+function hasSectionContent(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object" && Array.isArray(value.entries)) {
+    return value.entries.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function formatMemorySection(value) {
+  if (value && typeof value === "object" && Array.isArray(value.entries)) {
+    if (!value.entries.length) {
+      return `<empty stack, ${value.length || 0} slots>`;
+    }
+    return value.entries
+      .map((entry) => `[${entry.index}] = ${formatValue(entry.value)}`)
+      .join("\n");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => `[${index}] = ${formatValue(item)}`).join("\n");
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, item]) => `${key}: ${formatValue(item)}`)
+      .join("\n");
+  }
+  return formatValue(value);
 }
 
 function renderMiniList(container, values, emptyText) {
@@ -224,25 +312,29 @@ function renderMiniList(container, values, emptyText) {
   );
 }
 
-function renderExplanation(step) {
+function renderExplanation(trace, step) {
   const previous = step.previousOpcode
     ? `Executed ${step.previousOpcode}`
     : "Ready before the first instruction";
   const current = step.currentInstruction
-    ? `next: ${step.currentInstruction.opcode} @ pc=${step.currentInstruction.pc}`
+    ? `next: ${displayOpcode(step.currentInstruction)} @ pc=${step.currentInstruction.pc}`
     : "program halted";
   els.instructionTitle.textContent = `${previous}; ${current}`;
 
   const opcode = step.previousOpcode || step.currentInstruction?.opcode;
   const explanation =
     data.opcodeExplanations[opcode] ||
-    "This instruction is part of the VM execution model. Watch the highlighted registers and call stack to see its effect.";
+    "This instruction is part of the VM execution model. Watch highlighted registers, stack slots, and heap objects to see its effect.";
   const changeText = step.changedRegisters.length
     ? ` Changed registers: ${step.changedRegisters.join(", ")}.`
     : " No register changed in this snapshot.";
-  els.opcodeExplanation.textContent = explanation + changeText;
+  const sourceOpcode = step.currentInstruction?.debug?.sourceOpcode
+    ? ` Lowered from ${step.currentInstruction.debug.sourceOpcode}.`
+    : "";
+  els.opcodeExplanation.textContent = explanation + changeText + sourceOpcode;
 
   const chips = [];
+  chips.push(chip(trace.kind || mode, false));
   if (step.previousOpcode) {
     chips.push(chip(`opcode ${step.previousOpcode}`, true));
   }
@@ -266,13 +358,38 @@ function chip(text, changed) {
   return span;
 }
 
-function updateControls(demo, step) {
+function updateControls(trace, step) {
   els.prevBtn.disabled = stepIndex === 0;
-  els.stepBtn.disabled = stepIndex >= demo.steps.length - 1 || step.status === "error";
+  els.stepBtn.disabled = stepIndex >= trace.steps.length - 1 || step.status === "error";
+}
+
+function displayOpcode(inst) {
+  if (inst.text) {
+    return inst.text.split(/\s+/)[0];
+  }
+  return inst.opcode;
 }
 
 function formatArgs(args) {
   return args.map(formatValue).join(", ");
+}
+
+function formatFrame(frame) {
+  if (typeof frame === "string") {
+    return frame;
+  }
+  if (frame && typeof frame === "object") {
+    if (frame.label) {
+      return `${frame.label} return=${frame.return_pc} fp=${frame.caller_fp} sp=${frame.caller_sp}`;
+    }
+    if (frame.function) {
+      return `${frame.function} @ pc=${frame.pc} (${frame.line}:${frame.column})`;
+    }
+    if (frame.return_pc !== undefined) {
+      return `return=${frame.return_pc}`;
+    }
+  }
+  return formatValue(frame);
 }
 
 function formatValue(value) {
@@ -297,7 +414,7 @@ function formatValue(value) {
   if (value.kind === "cell") {
     return `cell(${formatValue(value.value)})`;
   }
-  if (value.kind === "closure") {
+  if (value.kind === "closure" || value.type === "closure") {
     const name = value.debugName || value.label;
     const upvalues = value.upvalues?.length ? ` upvalues=${value.upvalues.map(formatValue).join(", ")}` : "";
     return `<closure ${name}${upvalues}>`;
@@ -307,6 +424,12 @@ function formatValue(value) {
     const map = value.map?.map((entry) => `${formatValue(entry.key)}=${formatValue(entry.value)}`).join(", ") || "";
     const body = [array, map].filter(Boolean).join("; ");
     return `{${body}}`;
+  }
+  if (value.type === "cell") {
+    return `cell(${formatValue(value.value)})`;
+  }
+  if (value.type === "multi_return") {
+    return `<multi ${value.values?.map(formatValue).join(", ") || ""}>`;
   }
   if (value.kind === "builtin") {
     return `<builtin ${value.name}>`;
@@ -320,7 +443,9 @@ function formatValue(value) {
   if (value.kind === "dict") {
     return `{${value.items.map((entry) => `${formatValue(entry.key)}=${formatValue(entry.value)}`).join(", ")}}`;
   }
-  return JSON.stringify(value);
+  return `{${Object.entries(value)
+    .map(([key, item]) => `${key}=${formatValue(item)}`)
+    .join(", ")}}`;
 }
 
 function escapeHtml(value) {
