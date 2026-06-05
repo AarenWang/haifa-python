@@ -22,6 +22,11 @@ def test_format_instruction_uses_arm_style_operands():
     assert format_armv9_instruction(instruction) == "LDR X0, [FP, -8]"
 
 
+def test_format_instruction_handles_structured_memory_operands():
+    instruction = armv9_inst(ArmV9Opcode.STR, "X0", ("FP", -1))
+    assert format_armv9_instruction(instruction) == "STR X0, [FP, -1]"
+
+
 def test_instruction_helper_accepts_debug_metadata():
     debug = ArmV9Debug(
         location=SourceLocation("demo.lua", 3, 5),
@@ -79,4 +84,3 @@ def test_runtime_pseudo_ops_are_part_of_phase_one_contract():
         "CELL_SET",
         "CALL_RUNTIME",
     }.issubset(opcodes)
-

@@ -49,9 +49,28 @@ class ArmV9Memory:
         }
 
 
+@dataclass
+class ArmV9CallFrame:
+    label: str
+    return_pc: int
+    caller_fp: int
+    caller_sp: int
+    caller_lr: Any
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "return_pc": self.return_pc,
+            "caller_fp": self.caller_fp,
+            "caller_sp": self.caller_sp,
+            "caller_lr": self.caller_lr,
+        }
+
+
 class HaifaArmV9VM:
     """A small ARMv9-style VM target for Haifa lowering experiments."""
 
+    FRAME_STRIDE = 16
     GENERAL_REGISTERS = tuple(f"X{index}" for index in range(16))
     SPECIAL_REGISTERS = ("FP", "LR", "SP", "PC")
     VALID_REGISTERS = set(GENERAL_REGISTERS + SPECIAL_REGISTERS)
@@ -76,7 +95,7 @@ class HaifaArmV9VM:
         self.pc = 0
         self.halted = False
         self.output: list[Any] = []
-        self.frames: list[dict[str, Any]] = []
+        self.frames: list[ArmV9CallFrame] = []
         self.regs["SP"] = stack_size
         self.regs["FP"] = stack_size
         self.regs["LR"] = None
@@ -86,11 +105,18 @@ class HaifaArmV9VM:
             ArmV9Opcode.MOV: self._op_MOV,
             ArmV9Opcode.ADD: self._op_ADD,
             ArmV9Opcode.SUB: self._op_SUB,
+            ArmV9Opcode.MUL: self._op_MUL,
+            ArmV9Opcode.LDR: self._op_LDR,
+            ArmV9Opcode.STR: self._op_STR,
             ArmV9Opcode.CMP: self._op_CMP,
             ArmV9Opcode.LABEL: self._op_LABEL,
             ArmV9Opcode.B: self._op_B,
             ArmV9Opcode.B_EQ: self._op_B_EQ,
             ArmV9Opcode.B_NE: self._op_B_NE,
+            ArmV9Opcode.B_LT: self._op_B_LT,
+            ArmV9Opcode.B_GT: self._op_B_GT,
+            ArmV9Opcode.BL: self._op_BL,
+            ArmV9Opcode.RET: self._op_RET,
             ArmV9Opcode.HALT: self._op_HALT,
         }
         self.index_labels()
@@ -139,7 +165,7 @@ class HaifaArmV9VM:
             "registers": dict(self.regs),
             "nzcv": self.nzcv.to_dict(),
             "memory": self.memory.to_snapshot(),
-            "frames": list(self.frames),
+            "frames": [frame.to_dict() for frame in self.frames],
             "output": list(self.output),
         }
 
@@ -171,6 +197,18 @@ class HaifaArmV9VM:
         dst, lhs, rhs = self._expect_args(instruction, 3)
         self.write_reg(str(dst), self._int_reg(lhs) - self._int_reg(rhs))
 
+    def _op_MUL(self, instruction: ArmV9Instruction) -> None:
+        dst, lhs, rhs = self._expect_args(instruction, 3)
+        self.write_reg(str(dst), self._int_reg(lhs) * self._int_reg(rhs))
+
+    def _op_LDR(self, instruction: ArmV9Instruction) -> None:
+        dst, address = self._expect_args(instruction, 2)
+        self.write_reg(str(dst), self.memory.stack[self._stack_address(address)])
+
+    def _op_STR(self, instruction: ArmV9Instruction) -> None:
+        src, address = self._expect_args(instruction, 2)
+        self.memory.stack[self._stack_address(address)] = self.read_reg(str(src))
+
     def _op_CMP(self, instruction: ArmV9Instruction) -> None:
         lhs, rhs = self._expect_args(instruction, 2)
         self.nzcv.update_from_subtraction(self._int_reg(lhs), self._int_reg(rhs))
@@ -191,6 +229,51 @@ class HaifaArmV9VM:
         (label,) = self._expect_args(instruction, 1)
         if not self.nzcv.z:
             self._branch_to(str(label))
+
+    def _op_B_LT(self, instruction: ArmV9Instruction) -> None:
+        (label,) = self._expect_args(instruction, 1)
+        if self.nzcv.n != self.nzcv.v:
+            self._branch_to(str(label))
+
+    def _op_B_GT(self, instruction: ArmV9Instruction) -> None:
+        (label,) = self._expect_args(instruction, 1)
+        if not self.nzcv.z and self.nzcv.n == self.nzcv.v:
+            self._branch_to(str(label))
+
+    def _op_BL(self, instruction: ArmV9Instruction) -> None:
+        (label,) = self._expect_args(instruction, 1)
+        return_pc = self.pc + 1
+        caller_fp = self._as_int(self.read_reg("FP"), "FP")
+        caller_sp = self._as_int(self.read_reg("SP"), "SP")
+        caller_lr = self.read_reg("LR")
+        frame_sp = caller_sp - self.FRAME_STRIDE
+        if frame_sp < 0:
+            raise ArmV9RuntimeError("stack overflow while creating call frame")
+        self.memory.stack[frame_sp] = caller_fp
+        self.memory.stack[frame_sp + 1] = return_pc
+        self.regs["FP"] = frame_sp
+        self.regs["SP"] = frame_sp
+        self.regs["LR"] = return_pc
+        self.frames.append(
+            ArmV9CallFrame(
+                label=str(label),
+                return_pc=return_pc,
+                caller_fp=caller_fp,
+                caller_sp=caller_sp,
+                caller_lr=caller_lr,
+            )
+        )
+        self._branch_to(str(label))
+
+    def _op_RET(self, instruction: ArmV9Instruction) -> None:
+        if not self.frames:
+            self.halted = True
+            return
+        frame = self.frames.pop()
+        self.regs["FP"] = frame.caller_fp
+        self.regs["SP"] = frame.caller_sp
+        self.regs["LR"] = frame.caller_lr
+        self.pc = frame.return_pc
 
     def _op_HALT(self, instruction: ArmV9Instruction) -> None:
         self.halted = True
@@ -219,6 +302,19 @@ class HaifaArmV9VM:
             return value
         raise ArmV9RuntimeError(f"{context} must contain an integer, got {value!r}")
 
+    def _stack_address(self, address: Any) -> int:
+        if not isinstance(address, (tuple, list)) or len(address) != 2:
+            raise ArmV9RuntimeError(
+                f"stack address must be a (base, offset) pair, got {address!r}"
+            )
+        base, offset = address
+        base_value = self._as_int(self.read_reg(str(base)), str(base))
+        offset_value = self._as_int(offset, "stack offset")
+        index = base_value + offset_value
+        if index < 0 or index >= len(self.memory.stack):
+            raise ArmV9RuntimeError(f"stack address out of bounds: {index}")
+        return index
+
     def _normalize_register(self, name: str) -> str:
         register = name.upper()
         if register not in self.VALID_REGISTERS:
@@ -227,4 +323,3 @@ class HaifaArmV9VM:
 
     def _sync_pc_register(self) -> None:
         self.regs["PC"] = self.pc
-
