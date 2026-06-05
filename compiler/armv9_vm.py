@@ -103,12 +103,14 @@ class HaifaArmV9VM:
         self._handlers: dict[ArmV9Opcode, Callable[[ArmV9Instruction], None]] = {
             ArmV9Opcode.MOVI: self._op_MOVI,
             ArmV9Opcode.MOV: self._op_MOV,
+            ArmV9Opcode.LDRC: self._op_LDRC,
             ArmV9Opcode.ADD: self._op_ADD,
             ArmV9Opcode.SUB: self._op_SUB,
             ArmV9Opcode.MUL: self._op_MUL,
             ArmV9Opcode.LDR: self._op_LDR,
             ArmV9Opcode.STR: self._op_STR,
             ArmV9Opcode.CMP: self._op_CMP,
+            ArmV9Opcode.CSET: self._op_CSET,
             ArmV9Opcode.LABEL: self._op_LABEL,
             ArmV9Opcode.B: self._op_B,
             ArmV9Opcode.B_EQ: self._op_B_EQ,
@@ -117,6 +119,7 @@ class HaifaArmV9VM:
             ArmV9Opcode.B_GT: self._op_B_GT,
             ArmV9Opcode.BL: self._op_BL,
             ArmV9Opcode.RET: self._op_RET,
+            ArmV9Opcode.CALL_RUNTIME: self._op_CALL_RUNTIME,
             ArmV9Opcode.HALT: self._op_HALT,
         }
         self.index_labels()
@@ -189,6 +192,13 @@ class HaifaArmV9VM:
         dst, src = self._expect_args(instruction, 2)
         self.write_reg(str(dst), self.read_reg(str(src)))
 
+    def _op_LDRC(self, instruction: ArmV9Instruction) -> None:
+        dst, const_id = self._expect_args(instruction, 2)
+        index = self._as_int(const_id, "const id")
+        if index < 0 or index >= len(self.memory.const_pool):
+            raise ArmV9RuntimeError(f"constant index out of bounds: {index}")
+        self.write_reg(str(dst), self.memory.const_pool[index])
+
     def _op_ADD(self, instruction: ArmV9Instruction) -> None:
         dst, lhs, rhs = self._expect_args(instruction, 3)
         self.write_reg(str(dst), self._int_reg(lhs) + self._int_reg(rhs))
@@ -212,6 +222,10 @@ class HaifaArmV9VM:
     def _op_CMP(self, instruction: ArmV9Instruction) -> None:
         lhs, rhs = self._expect_args(instruction, 2)
         self.nzcv.update_from_subtraction(self._int_reg(lhs), self._int_reg(rhs))
+
+    def _op_CSET(self, instruction: ArmV9Instruction) -> None:
+        dst, condition = self._expect_args(instruction, 2)
+        self.write_reg(str(dst), int(self._condition_holds(str(condition))))
 
     def _op_LABEL(self, instruction: ArmV9Instruction) -> None:
         return None
@@ -275,6 +289,15 @@ class HaifaArmV9VM:
         self.regs["LR"] = frame.caller_lr
         self.pc = frame.return_pc
 
+    def _op_CALL_RUNTIME(self, instruction: ArmV9Instruction) -> None:
+        name, *args = instruction.args
+        if name == "print":
+            if len(args) != 1:
+                raise ArmV9RuntimeError("CALL_RUNTIME print expects one register")
+            self.output.append(self.read_reg(str(args[0])))
+            return
+        raise ArmV9RuntimeError(f"unknown runtime call: {name}")
+
     def _op_HALT(self, instruction: ArmV9Instruction) -> None:
         self.halted = True
 
@@ -282,6 +305,18 @@ class HaifaArmV9VM:
         if label not in self.labels:
             raise ArmV9RuntimeError(f"unknown label: {label}")
         self.pc = self.labels[label]
+
+    def _condition_holds(self, condition: str) -> bool:
+        normalized = condition.upper()
+        if normalized == "EQ":
+            return self.nzcv.z
+        if normalized == "NE":
+            return not self.nzcv.z
+        if normalized == "LT":
+            return self.nzcv.n != self.nzcv.v
+        if normalized == "GT":
+            return not self.nzcv.z and self.nzcv.n == self.nzcv.v
+        raise ArmV9RuntimeError(f"unknown condition: {condition}")
 
     def _expect_args(
         self, instruction: ArmV9Instruction, count: int
