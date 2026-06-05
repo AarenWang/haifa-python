@@ -14,6 +14,7 @@ from haifa_jq.jq_ast import (
     FunctionCall,
     Sequence,
     ObjectLiteral,
+    ArrayLiteral,
     UnaryOp,
     BinaryOp,
     UpdateAssignment,
@@ -81,6 +82,10 @@ class JQCompiler:
             return
 
         if isinstance(stage, ObjectLiteral):
+            dest = self._eval_expression(stage, current_reg)
+            self._compile_pipeline(rest, dest)
+            return
+        if isinstance(stage, ArrayLiteral):
             dest = self._eval_expression(stage, current_reg)
             self._compile_pipeline(rest, dest)
             return
@@ -701,6 +706,7 @@ class JQCompiler:
                 cond_reg = self._new_temp()
                 item_reg = self._new_temp()
                 truth_reg = self._new_temp()
+                item_truth_reg = self._new_temp()
                 loop_label = self._new_label("jq_select_loop")
                 skip_item_label = self._new_label("jq_select_skip_item")
                 done_label = self._new_label("jq_select_done")
@@ -708,14 +714,15 @@ class JQCompiler:
                 cont_label = self._new_label("jq_select_cont")
 
                 self.instructions.append(Instruction(JQOpcode.LEN_VALUE, [len_reg, flat_buffer]))
-                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, 0]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, False]))
                 self.instructions.append(Instruction(Opcode.LOAD_CONST, [index_reg, 0]))
                 self.instructions.append(Instruction(Opcode.LABEL, [loop_label]))
                 self.instructions.append(Instruction(Opcode.LT, [cond_reg, index_reg, len_reg]))
                 self.instructions.append(Instruction(Opcode.JZ, [cond_reg, done_label]))
                 self.instructions.append(Instruction(JQOpcode.GET_INDEX, [item_reg, flat_buffer, index_reg]))
-                self.instructions.append(Instruction(Opcode.JZ, [item_reg, skip_item_label]))
-                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, 1]))
+                self.instructions.append(Instruction(JQOpcode.IS_TRUTHY, [item_truth_reg, item_reg]))
+                self.instructions.append(Instruction(Opcode.JZ, [item_truth_reg, skip_item_label]))
+                self.instructions.append(Instruction(Opcode.LOAD_CONST, [truth_reg, True]))
                 self.instructions.append(Instruction(Opcode.JMP, [done_label]))
                 self.instructions.append(Instruction(Opcode.LABEL, [skip_item_label]))
                 self.instructions.append(Instruction(Opcode.ADD, [index_reg, index_reg, "1"]))
@@ -1051,6 +1058,15 @@ class JQCompiler:
                 value_reg = self._eval_expression(value_expr, base_reg)
                 self.instructions.append(Instruction(JQOpcode.OBJ_SET, [obj_reg, key, value_reg]))
             return obj_reg
+        if isinstance(node, ArrayLiteral):
+            array_reg = self._new_temp()
+            self.instructions.append(Instruction(Opcode.LOAD_CONST, [array_reg, []]))
+            self.instructions.append(Instruction(JQOpcode.PUSH_EMIT, [array_reg]))
+            for element in node.elements:
+                value_reg = self._eval_expression(element, base_reg)
+                self.instructions.append(Instruction(JQOpcode.EMIT, [value_reg]))
+            self.instructions.append(Instruction(JQOpcode.POP_EMIT, []))
+            return array_reg
         if isinstance(node, Index):
             container = self._eval_expression(node.source, base_reg)
             idx = self._eval_expression(node.index, base_reg)

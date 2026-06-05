@@ -89,13 +89,18 @@ def _system_jq_stream(
             cmd_base.extend(["--argjson", key, arg])
 
     for index, item in enumerate(inputs):
-        proc = subprocess.run(
-            cmd_base,
-            input=(json.dumps(item) + "\n").encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd_base,
+                input=(json.dumps(item) + "\n").encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except FileNotFoundError:
+            raise JQRuntimeError(
+                f"System jq fallback is unavailable: {cmd_base[0]!r} was not found"
+            ) from original_exc
         if proc.returncode != 0:
             message = proc.stderr.decode("utf-8", errors="ignore").strip()
             raise JQRuntimeError(

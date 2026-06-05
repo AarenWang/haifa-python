@@ -162,6 +162,7 @@ class JQVM(BytecodeVM):
                 JQOpcode.TRY_BEGIN: self._op_TRY_BEGIN,
                 JQOpcode.TRY_END: self._op_TRY_END,
                 JQOpcode.FLATTEN: self._op_FLATTEN,
+                JQOpcode.IS_TRUTHY: self._op_IS_TRUTHY,
                 JQOpcode.REDUCE: self._op_REDUCE,
                 JQOpcode.KEYS: self._op_KEYS,
                 JQOpcode.HAS: self._op_HAS,
@@ -322,6 +323,10 @@ class JQVM(BytecodeVM):
         else:
             flattened = value
         self.registers[args[0]] = flattened
+
+    def _op_IS_TRUTHY(self, args):
+        value = self.val(args[1])
+        self.registers[args[0]] = bool(value)
 
     def _op_PATHS_ALL(self, args):
         dest, source_reg = args

@@ -1,6 +1,32 @@
 from __future__ import annotations
 
-import curses
+try:
+    import curses
+except ModuleNotFoundError:  # pragma: no cover - Windows import fallback
+    class _MissingCurses:
+        A_BOLD = 1
+        A_NORMAL = 0
+        A_REVERSE = 2
+        COLOR_BLACK = 0
+        COLOR_BLUE = 4
+        COLOR_CYAN = 6
+        COLOR_GREEN = 2
+        COLOR_MAGENTA = 5
+        COLOR_RED = 1
+        COLOR_YELLOW = 3
+        KEY_LEFT = -260
+        KEY_RIGHT = -261
+
+        class error(Exception):
+            pass
+
+        def __getattr__(self, name: str):
+            raise RuntimeError("curses is not available on this platform")
+
+        def color_pair(self, index: int) -> int:
+            return 0
+
+    curses = _MissingCurses()  # type: ignore[assignment]
 import copy
 import datetime
 import json

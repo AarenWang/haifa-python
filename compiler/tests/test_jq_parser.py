@@ -1,6 +1,7 @@
 import unittest
 
 from ..jq_ast import (
+    ArrayLiteral,
     Field,
     Identity,
     IfElse,
@@ -66,6 +67,14 @@ class TestJQParser(unittest.TestCase):
         self.assertEqual(len(node.pairs), 2)
         self.assertEqual(node.pairs[0][0], "name")
         self.assertIsInstance(node.pairs[0][1], Field)
+
+    def test_array_literal(self):
+        node = parse_jq_program('["foo", 1, .bar]')
+        self.assertIsInstance(node, ArrayLiteral)
+        self.assertEqual(len(node.elements), 3)
+        self.assertIsInstance(node.elements[0], Literal)
+        self.assertEqual(node.elements[0].value, "foo")
+        self.assertIsInstance(node.elements[2], Field)
 
     def test_arithmetic_and_precedence(self):
         node = parse_jq_program(".a + .b * 2")

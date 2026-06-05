@@ -18,6 +18,7 @@ from haifa_jq.jq_ast import (
     Literal,
     Sequence,
     ObjectLiteral,
+    ArrayLiteral,
     Pipe,
     UnaryOp,
     BinaryOp,
@@ -517,6 +518,8 @@ class JQParser:
             return Literal(value)
         if token.type == "LBRACE":
             return self._parse_object_literal()
+        if token.type == "LBRACKET":
+            return self._parse_array_literal()
         if token.type == "LPAREN":
             self._advance()
             expr = self._parse_expression()
@@ -643,6 +646,8 @@ class JQParser:
             return FunctionCall(node.name, inlined_args)
         if isinstance(node, ObjectLiteral):
             return ObjectLiteral([(key, self._inline_node(value)) for key, value in node.pairs])
+        if isinstance(node, ArrayLiteral):
+            return ArrayLiteral([self._inline_node(element) for element in node.elements])
         if isinstance(node, Field):
             return Field(node.name, self._inline_node(node.source))
         if isinstance(node, UnaryOp):
@@ -712,6 +717,8 @@ class JQParser:
             return FunctionCall(node.name, [self._substitute(arg, mapping) for arg in node.args])
         if isinstance(node, ObjectLiteral):
             return ObjectLiteral([(key, self._substitute(value, mapping)) for key, value in node.pairs])
+        if isinstance(node, ArrayLiteral):
+            return ArrayLiteral([self._substitute(element, mapping) for element in node.elements])
         if isinstance(node, Field):
             return Field(node.name, self._substitute(node.source, mapping))
         if isinstance(node, UnaryOp):
@@ -793,6 +800,17 @@ class JQParser:
                     break
         self._expect("RBRACE")
         return ObjectLiteral(pairs)
+
+    def _parse_array_literal(self) -> JQNode:
+        elements = []
+        self._advance()  # consume '['
+        if self._current().type != "RBRACKET":
+            while True:
+                elements.append(self._parse_expression(stop_types={"COMMA", "RBRACKET"}))
+                if not self._match("COMMA"):
+                    break
+        self._expect("RBRACKET")
+        return ArrayLiteral(elements)
 
 
 def parse_jq_program(source: str) -> JQNode:

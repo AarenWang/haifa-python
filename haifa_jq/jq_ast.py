@@ -65,6 +65,11 @@ class ObjectLiteral(JQNode):
 
 
 @dataclass(frozen=True)
+class ArrayLiteral(JQNode):
+    elements: List[JQNode]
+
+
+@dataclass(frozen=True)
 class UnaryOp(JQNode):
     op: str  # "-" or "not"
     operand: JQNode
@@ -156,6 +161,7 @@ __all__ = [
     "IfElse",
     "TryCatch",
     "ObjectLiteral",
+    "ArrayLiteral",
     "UnaryOp",
     "BinaryOp",
     "UpdateAssignment",

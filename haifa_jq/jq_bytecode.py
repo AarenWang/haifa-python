@@ -25,6 +25,7 @@ class JQOpcode(Enum):
     OBJ_SET = auto()
     SET_INDEX = auto()
     FLATTEN = auto()
+    IS_TRUTHY = auto()
     REDUCE = auto()
 
     # jq core filters / collections

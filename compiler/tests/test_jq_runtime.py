@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from ..jq_runtime import (
     JQRuntimeError,
@@ -61,6 +62,10 @@ class TestJQRuntime(unittest.TestCase):
         data = {"nums": [2, 3, 4]}
         self.assertEqual(run_filter("reduce(.nums, 'product')", data), [24])
 
+    def test_array_literal_with_dynamic_value(self):
+        data = {"name": "haifa"}
+        self.assertEqual(run_filter('["vm", .name, 9]', data), [["vm", "haifa", 9]])
+
     def test_select_with_multi_value_condition(self):
         data = [
             {"name": "a", "flags": [0, 1]},
@@ -98,6 +103,12 @@ class TestJQRuntime(unittest.TestCase):
         with self.assertRaises(JQRuntimeError) as ctx:
             next(stream)
         self.assertIn("input #1", str(ctx.exception))
+
+    def test_system_jq_fallback_missing_binary_is_wrapped(self):
+        with mock.patch("haifa_jq.jq_runtime.subprocess.run", side_effect=FileNotFoundError):
+            with self.assertRaises(JQRuntimeError) as ctx:
+                run_filter("unsupported_builtin()", {"x": 1})
+        self.assertIn("System jq fallback is unavailable", str(ctx.exception))
 
     def test_comma_union_outputs_each_branch(self):
         data = {"a": 1, "b": 2}
