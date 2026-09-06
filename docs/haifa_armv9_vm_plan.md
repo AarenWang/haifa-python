@@ -271,16 +271,63 @@ GUI/TUI 继续负责布局、单步、断点、自动运行、源码高亮；适
 - ARMv9 模式下突出显示 `PC`、`SP`、`FP`、`LR`、`NZCV`。
 - 显示当前栈帧布局和 spill slot。
 - 支持点击内存引用跳转到 heap 对象详情。
-- 在教学 HTML demo 中展示 “高级 HaifaVM 指令 -> ARMv9 lowering 指令” 双栏对照。
+- 在教学 HTML demo 中展示 "高级 HaifaVM 指令 -> ARMv9 lowering 指令" 双栏对照。
 
 ## Phase 拆分
 
 ### Phase 0：规格冻结与测试基线
 
 - [x] 建立 `docs/haifa_armv9_vm_plan.md`。
-- [ ] 明确 `HaifaArmV9VM` 是新增 VM，不替换 `BytecodeVM`。
-- [ ] 记录当前 Lua/Scheme/VM 测试基线。
-- [ ] 列出最小可执行 ARMv9 风格指令集。
+- [x] 明确 `HaifaArmV9VM` 是新增 VM，不替换 `BytecodeVM`。
+- [x] 记录当前 Lua/Scheme/VM 测试基线。
+- [x] 列出最小可执行 ARMv9 风格指令集。
+
+#### HaifaArmV9VM 定位声明
+
+`HaifaArmV9VM` 是**新增的独立 VM**，不替换 `BytecodeVM`：
+
+- `BytecodeVM`（`compiler/bytecode_vm.py`）继续作为 Lua/Scheme/JQ 的高级语言语义 VM，现有前端编译流水线（lexer → parser → analysis → compiler → bytecode → BytecodeVM）保持不变。
+- `HaifaArmV9VM`（`compiler/armv9_vm.py`）作为并行存在的低层教学目标，通过 `compiler/armv9_lowering.py` 从高级字节码 lowering 生成 ARMv9 风格指令。
+- 两者共享调试基础设施（通过 debug adapter 协议），但执行引擎、寄存器模型、内存模型完全独立。
+- 任何对 `HaifaArmV9VM` 的改动不得修改 `BytecodeVM` 的指令集、执行逻辑或现有 Lua/Scheme/JQ 默认执行路径。
+
+#### 测试基线（Phase 0 时间点）
+
+在 Phase 0 时间点，现有测试套件状态：
+
+| 测试范围 | 测试数 | 状态 |
+| --- | --- | --- |
+| `compiler/tests/` | 170 | 全部通过 |
+| `haifa_lua/tests/` | 134 | 全部通过 |
+| 合计（compiler + lua） | 304 | 全部通过 |
+| 全量（含 jq/scheme/vm/其它） | 626 | 626 通过，1 预存失败* |
+
+\* 预存失败：`test_chinese_gui.py::test_chinese_display`，因无头环境下 pygame.font 未初始化导致，与 ARMv9 VM 无关，不纳入回归基线。
+
+后续每个 Phase 完成后需确认：上述测试无新增失败。
+
+#### 最小可执行 ARMv9 风格指令集
+
+Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停机，足以编写简单的循环与条件程序：
+
+| 指令 | 语义 | 操作数 |
+| --- | --- | --- |
+| `MOVI dst, imm` | 加载立即数 | dst=寄存器, imm=整数 |
+| `MOV dst, src` | 寄存器间移动 | dst=寄存器, src=寄存器 |
+| `ADD dst, lhs, rhs` | 加法 | dst, lhs, rhs=寄存器 |
+| `SUB dst, lhs, rhs` | 减法 | dst, lhs, rhs=寄存器 |
+| `CMP lhs, rhs` | 比较并设置 NZCV | lhs, rhs=寄存器 |
+| `B label` | 无条件跳转 | label |
+| `B.EQ label` | Z=1 时跳转 | label |
+| `B.NE label` | Z=0 时跳转 | label |
+| `HALT` | 停机 | 无 |
+
+后续 Phase 将在此基础上增量扩展：
+
+- **Phase 2**：补齐 `MUL`、`B.LT`、`B.GT`、`CSET`、`LDRC`。
+- **Phase 3**：补齐 `BL`、`RET`、`LDR`、`STR`、栈帧与调用约定。
+- **Phase 4**：补齐 `SDIV`、`MOD`、`NEG`、`AND`、`ORR`、`EOR`、`LSL`、`LSR`、`ASR`、`CMPI`、`BR`、`ADR`。
+- **Phase 5–6**：补齐运行时对象指令（`NEW_TABLE`、`TABLE_GET/SET`、`NEW_CLOSURE`、`CELL_GET/SET`、`CALL_RUNTIME`）。
 
 验收标准：
 
@@ -383,7 +430,7 @@ GUI/TUI 继续负责布局、单步、断点、自动运行、源码高亮；适
 
 验收标准：
 
-- 入门同学可以通过浏览器看到 “变量 -> 高级寄存器 -> ARMv9 寄存器/内存” 的映射过程。
+- 入门同学可以通过浏览器看到 "变量 -> 高级寄存器 -> ARMv9 寄存器/内存" 的映射过程。
 - demo 数据由真实 VM 执行快照导出，不手写伪状态。
 
 ### Phase 9：寄存器分配优化
