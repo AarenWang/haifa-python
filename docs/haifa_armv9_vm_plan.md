@@ -337,10 +337,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 1：ArmV9 字节码数据结构
 
-- [ ] 新增 `compiler/armv9_bytecode.py`。
-- [ ] 定义 `ArmV9Opcode`、`ArmV9Instruction`、`ArmV9Debug`。
-- [ ] 提供指令 pretty printer。
-- [ ] 添加序列化/反序列化辅助，便于 demo 与调试。
+- [x] 新增 `compiler/armv9_bytecode.py`。
+- [x] 定义 `ArmV9Opcode`、`ArmV9Instruction`、`ArmV9Debug`。
+- [x] 提供指令 pretty printer。
+- [x] 添加序列化/反序列化辅助，便于 demo 与调试。
 
 验收标准：
 
