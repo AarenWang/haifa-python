@@ -310,3 +310,79 @@ def test_armv9_vm_rejects_infinite_programs_with_max_steps():
 
     with pytest.raises(ArmV9RuntimeError, match="maximum step count exceeded"):
         HaifaArmV9VM(program).run(max_steps=5)
+
+
+def test_armv9_vm_computes_overflow_flag_on_cmp():
+    """CMP with signed overflow should set V flag (was always False before fix)."""
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", (1 << 63)),  # min negative in 64-bit
+        armv9_inst(ArmV9Opcode.MOVI, "X1", 1),
+        armv9_inst(ArmV9Opcode.CMP, "X0", "X1"),  # min_neg - 1 -> overflow
+        armv9_inst(ArmV9Opcode.HALT),
+    ]
+    vm = HaifaArmV9VM(program)
+    vm.run()
+    flags = vm.nzcv.to_dict()
+    assert flags["V"] is True   # signed overflow: negative - positive = positive
+    assert flags["N"] is False  # result bit 63 is 0
+    assert flags["Z"] is False
+
+
+def test_armv9_vm_overflow_flag_reverse_direction():
+    """CMP positive - min_negative should also set V flag."""
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", 1),
+        armv9_inst(ArmV9Opcode.MOVI, "X1", (1 << 63)),
+        armv9_inst(ArmV9Opcode.CMP, "X0", "X1"),  # 1 - min_neg -> overflow
+        armv9_inst(ArmV9Opcode.HALT),
+    ]
+    vm = HaifaArmV9VM(program)
+    vm.run()
+    flags = vm.nzcv.to_dict()
+    assert flags["V"] is True   # signed overflow: positive - negative = negative
+    assert flags["N"] is True   # result bit 63 is 1
+
+
+def test_armv9_vm_supports_extended_conditions():
+    """CSET should support all 16 AArch64 conditions, not just EQ/NE/LT/GT."""
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", 5),
+        armv9_inst(ArmV9Opcode.MOVI, "X1", 3),
+        armv9_inst(ArmV9Opcode.CMP, "X0", "X1"),  # 5 > 3: N=0, Z=0, C=1, V=0
+        armv9_inst(ArmV9Opcode.CSET, "X2", "HI"),  # C and not Z -> 1
+        armv9_inst(ArmV9Opcode.CSET, "X3", "LS"),  # not C or Z -> 0
+        armv9_inst(ArmV9Opcode.CSET, "X4", "GE"),  # N == V -> 1
+        armv9_inst(ArmV9Opcode.CSET, "X5", "LE"),  # Z or N != V -> 0
+        armv9_inst(ArmV9Opcode.CSET, "X6", "CS"),  # C -> 1
+        armv9_inst(ArmV9Opcode.CSET, "X7", "CC"),  # not C -> 0
+        armv9_inst(ArmV9Opcode.HALT),
+    ]
+    vm = HaifaArmV9VM(program)
+    vm.run()
+    assert vm.read_reg("X2") == 1  # HI
+    assert vm.read_reg("X3") == 0  # LS
+    assert vm.read_reg("X4") == 1  # GE
+    assert vm.read_reg("X5") == 0  # LE
+    assert vm.read_reg("X6") == 1  # CS
+    assert vm.read_reg("X7") == 0  # CC
+
+
+def test_armv9_vm_bl_lt_with_signed_overflow():
+    """B.LT should correctly handle signed overflow using N != V."""
+    # X0 = min_negative, X1 = 1: X0 < X1 in signed, but overflow occurs
+    program = [
+        armv9_inst(ArmV9Opcode.MOVI, "X0", (1 << 63)),
+        armv9_inst(ArmV9Opcode.MOVI, "X1", 1),
+        armv9_inst(ArmV9Opcode.CMP, "X0", "X1"),
+        armv9_inst(ArmV9Opcode.B_LT, "less"),
+        armv9_inst(ArmV9Opcode.MOVI, "X2", 0),  # not less
+        armv9_inst(ArmV9Opcode.B, "done"),
+        armv9_inst(ArmV9Opcode.LABEL, "less"),
+        armv9_inst(ArmV9Opcode.MOVI, "X2", 1),  # less
+        armv9_inst(ArmV9Opcode.LABEL, "done"),
+        armv9_inst(ArmV9Opcode.HALT),
+    ]
+    vm = HaifaArmV9VM(program)
+    vm.run()
+    # min_negative < 1 in signed arithmetic -> B.LT should branch
+    assert vm.read_reg("X2") == 1

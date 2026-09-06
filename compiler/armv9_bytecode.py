@@ -183,7 +183,7 @@ def deserialize_armv9_program(
 
 
 def _format_arg(arg: Any) -> str:
-    if isinstance(arg, (tuple, list)) and len(arg) == 2:
+    if isinstance(arg, tuple) and len(arg) == 2:
         base, offset = arg
         return f"[{base}, {offset}]"
     if isinstance(arg, str):

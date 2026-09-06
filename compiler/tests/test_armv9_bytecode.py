@@ -98,3 +98,10 @@ def test_runtime_pseudo_ops_are_part_of_phase_one_contract():
         "RESULT_LIST",
         "CALL_RUNTIME",
     }.issubset(opcodes)
+
+
+def test_format_instruction_does_not_mistake_list_for_memory_operand():
+    """A two-element list arg should use repr, not memory operand syntax."""
+    instruction = armv9_inst(ArmV9Opcode.MOVI, "X0", ["FP", -1])
+    text = format_armv9_instruction(instruction)
+    assert "['FP', -1]" in text

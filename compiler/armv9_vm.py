@@ -18,11 +18,16 @@ class ArmV9Flags:
     v: bool = False
 
     def update_from_subtraction(self, lhs: int, rhs: int) -> None:
-        result = lhs - rhs
-        self.n = result < 0
+        """Update NZCV for subtraction (lhs - rhs) with 64-bit semantics."""
+        mask = (1 << 64) - 1
+        sign_bit = 1 << 63
+        a = lhs & mask
+        b = rhs & mask
+        result = (a - b) & mask
+        self.n = bool(result & sign_bit)
         self.z = result == 0
-        self.c = lhs >= rhs
-        self.v = False
+        self.c = a >= b
+        self.v = bool(((a ^ b) & (a ^ result)) & sign_bit)
 
     def to_dict(self) -> dict[str, bool]:
         return {
@@ -100,6 +105,8 @@ class ArmV9CallFrame:
 class HaifaArmV9VM:
     """A small ARMv9-style VM target for Haifa lowering experiments."""
 
+    # Each call frame reserves 16 stack slots: 2 for old FP and return PC,
+    # 14 reserved for future spill slots and saved registers.
     FRAME_STRIDE = 16
     GENERAL_REGISTERS = tuple(f"X{index}" for index in range(16))
     SPECIAL_REGISTERS = ("FP", "LR", "SP", "PC")
@@ -261,6 +268,9 @@ class HaifaArmV9VM:
         self.write_reg(str(dst), self.memory.const_pool[index])
 
     def _op_ADD(self, instruction: ArmV9Instruction) -> None:
+        # Result is not masked to 64 bits; the VM stores Python ints for
+        # compatibility with dynamic language semantics. 64-bit truncation
+        # is deferred to the arm_emulator project.
         dst, lhs, rhs = self._expect_args(instruction, 3)
         self.write_reg(str(dst), self._int_reg(lhs) + self._int_reg(rhs))
 
@@ -342,6 +352,8 @@ class HaifaArmV9VM:
         self._branch_to(str(label))
 
     def _op_RET(self, instruction: ArmV9Instruction) -> None:
+        # When there are no call frames, RET acts as program termination.
+        # This is a teaching simplification; real ARM would jump to LR.
         if not self.frames:
             self.halted = True
             return
@@ -556,15 +568,30 @@ class HaifaArmV9VM:
 
     def _condition_holds(self, condition: str) -> bool:
         normalized = condition.upper()
-        if normalized == "EQ":
-            return self.nzcv.z
-        if normalized == "NE":
-            return not self.nzcv.z
-        if normalized == "LT":
-            return self.nzcv.n != self.nzcv.v
-        if normalized == "GT":
-            return not self.nzcv.z and self.nzcv.n == self.nzcv.v
-        raise ArmV9RuntimeError(f"unknown condition: {condition}")
+        n, z, c, v = self.nzcv.n, self.nzcv.z, self.nzcv.c, self.nzcv.v
+        table = {
+            "EQ": z,
+            "NE": not z,
+            "CS": c,
+            "HS": c,
+            "CC": not c,
+            "LO": not c,
+            "MI": n,
+            "PL": not n,
+            "VS": v,
+            "VC": not v,
+            "HI": c and not z,
+            "LS": not c or z,
+            "GE": n == v,
+            "LT": n != v,
+            "GT": not z and n == v,
+            "LE": z or n != v,
+            "AL": True,
+            "NV": False,
+        }
+        if normalized not in table:
+            raise ArmV9RuntimeError(f"unknown condition: {condition}")
+        return table[normalized]
 
     def _expect_args(
         self, instruction: ArmV9Instruction, count: int
