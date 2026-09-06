@@ -542,7 +542,7 @@ def build_b_cond(cond: int, offset_bytes: int) -> int:
     if offset_bytes % 4 != 0:
         raise ValueError(f"branch offset must be 4-byte aligned: {offset_bytes}")
     imm19 = (offset_bytes >> 2) & mask_bits(19)
-    word = 0b0101010 << 24  # bits[31:25] = 0101010
+    word = 0b0101010 << 25  # bits[31:25] = 0101010
     word = insert_bits(word, 24, 1, 0)  # bit 24 = 0
     word = _put(word, EncodingFormat.BCOND_IMM19, imm19)
     word = insert_bits(word, 4, 1, 0)   # bit 4 = 0
