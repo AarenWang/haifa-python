@@ -30,59 +30,38 @@ class DecodeError(Exception):
 
     def __init__(self, word: int, message: str = "") -> None:
         self.word = word
-        super().__init__(f"{message} (word=0x{word & 0xFFFFFFFF:08x})" if message else f"cannot decode word 0x{word & 0xFFFFFFFF:08x}")
+        super().__init__(
+            f"{message} (word=0x{word & 0xFFFFFFFF:08x})"
+            if message
+            else f"cannot decode word 0x{word & 0xFFFFFFFF:08x}"
+        )
 
 
 def decode(word: int) -> Instruction:
-    """解码 32 位指令。
-
-    主入口：按 bit-field 模式匹配指令类型。
-
-    Args:
-        word: 32 位指令编码
-
-    Returns:
-        解码后的 Instruction 对象
-
-    Raises:
-        DecodeError: 无法识别的指令
-    """
+    """解码 32 位指令。"""
     word = word & 0xFFFFFFFF
 
-    # 尝试各类指令解码
-    decoder = _try_decode_branch(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_movw(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_add_sub_immediate(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_csel(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_load_store(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_data_processing_register(word)
-    if decoder is not None:
-        return decoder
-
-    decoder = _try_decode_halt(word)
-    if decoder is not None:
-        return decoder
+    for decoder_fn in (
+        _try_decode_branch,
+        _try_decode_movw,
+        _try_decode_add_sub_immediate,
+        _try_decode_csel,
+        _try_decode_load_store,
+        _try_decode_add_sub_register,
+        _try_decode_logical_register,
+        _try_decode_dp_2src,
+        _try_decode_dp_3src,
+        _try_decode_halt,
+    ):
+        result = decoder_fn(word)
+        if result is not None:
+            return result
 
     raise DecodeError(word)
 
 
 # ============================================================
-# 分支指令解码
+# 分支指令
 # ============================================================
 
 def _try_decode_branch(word: int) -> Instruction | None:
@@ -119,108 +98,64 @@ def _try_decode_branch(word: int) -> Instruction | None:
             condition=cond,
         )
 
-    # BR Xn: 1101011 0000 11111 000000 Rn 00000
-    if word == 0xD61F0000:
-        # RET (default X30)
+    # unconditional branch (register): bits[31:25] = 1101011
+    if extract_bits(word, 25, 7) == 0b1101011:
+        op1 = extract_bits(word, 21, 3)
         rn = extract_bits(word, 5, 5)
-        return Instruction(
-            Mnemonic.RET,
-            (RegisterOperand(rn, True),) if rn != 30 else (),
-            raw_word=word,
-        )
+        op2 = extract_bits(word, 0, 5)
 
-    # BR Xn: 1101011 0000 11111 000000 Rn 00000
-    if extract_bits(word, 10, 22) == 0b1101011000011111000000:
-        rn = extract_bits(word, 5, 5)
-        return Instruction(
-            Mnemonic.BR,
-            (RegisterOperand(rn, True),),
-            raw_word=word,
-        )
-
-    # BLR Xn: 1101011 0001 11111 000000 Rn 00000
-    if extract_bits(word, 10, 22) == 0b1101011000111111000000:
-        rn = extract_bits(word, 5, 5)
-        return Instruction(
-            Mnemonic.BLR,
-            (RegisterOperand(rn, True),),
-            raw_word=word,
-        )
-
-    # RET Xn: 1101011 0010 11111 000000 Rn 00000
-    if extract_bits(word, 10, 22) == 0b1101011001011111000000:
-        rn = extract_bits(word, 5, 5)
-        if rn == 30:
-            return Instruction(Mnemonic.RET, (), raw_word=word)
-        return Instruction(
-            Mnemonic.RET,
-            (RegisterOperand(rn, True),),
-            raw_word=word,
-        )
+        if op1 == 0b000 and op2 == 0b00000:
+            return Instruction(
+                Mnemonic.BR,
+                (RegisterOperand(rn, True),),
+                raw_word=word,
+            )
+        if op1 == 0b001 and op2 == 0b00000:
+            return Instruction(
+                Mnemonic.BLR,
+                (RegisterOperand(rn, True),),
+                raw_word=word,
+            )
+        if op1 == 0b010 and op2 == 0b00000:
+            if rn == 30:
+                return Instruction(Mnemonic.RET, (), raw_word=word)
+            return Instruction(
+                Mnemonic.RET,
+                (RegisterOperand(rn, True),),
+                raw_word=word,
+            )
 
     return None
 
 
 # ============================================================
-# MOVZ/MOVN/MOVK 解码
+# MOVZ/MOVN/MOVK
 # ============================================================
 
 def _try_decode_movw(word: int) -> Instruction | None:
-    # 检查固定位 bits[28:23] = 100101
     if extract_bits(word, 23, 6) != 0b100101:
         return None
 
     sf = extract_bits(word, 31, 1)
     opc = extract_bits(word, 29, 2)
-    hw = extract_bits(word, 21, 2)
     imm16 = extract_bits(word, 5, 16)
     rd = extract_bits(word, 0, 5)
     is_64bit = bool(sf)
 
-    if opc == 0b00:  # MOVN
-        actual_value = ~(imm16 << (hw * 16))
-        if not is_64bit:
-            actual_value &= 0xFFFFFFFF
-        else:
-            actual_value &= 0xFFFFFFFFFFFFFFFF
-        return Instruction(
-            Mnemonic.MOVN,
-            (
-                RegisterOperand(rd, is_64bit),
-                ImmediateOperand(imm16),
-            ),
-            raw_word=word,
-        )
-
-    if opc == 0b10:  # MOVZ
-        return Instruction(
-            Mnemonic.MOVZ,
-            (
-                RegisterOperand(rd, is_64bit),
-                ImmediateOperand(imm16),
-            ),
-            raw_word=word,
-        )
-
-    if opc == 0b11:  # MOVK
-        return Instruction(
-            Mnemonic.MOVK,
-            (
-                RegisterOperand(rd, is_64bit),
-                ImmediateOperand(imm16),
-            ),
-            raw_word=word,
-        )
-
+    if opc == 0b00:
+        return Instruction(Mnemonic.MOVN, (RegisterOperand(rd, is_64bit), ImmediateOperand(imm16)), raw_word=word)
+    if opc == 0b10:
+        return Instruction(Mnemonic.MOVZ, (RegisterOperand(rd, is_64bit), ImmediateOperand(imm16)), raw_word=word)
+    if opc == 0b11:
+        return Instruction(Mnemonic.MOVK, (RegisterOperand(rd, is_64bit), ImmediateOperand(imm16)), raw_word=word)
     return None
 
 
 # ============================================================
-# ADD/SUB 立即数解码
+# ADD/SUB 立即数
 # ============================================================
 
 def _try_decode_add_sub_immediate(word: int) -> Instruction | None:
-    # 检查固定位 bits[28:23] = 100010
     if extract_bits(word, 23, 6) != 0b100010:
         return None
 
@@ -238,19 +173,11 @@ def _try_decode_add_sub_immediate(word: int) -> Instruction | None:
     if op == 0 and s == 0:
         mnemonic = Mnemonic.ADD
     elif op == 0 and s == 1:
-        # CMN: Rn=XZR, ADDS
-        if rd == 31:
-            mnemonic = Mnemonic.CMN
-        else:
-            mnemonic = Mnemonic.ADDS
+        mnemonic = Mnemonic.CMN if rd == 31 else Mnemonic.ADDS
     elif op == 1 and s == 0:
         mnemonic = Mnemonic.SUB
     elif op == 1 and s == 1:
-        # CMP: Rd=XZR, SUBS
-        if rd == 31:
-            mnemonic = Mnemonic.CMP
-        else:
-            mnemonic = Mnemonic.SUBS
+        mnemonic = Mnemonic.CMP if rd == 31 else Mnemonic.SUBS
     else:
         return None
 
@@ -264,13 +191,10 @@ def _try_decode_add_sub_immediate(word: int) -> Instruction | None:
 
 
 # ============================================================
-# 条件选择 (CSEL/CSINC) 解码
+# 条件选择 (CSEL/CSINC)
 # ============================================================
 
 def _try_decode_csel(word: int) -> Instruction | None:
-    # CSEL: sf | 0 | 0 | 11010100 | Rm | cond | 00 | Rn | Rd
-    # CSINC: sf | 0 | 0 | 11010100 | Rm | cond | 01 | Rn | Rd
-    # 检查 bits[30:21] = 0011010100
     if extract_bits(word, 21, 10) != 0b0011010100:
         return None
 
@@ -286,17 +210,12 @@ def _try_decode_csel(word: int) -> Instruction | None:
     if op2 == 0b00:  # CSEL
         return Instruction(
             Mnemonic.CSEL,
-            (
-                RegisterOperand(rd, is_64bit),
-                RegisterOperand(rn, is_64bit),
-                RegisterOperand(rm, is_64bit),
-            ),
+            (RegisterOperand(rd, is_64bit), RegisterOperand(rn, is_64bit), RegisterOperand(rm, is_64bit)),
             raw_word=word,
             condition=cond,
         )
 
-    if op2 == 0b01:  # CSINC
-        # CSET: CSINC Rd, ZZR, XZR, invert(cond)
+    if op2 == 0b01:  # CSINC / CSET
         if rn == 31 and rm == 31:
             return Instruction(
                 Mnemonic.CSET,
@@ -306,11 +225,7 @@ def _try_decode_csel(word: int) -> Instruction | None:
             )
         return Instruction(
             Mnemonic.CSINC,
-            (
-                RegisterOperand(rd, is_64bit),
-                RegisterOperand(rn, is_64bit),
-                RegisterOperand(rm, is_64bit),
-            ),
+            (RegisterOperand(rd, is_64bit), RegisterOperand(rn, is_64bit), RegisterOperand(rm, is_64bit)),
             raw_word=word,
             condition=cond,
         )
@@ -319,12 +234,10 @@ def _try_decode_csel(word: int) -> Instruction | None:
 
 
 # ============================================================
-# Load/Store 解码
+# Load/Store
 # ============================================================
 
 def _try_decode_load_store(word: int) -> Instruction | None:
-    # 立即数偏移格式: size(2) 111 0 V(0) 01 opc(2) imm12 Rn Rt
-    # bits[29:27] = 111, bit[26] = 0, bits[25:24] = 01
     if extract_bits(word, 27, 3) != 0b111:
         return None
     if extract_bits(word, 26, 1) != 0:
@@ -338,7 +251,6 @@ def _try_decode_load_store(word: int) -> Instruction | None:
     rn = extract_bits(word, 5, 5)
     rt = extract_bits(word, 0, 5)
 
-    # 确定位宽
     if size == 0b11:
         is_64bit = True
         load = bool(opc & 1)
@@ -346,46 +258,35 @@ def _try_decode_load_store(word: int) -> Instruction | None:
         is_64bit = False
         load = bool(opc & 1)
     else:
-        # 8/16 位暂不支持解码（可后续扩展）
         return None
 
-    # 有符号加载 opc=10/11, 无符号 opc=00/01
     is_signed = bool(opc & 0b10)
     if is_signed and not load:
-        return None  # 有符号 store 不合法
+        return None
 
     base = RegisterOperand(rn, True)
-    offset = imm12 << (size + (0 if size < 2 else 0))
-    # 简化：imm12 * (1 << size)
-    offset = sign_extend(imm12, 12) * (1 << size) if size < 2 else imm12 * (1 << size)
+    offset = imm12 * (1 << size) if size >= 2 else sign_extend(imm12, 12) * (1 << size)
     mem_op = MemoryOperand(base, offset=offset)
 
     if load:
-        return Instruction(
-            Mnemonic.LDR,
-            (RegisterOperand(rt, is_64bit), mem_op),
-            raw_word=word,
-        )
-    return Instruction(
-        Mnemonic.STR,
-        (RegisterOperand(rt, is_64bit), mem_op),
-        raw_word=word,
-    )
+        return Instruction(Mnemonic.LDR, (RegisterOperand(rt, is_64bit), mem_op), raw_word=word)
+    return Instruction(Mnemonic.STR, (RegisterOperand(rt, is_64bit), mem_op), raw_word=word)
 
 
 # ============================================================
-# 数据处理（寄存器）解码
+# ADD/SUB (寄存器, shifted register)
 # ============================================================
 
-def _try_decode_data_processing_register(word: int) -> Instruction | None:
-    # 数据处理（寄存器）: bits[28:24] = 01011
+def _try_decode_add_sub_register(word: int) -> Instruction | None:
+    """add/subtract (shifted register): bits[28:24] = 01011, bit[21] = 0."""
     if extract_bits(word, 24, 5) != 0b01011:
+        return None
+    if extract_bits(word, 21, 1) != 0:
         return None
 
     sf = extract_bits(word, 31, 1)
-    op = extract_bits(word, 30, 1)   # 0=逻辑, 1=算术
+    op = extract_bits(word, 30, 1)
     s = extract_bits(word, 29, 1)
-    opcode = extract_bits(word, 21, 4)  # bits[24:21]
     shift_type = extract_bits(word, 22, 2)
     rm = extract_bits(word, 16, 5)
     imm6 = extract_bits(word, 10, 6)
@@ -397,65 +298,145 @@ def _try_decode_data_processing_register(word: int) -> Instruction | None:
     rn_op = RegisterOperand(rn, is_64bit)
     rm_op = RegisterOperand(rm, is_64bit)
 
-    # 带移位的第二操作数
     if imm6 == 0 and shift_type == 0:
         rm_shifted = rm_op
     else:
         rm_shifted = ShiftedOperand(rm_op, ShiftType.from_code(shift_type), imm6)
 
-    # 算术指令 (op=1)
-    if op == 1:
-        # ADD/SUB (寄存器): opcode=01000, bit24=0
-        if opcode == 0b0000:
-            if s == 0:
-                return Instruction(Mnemonic.ADD, (rd_op, rn_op, rm_shifted), raw_word=word)
-            else:
-                if rd == 31:
-                    return Instruction(Mnemonic.CMN, (rn_op, rm_shifted), raw_word=word)
-                return Instruction(Mnemonic.ADDS, (rd_op, rn_op, rm_shifted), raw_word=word)
-        if opcode == 0b1000:
-            if s == 0:
-                return Instruction(Mnemonic.SUB, (rd_op, rn_op, rm_shifted), raw_word=word)
-            else:
-                if rd == 31:
-                    return Instruction(Mnemonic.CMP, (rn_op, rm_shifted), raw_word=word)
-                return Instruction(Mnemonic.SUBS, (rd_op, rn_op, rm_shifted), raw_word=word)
-        # MUL: opcode=00111 (MADD with Ra=XZR)
-        if opcode == 0b0011:
-            return Instruction(Mnemonic.MUL, (rd_op, rn_op, rm_op), raw_word=word)
-        # SDIV: opcode=00110, bit10=1
-        if opcode == 0b0010:
-            return Instruction(Mnemonic.SDIV, (rd_op, rn_op, rm_op), raw_word=word)
-        # UDIV: opcode=00010, bit10=0
-        if opcode == 0b0010 and s == 0:
-            return Instruction(Mnemonic.UDIV, (rd_op, rn_op, rm_op), raw_word=word)
-
-    # 逻辑指令 (op=0)
-    if op == 0:
-        if opcode == 0b0000:  # AND
-            if s == 0:
-                return Instruction(Mnemonic.AND, (rd_op, rn_op, rm_shifted), raw_word=word)
-            else:
-                return Instruction(Mnemonic.ANDS, (rd_op, rn_op, rm_shifted), raw_word=word)
-        if opcode == 0b0001:  # ORR / BIC
-            if s == 0:
-                return Instruction(Mnemonic.ORR, (rd_op, rn_op, rm_shifted), raw_word=word)
-        if opcode == 0b0010:  # ORN / EOR
-            if s == 0:
-                return Instruction(Mnemonic.EOR, (rd_op, rn_op, rm_shifted), raw_word=word)
-        if opcode == 0b0100:  # EOR
-            if s == 0:
-                return Instruction(Mnemonic.EOR, (rd_op, rn_op, rm_shifted), raw_word=word)
-
+    if op == 0 and s == 0:
+        return Instruction(Mnemonic.ADD, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if op == 0 and s == 1:
+        if rd == 31:
+            return Instruction(Mnemonic.CMN, (rn_op, rm_shifted), raw_word=word)
+        return Instruction(Mnemonic.ADDS, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if op == 1 and s == 0:
+        return Instruction(Mnemonic.SUB, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if op == 1 and s == 1:
+        if rd == 31:
+            return Instruction(Mnemonic.CMP, (rn_op, rm_shifted), raw_word=word)
+        return Instruction(Mnemonic.SUBS, (rd_op, rn_op, rm_shifted), raw_word=word)
     return None
 
 
 # ============================================================
-# HALT 伪指令解码
+# 逻辑指令 (shifted register)
 # ============================================================
 
-# HALT 编码：使用一个 AArch64 未分配的编码区间
-# bits[31:25] = 0000000, 全 0 视为 HALT（实际 ARM 中是 UDF #0）
+def _try_decode_logical_register(word: int) -> Instruction | None:
+    """logical (shifted register): bits[28:24] = 01010."""
+    if extract_bits(word, 24, 5) != 0b01010:
+        return None
+
+    sf = extract_bits(word, 31, 1)
+    opc = extract_bits(word, 29, 2)
+    n = extract_bits(word, 21, 1)
+    shift_type = extract_bits(word, 22, 2)
+    rm = extract_bits(word, 16, 5)
+    imm6 = extract_bits(word, 10, 6)
+    rn = extract_bits(word, 5, 5)
+    rd = extract_bits(word, 0, 5)
+    is_64bit = bool(sf)
+
+    rd_op = RegisterOperand(rd, is_64bit)
+    rn_op = RegisterOperand(rn, is_64bit)
+    rm_op = RegisterOperand(rm, is_64bit)
+
+    if imm6 == 0 and shift_type == 0:
+        rm_shifted = rm_op
+    else:
+        rm_shifted = ShiftedOperand(rm_op, ShiftType.from_code(shift_type), imm6)
+
+    # MOV = ORR Xd, XZR, Xm
+    if opc == 0b01 and n == 0 and rn == 31:
+        return Instruction(Mnemonic.MOV, (rd_op, rm_shifted), raw_word=word)
+
+    # MVN = ORN Xd, XZR, Xm
+    if opc == 0b01 and n == 1 and rn == 31:
+        return Instruction(Mnemonic.MVN, (rd_op, rm_shifted), raw_word=word)
+
+    if opc == 0b00 and n == 0:
+        return Instruction(Mnemonic.AND, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if opc == 0b11 and n == 0:
+        return Instruction(Mnemonic.ANDS, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if opc == 0b01 and n == 0:
+        return Instruction(Mnemonic.ORR, (rd_op, rn_op, rm_shifted), raw_word=word)
+    if opc == 0b10 and n == 0:
+        return Instruction(Mnemonic.EOR, (rd_op, rn_op, rm_shifted), raw_word=word)
+    return None
+
+
+# ============================================================
+# 数据处理 (2 source): SDIV/UDIV/LSLV/LSRV/ASRV/RORV
+# ============================================================
+
+def _try_decode_dp_2src(word: int) -> Instruction | None:
+    """data processing (2 source): bits[30:21] = 0011010110."""
+    if extract_bits(word, 21, 10) != 0b0011010110:
+        return None
+
+    sf = extract_bits(word, 31, 1)
+    rm = extract_bits(word, 16, 5)
+    opcode = extract_bits(word, 10, 6)
+    rn = extract_bits(word, 5, 5)
+    rd = extract_bits(word, 0, 5)
+    is_64bit = bool(sf)
+
+    rd_op = RegisterOperand(rd, is_64bit)
+    rn_op = RegisterOperand(rn, is_64bit)
+    rm_op = RegisterOperand(rm, is_64bit)
+
+    table = {
+        0b000010: Mnemonic.UDIV,
+        0b000011: Mnemonic.SDIV,
+        0b001000: Mnemonic.LSL,
+        0b001001: Mnemonic.LSR,
+        0b001010: Mnemonic.ASR,
+        0b001011: Mnemonic.ROR,
+    }
+
+    mnem = table.get(opcode)
+    if mnem is not None:
+        return Instruction(mnem, (rd_op, rn_op, rm_op), raw_word=word)
+    return None
+
+
+# ============================================================
+# 数据处理 (3 source): MUL/MADD/MSUB
+# ============================================================
+
+def _try_decode_dp_3src(word: int) -> Instruction | None:
+    """data processing (3 source): bits[30:29]=00, bits[28:24]=11011."""
+    if extract_bits(word, 29, 1) != 0:
+        return None
+    if extract_bits(word, 30, 1) != 0:
+        return None
+    if extract_bits(word, 24, 5) != 0b11011:
+        return None
+
+    sf = extract_bits(word, 31, 1)
+    o0 = extract_bits(word, 21, 3)  # [23:21]
+    ra = extract_bits(word, 16, 5)  # [20:16]
+    rm = extract_bits(word, 11, 5)  # [15:11]
+    rn = extract_bits(word, 5, 5)   # [9:5]
+    rd = extract_bits(word, 0, 5)   # [4:0]
+    is_64bit = bool(sf)
+
+    rd_op = RegisterOperand(rd, is_64bit)
+    rn_op = RegisterOperand(rn, is_64bit)
+    rm_op = RegisterOperand(rm, is_64bit)
+
+    if o0 == 0b000:
+        # MADD: Rd = Ra + Rn * Rm
+        if ra == 31:
+            # MUL: Rd = Rn * Rm (Ra = XZR)
+            return Instruction(Mnemonic.MUL, (rd_op, rn_op, rm_op), raw_word=word)
+    return None
+
+
+# ============================================================
+# HALT 伪指令
+# ============================================================
+
 HALT_ENCODING = 0x00000000
 
 
