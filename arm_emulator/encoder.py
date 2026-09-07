@@ -301,12 +301,7 @@ def _encode_movz(operands, current_addr, labels, base_addr):
         raise AssembleError("MOVZ requires Rd, #imm16")
     rd = _parse_register(operands[0])
     imm16 = _parse_imm(operands[1])
-    hw = 0
-    if len(operands) >= 4:
-        shift_name = operands[2].strip().upper()
-        shift_amt = _parse_imm(operands[3])
-        if shift_name == "LSL":
-            hw = shift_amt // 16
+    hw = _parse_mov_shift(operands)
     return build_movz(rd, imm16, hw=hw, is_64bit=True)
 
 
@@ -316,12 +311,7 @@ def _encode_movn(operands, current_addr, labels, base_addr):
         raise AssembleError("MOVN requires Rd, #imm16")
     rd = _parse_register(operands[0])
     imm16 = _parse_imm(operands[1])
-    hw = 0
-    if len(operands) >= 4:
-        shift_name = operands[2].strip().upper()
-        shift_amt = _parse_imm(operands[3])
-        if shift_name == "LSL":
-            hw = shift_amt // 16
+    hw = _parse_mov_shift(operands)
     # MOVN 编码: opc=00
     word = build_movz(rd, imm16, hw=hw, is_64bit=True)
     # 修改 opc 为 00
@@ -335,16 +325,33 @@ def _encode_movk(operands, current_addr, labels, base_addr):
         raise AssembleError("MOVK requires Rd, #imm16")
     rd = _parse_register(operands[0])
     imm16 = _parse_imm(operands[1])
-    hw = 0
-    if len(operands) >= 4:
-        shift_name = operands[2].strip().upper()
-        shift_amt = _parse_imm(operands[3])
-        if shift_name == "LSL":
-            hw = shift_amt // 16
+    hw = _parse_mov_shift(operands)
     # MOVK 编码: opc=11
     word = build_movz(rd, imm16, hw=hw, is_64bit=True)
     word = insert_bits(word, 29, 2, 0b11)
     return word
+
+
+def _parse_mov_shift(operands) -> int:
+    """解析 MOVZ/MOVN/MOVK 的 LSL 移位量，返回 hw（移位量/16）。
+
+    支持两种操作数格式：
+    - ['Rd', '#imm', 'LSL', '#16']  （4 段）
+    - ['Rd', '#imm', 'LSL #16']     （3 段，_split_operands 合并）
+    """
+    for i in range(2, len(operands)):
+        part = operands[i].strip()
+        if part.upper().startswith("LSL"):
+            rem = part[3:].strip()
+            # 'LSL #16' 或 'LSL #16' 两种都可能；也可能单独 'LSL' + '#16'
+            if rem:
+                shift_amt = _parse_imm(rem)
+            elif i + 1 < len(operands):
+                shift_amt = _parse_imm(operands[i + 1])
+            else:
+                return 0
+            return shift_amt // 16
+    return 0
 
 
 # --- ADD/SUB/CMP/CMN ---
@@ -859,44 +866,59 @@ def _assemble_b_cond(mnemonic: str, operands, current_addr, labels, base_addr):
 
 @_register("LDR")
 def _encode_ldr(operands, current_addr, labels, base_addr):
-    if len(operands) != 2:
+    if len(operands) < 2:
         raise AssembleError("LDR requires Rt, [Rn, ...]")
     rt = _parse_register(operands[0])
-    base, offset, pre, post = _parse_memory_operand(operands[1])
-    size = 0b11  # 64-bit
-    # LDR (immediate offset): 11 111 0 01 01 imm12 Rn Rt
-    word = 0
-    word = insert_bits(word, 30, 2, size)
-    word = insert_bits(word, 27, 3, 0b111)
-    word = insert_bits(word, 26, 1, 0)
-    word = insert_bits(word, 24, 2, 0b01)
-    word = insert_bits(word, 22, 2, 0b01)  # opc=01 for LDR
-    imm12 = offset // 8  # 64-bit: scale by 8
-    word = insert_bits(word, 10, 12, imm12 & mask_bits(12))
-    word = insert_bits(word, 5, 5, base)
-    word = insert_bits(word, 0, 5, rt)
-    return word
+    mem_str = _rebuild_mem_operand(operands[1:])
+    base, offset, pre, post = _parse_memory_operand(mem_str)
+    return _encode_load_store(rt, base, offset, pre, post, load=True)
 
 
 @_register("STR")
 def _encode_str(operands, current_addr, labels, base_addr):
-    if len(operands) != 2:
+    if len(operands) < 2:
         raise AssembleError("STR requires Rt, [Rn, ...]")
     rt = _parse_register(operands[0])
-    base, offset, pre, post = _parse_memory_operand(operands[1])
-    size = 0b11  # 64-bit
-    # STR (immediate offset): 11 111 0 01 00 imm12 Rn Rt
-    word = 0
-    word = insert_bits(word, 30, 2, size)
-    word = insert_bits(word, 27, 3, 0b111)
-    word = insert_bits(word, 26, 1, 0)
-    word = insert_bits(word, 24, 2, 0b01)
-    word = insert_bits(word, 22, 2, 0b00)  # opc=00 for STR
-    imm12 = offset // 8  # 64-bit: scale by 8
-    word = insert_bits(word, 10, 12, imm12 & mask_bits(12))
-    word = insert_bits(word, 5, 5, base)
-    word = insert_bits(word, 0, 5, rt)
+    mem_str = _rebuild_mem_operand(operands[1:])
+    base, offset, pre, post = _parse_memory_operand(mem_str)
+    return _encode_load_store(rt, base, offset, pre, post, load=False)
+
+
+def _encode_load_store(rt, base, offset, pre, post, *, load):
+    """编码 load/store（64 位），支持 offset/pre-indexed/post-indexed。"""
+    opc = 0b01 if load else 0b00
+    if not pre and not post:
+        # AArch64 load/store (unsigned immediate offset):
+        # size(11) | 111 | 1 | 01 | opc | imm12 | Rn | Rt
+        if offset % 8 != 0:
+            raise AssembleError(f"offset must be a multiple of 8 for 64-bit load/store: {offset}")
+        word = 0xF9000000  # size=11, op2=111, bit26=1, bits[25:24]=01, opc=00
+        word |= opc << 22
+        word |= (offset // 8 & mask_bits(12)) << 10
+        word |= base << 5
+        word |= rt
+        return word
+
+    # AArch64 load/store (immediate pre/post-indexed):
+    # size(11) | 111 | 0 | 00 | opc | 0 | imm9 | 11|01 | Rn | Rt
+    word = 0xF8000000  # size=11, op2=111, bit26=0, bits[25:24]=00, bit21=0
+    word |= opc << 22
+    word |= (offset & mask_bits(9)) << 12
+    word |= (0b11 if pre else 0b01) << 10
+    word |= base << 5
+    word |= rt
     return word
+
+
+def _rebuild_mem_operand(parts: list[str]) -> str:
+    """重建内存操作数字符串。
+
+    后索引 `LDR X1, [SP], #16` 被 _split_operands 拆成 ['[SP]', '#16']，
+    需要重新拼回 '[SP], #16'。
+    """
+    if not parts:
+        raise AssembleError("missing memory operand")
+    return ", ".join(parts)
 
 
 def _parse_memory_operand(s: str) -> tuple[int, int, bool, bool]:
@@ -904,6 +926,11 @@ def _parse_memory_operand(s: str) -> tuple[int, int, bool, bool]:
     s = s.strip()
     pre_indexed = False
     post_indexed = False
+
+    # 前索引/后索引：先去掉末尾的 !
+    if s.endswith("!"):
+        s = s[:-1].strip()
+        pre_indexed = True
 
     # 后索引: [Xn], #imm
     if "]" in s and s.index("]") < len(s) - 1:
@@ -915,11 +942,6 @@ def _parse_memory_operand(s: str) -> tuple[int, int, bool, bool]:
         offset = _parse_imm(rest) if rest else 0
         post_indexed = True
         return base, offset, False, True
-
-    # 前索引: [Xn, #imm]!
-    if s.endswith("!"):
-        s = s[:-1].strip()
-        pre_indexed = True
 
     # [Xn] 或 [Xn, #imm]
     if s.startswith("[") and s.endswith("]"):

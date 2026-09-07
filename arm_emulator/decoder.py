@@ -217,11 +217,14 @@ def _try_decode_csel(word: int) -> Instruction | None:
 
     if op2 == 0b01:  # CSINC / CSET
         if rn == 31 and rm == 31:
+            # CSET = CSINC Xd, XZR, XZR, invert(cond)。
+            # 编码时条件被反转，解码需恢复为原始条件。
+            cset_cond = Condition.from_code(cond_code ^ 1)
             return Instruction(
                 Mnemonic.CSET,
                 (RegisterOperand(rd, is_64bit),),
                 raw_word=word,
-                condition=cond,
+                condition=cset_cond,
             )
         return Instruction(
             Mnemonic.CSINC,
@@ -240,14 +243,9 @@ def _try_decode_csel(word: int) -> Instruction | None:
 def _try_decode_load_store(word: int) -> Instruction | None:
     if extract_bits(word, 27, 3) != 0b111:
         return None
-    if extract_bits(word, 26, 1) != 0:
-        return None
-    if extract_bits(word, 24, 2) != 0b01:
-        return None
 
     size = extract_bits(word, 30, 2)
     opc = extract_bits(word, 22, 2)
-    imm12 = extract_bits(word, 10, 12)
     rn = extract_bits(word, 5, 5)
     rt = extract_bits(word, 0, 5)
 
@@ -265,8 +263,26 @@ def _try_decode_load_store(word: int) -> Instruction | None:
         return None
 
     base = RegisterOperand(rn, True)
-    offset = imm12 * (1 << size) if size >= 2 else sign_extend(imm12, 12) * (1 << size)
-    mem_op = MemoryOperand(base, offset=offset)
+
+    # 无符号立即数偏移：bits[26]=0, bits[25:24]=01, bit[23]=0
+    if extract_bits(word, 26, 1) == 0 and extract_bits(word, 24, 2) == 0b01 and extract_bits(word, 23, 1) == 0:
+        imm12 = extract_bits(word, 10, 12)
+        # 教学模拟器将 imm12 按 12 位有符号解释再放大，支持 [SP, #-imm]
+        offset = sign_extend(imm12, 12) * (1 << size)
+        mem_op = MemoryOperand(base, offset=offset)
+    elif extract_bits(word, 26, 1) == 0 and extract_bits(word, 24, 2) == 0b00 and extract_bits(word, 21, 1) == 0:
+        # load/store 前索引/后索引：bits[24:22]=00, bits[21]=0
+        imm9 = extract_bits(word, 12, 9)
+        mode = extract_bits(word, 10, 2)  # 11=pre, 01=post
+        offset = sign_extend(imm9, 9)
+        if mode == 0b11:
+            mem_op = MemoryOperand(base, offset=offset, pre_indexed=True)
+        elif mode == 0b01:
+            mem_op = MemoryOperand(base, offset=offset, post_indexed=True)
+        else:
+            return None
+    else:
+        return None
 
     if load:
         return Instruction(Mnemonic.LDR, (RegisterOperand(rt, is_64bit), mem_op), raw_word=word)
