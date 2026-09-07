@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 try:
     from .bytecode_vm import BytecodeVM, Instruction
+    from .vm_debug_adapter import create_debug_adapter
     from .vm_events import (
         CoroutineCompleted,
         CoroutineCreated,
@@ -45,6 +46,7 @@ try:
     )
 except Exception:  # pragma: no cover - fallback when run as script bundle
     from compiler.bytecode_vm import BytecodeVM, Instruction  # type: ignore
+    from compiler.vm_debug_adapter import create_debug_adapter  # type: ignore
     from compiler.vm_events import (  # type: ignore
         CoroutineCompleted,
         CoroutineCreated,
@@ -93,6 +95,7 @@ class VMVisualizer:
         source_name: str | None = None,
     ):
         self._vm_cls = type(vm)
+        self._is_armv9 = hasattr(vm, "nzcv")
         self._program: List[Instruction] = list(vm.instructions)
         self.state = _VMState(vm=vm)
         (
@@ -233,9 +236,10 @@ class VMVisualizer:
         if len(self._history) > self.history_limit:
             self._history.pop(0)
         control = self.state.vm.step()
+        halted = control == "halt" if isinstance(control, str) else not control
         self.state.step += 1
 
-        if control == "halt" or self.state.vm.pc >= len(self._program):
+        if halted or self.state.vm.pc >= len(self._program):
             self.state.halted = True
             self.auto_run = False
             self.message = "Halted. Press r to reset or q to quit."
@@ -243,7 +247,11 @@ class VMVisualizer:
             self.message = "Running..."
 
     def _consume_events(self) -> None:
-        events = self.state.vm.drain_events()
+        events = (
+            self.state.vm.drain_events()
+            if hasattr(self.state.vm, "drain_events")
+            else []
+        )
         for event in events:
             label = self._format_event(event)
             self.event_log.append(label)
@@ -296,6 +304,8 @@ class VMVisualizer:
     def _ensure_vm_environment(
         self, vm: BytecodeVM
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        if self._is_armv9:
+            return (None, {})
         def has_globals(registers: Mapping[str, Any]) -> bool:
             return any(name.startswith("G_") for name in registers)
 
@@ -356,6 +366,8 @@ class VMVisualizer:
         return (None, dict(globals_map))
 
     def _apply_initial_environment(self, vm: BytecodeVM) -> None:
+        if self._is_armv9:
+            return
         if self._initial_env_snapshot and LuaEnvironment is not None:
             try:
                 env = LuaEnvironment(self._initial_env_snapshot)
@@ -407,7 +419,7 @@ class VMVisualizer:
         row += 1
         self._write(stdscr, row, 0, f"Step: {self.state.step} | PC: {self.state.vm.pc} | Auto: {self.auto_run} | Halted: {self.state.halted}")
 
-        snapshot = self.state.vm.snapshot_state()
+        snapshot = self._vm_snapshot()
         self._consume_events()
 
         row += 2
@@ -593,6 +605,37 @@ class VMVisualizer:
         stdscr.refresh()
         self._prev_registers = dict(snapshot.registers)
         self._has_prev_registers = True
+
+    def _vm_snapshot(self):
+        """Return a VMStateSnapshot-shaped view; ARMv9 goes through the debug adapter."""
+        if not self._is_armv9:
+            return self.state.vm.snapshot_state()
+        from .vm_events import TraceFrame, VMStateSnapshot
+
+        debug = create_debug_adapter(self.state.vm).snapshot()
+        frames = []
+        for frame in debug.call_stack:
+            if isinstance(frame, dict):
+                frames.append(
+                    TraceFrame(
+                        function_name=str(frame.get("label", "")),
+                        file="<armv9>",
+                        line=0,
+                        column=0,
+                        pc=int(frame.get("return_pc", 0)),
+                    )
+                )
+        return VMStateSnapshot(
+            pc=debug.pc,
+            current_coroutine=None,
+            registers=dict(debug.registers),
+            stack=[],
+            call_stack=frames,
+            coroutines=[],
+            upvalues=list(debug.extra.get("upvalues", [])),
+            emit_stack=list(debug.memory_sections.get("stack", [])),
+            output=list(debug.output),
+        )
 
     def _event_detail_lines(self) -> List[str]:
         if not self._event_entries:

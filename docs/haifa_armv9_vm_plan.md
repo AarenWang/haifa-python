@@ -413,8 +413,8 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 - [x] 新增 VM debug adapter 协议。
 - [x] 为 `BytecodeVM` 实现兼容 adapter。
 - [x] 为 `HaifaArmV9VM` 实现 adapter。
-- [ ] GUI visualizer 使用 adapter 读取状态。
-- [ ] TUI visualizer 使用 adapter 读取状态。
+- [x] GUI visualizer 使用 adapter 读取状态（`_vm_snapshot()`，支持 `HaifaArmV9VM`）。
+- [x] TUI visualizer 使用 adapter 读取状态（`_vm_snapshot()`，支持 `HaifaArmV9VM`）。
 
 验收标准：
 

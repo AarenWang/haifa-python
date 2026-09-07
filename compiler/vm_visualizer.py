@@ -75,6 +75,7 @@ pygame = _load_pygame()
 try:
     from .bytecode import Instruction
     from .bytecode_vm import BytecodeVM
+    from .vm_debug_adapter import create_debug_adapter
     from .vm_events import (
         CoroutineCompleted,
         CoroutineCreated,
@@ -87,6 +88,7 @@ try:
 except Exception:  # fallback when run as top-level script
     from compiler.bytecode import Instruction  # type: ignore
     from compiler.bytecode_vm import BytecodeVM  # type: ignore
+    from compiler.vm_debug_adapter import create_debug_adapter  # type: ignore
     from compiler.vm_events import (  # type: ignore
         CoroutineCompleted,
         CoroutineCreated,
@@ -242,6 +244,7 @@ class VMVisualizer:
         source_name: str | None = None,
     ):
         self.vm = vm
+        self._is_armv9 = hasattr(vm, "nzcv")
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Bytecode VM Visualizer")
@@ -301,6 +304,8 @@ class VMVisualizer:
         self, vm: BytecodeVM
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         """Guarantee that builtins are available and capture env snapshot."""
+        if self._is_armv9:
+            return (None, {})
 
         def has_globals(registers: Mapping[str, Any]) -> bool:
             return any(name.startswith("G_") for name in registers)
@@ -491,7 +496,7 @@ class VMVisualizer:
         return None
 
     def _consume_events(self) -> None:
-        events = self.vm.drain_events()
+        events = self.vm.drain_events() if hasattr(self.vm, "drain_events") else []
         if not events:
             return
 
@@ -630,7 +635,7 @@ class VMVisualizer:
     def _prepare_data(self):
         instructions_data, highlight_idx, match_highlights = self._prepare_instruction_display()
 
-        snapshot = self.vm.snapshot_state()
+        snapshot = self._vm_snapshot()
         self._latest_snapshot = snapshot
         registers_data, changed_indices = self._prepare_register_display(snapshot.registers)
 
@@ -1347,16 +1352,19 @@ class VMVisualizer:
         before_pc = self.vm.pc
         instruction = self.vm.instructions[before_pc]
         control = self.vm.step()
+        halted = control == "halt" if isinstance(control, str) else not control
         snapshot = {
             "step": len(self.trace_log),
             "pc": before_pc,
             "instruction": str(instruction),
-            "registers": dict(self.vm.registers),
-            "output": list(self.vm.output),
+            "registers": dict(
+                getattr(self.vm, "registers", getattr(self.vm, "regs", {}))
+            ),
+            "output": list(getattr(self.vm, "output", [])),
         }
         self.trace_log.append(snapshot)
 
-        if control == "halt":
+        if halted:
             self.paused = True
             self.message = "Execution halted."
             return True
@@ -1452,6 +1460,8 @@ class VMVisualizer:
         self.message = "VM reset."
 
     def _apply_initial_environment(self, vm: BytecodeVM) -> None:
+        if self._is_armv9:
+            return
         if self._initial_env_snapshot and LuaEnvironment is not None:
             try:
                 env = LuaEnvironment(self._initial_env_snapshot)
@@ -1462,3 +1472,34 @@ class VMVisualizer:
                 pass
         if self._initial_global_registers:
             vm.registers.update(self._initial_global_registers)
+
+    def _vm_snapshot(self):
+        """Return a VMStateSnapshot-shaped view; ARMv9 goes through the debug adapter."""
+        if not self._is_armv9:
+            return self.vm.snapshot_state()
+        from .vm_events import TraceFrame, VMStateSnapshot
+
+        debug = create_debug_adapter(self.vm).snapshot()
+        frames = []
+        for frame in debug.call_stack:
+            if isinstance(frame, dict):
+                frames.append(
+                    TraceFrame(
+                        function_name=str(frame.get("label", "")),
+                        file="<armv9>",
+                        line=0,
+                        column=0,
+                        pc=int(frame.get("return_pc", 0)),
+                    )
+                )
+        return VMStateSnapshot(
+            pc=debug.pc,
+            current_coroutine=None,
+            registers=dict(debug.registers),
+            stack=[],
+            call_stack=frames,
+            coroutines=[],
+            upvalues=list(debug.extra.get("upvalues", [])),
+            emit_stack=list(debug.memory_sections.get("stack", [])),
+            output=list(debug.output),
+        )
