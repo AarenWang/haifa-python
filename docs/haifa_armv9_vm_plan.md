@@ -349,11 +349,11 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 2：最小 HaifaArmV9VM
 
-- [ ] 新增 `compiler/armv9_vm.py`。
-- [ ] 实现寄存器文件：`X0` - `X15`、`FP`、`LR`、`SP`、`PC`、`NZCV`。
-- [ ] 实现内存模型：const pool、stack、heap、globals。
-- [ ] 实现最小指令：`MOVI`、`MOV`、`ADD`、`SUB`、`CMP`、`B`、`B.EQ`、`B.NE`、`HALT`。
-- [ ] 添加 VM 单元测试。
+- [x] 新增 `compiler/armv9_vm.py`。
+- [x] 实现寄存器文件：`X0` - `X15`、`FP`、`LR`、`SP`、`PC`、`NZCV`。
+- [x] 实现内存模型：const pool、stack、heap、globals。
+- [x] 实现最小指令：`MOVI`、`MOV`、`ADD`、`SUB`、`CMP`、`B`、`B.EQ`、`B.NE`、`HALT`。
+- [x] 添加 VM 单元测试。
 
 验收标准：
 
@@ -362,10 +362,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 3：栈帧与调用约定
 
-- [ ] 实现 `BL`、`RET`、`LDR`、`STR`。
-- [ ] 建立 `FP`/`SP` 栈帧布局。
-- [ ] 支持 `X0` - `X7` 参数传递和 `X0` 返回。
-- [ ] 添加递归函数测试，例如 factorial。
+- [x] 实现 `BL`、`RET`、`LDR`、`STR`。
+- [x] 建立 `FP`/`SP` 栈帧布局。
+- [x] 支持 `X0` - `X7` 参数传递和 `X0` 返回。
+- [x] 添加递归函数测试，例如 factorial。
 
 验收标准：
 
@@ -374,10 +374,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 4：从 Haifa Opcode 到 ArmV9 lowering
 
-- [ ] 新增 `compiler/armv9_lowering.py`。
-- [ ] 支持 lowering：`LOAD_IMM`、`LOAD_CONST`、`MOV`、`ADD`、`SUB`、`MUL`、`EQ`、`LT`、`GT`、`JMP`、`JZ`、`JNZ`、`PRINT`、`HALT`。
-- [ ] 先采用 stack-slot-only 保守寄存器分配。
-- [ ] 添加高级 bytecode 与 ARMv9 bytecode 输出对照测试。
+- [x] 新增 `compiler/armv9_lowering.py`。
+- [x] 支持 lowering：`LOAD_IMM`、`LOAD_CONST`、`MOV`、`ADD`、`SUB`、`MUL`、`EQ`、`LT`、`GT`、`JMP`、`JZ`、`JNZ`、`PRINT`、`HALT`。
+- [x] 先采用 stack-slot-only 保守寄存器分配。
+- [x] 添加高级 bytecode 与 ARMv9 bytecode 输出对照测试。
 
 验收标准：
 
@@ -386,10 +386,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 5：运行时对象与 Lua table
 
-- [ ] 实现 heap object 引用模型。
-- [ ] 支持 `NEW_TABLE`、`TABLE_GET`、`TABLE_SET`。
-- [ ] 支持字符串、布尔、nil、LuaTable 的 const pool 表达。
-- [ ] 添加 Lua table 构造、索引和更新测试。
+- [x] 实现 heap object 引用模型。
+- [x] 支持 `NEW_TABLE`、`TABLE_GET`、`TABLE_SET`。
+- [x] 支持字符串、布尔、nil、LuaTable 的 const pool 表达。
+- [x] 添加 Lua table 构造、索引和更新测试。
 
 验收标准：
 
@@ -398,10 +398,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 6：闭包、cell 与多返回值
 
-- [ ] 支持 `NEW_CLOSURE`、`CELL_GET`、`CELL_SET`。
-- [ ] 支持 upvalue 环境对象。
-- [ ] 支持 `MultiReturn` heap 对象。
-- [ ] lowering 覆盖 `MAKE_CELL`、`CELL_GET`、`CELL_SET`、`CLOSURE`、`CALL_VALUE`、`RETURN_MULTI`、`RESULT_LIST`。
+- [x] 支持 `NEW_CLOSURE`、`CELL_GET`、`CELL_SET`。
+- [x] 支持 upvalue 环境对象。
+- [x] 支持 `MultiReturn` heap 对象。
+- [x] lowering 覆盖 `MAKE_CELL`、`CELL_GET`、`CELL_SET`、`CLOSURE`、`CALL_VALUE`、`RETURN_MULTI`、`RESULT_LIST`。
 
 验收标准：
 
@@ -410,9 +410,9 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 7：调试器适配
 
-- [ ] 新增 VM debug adapter 协议。
-- [ ] 为 `BytecodeVM` 实现兼容 adapter。
-- [ ] 为 `HaifaArmV9VM` 实现 adapter。
+- [x] 新增 VM debug adapter 协议。
+- [x] 为 `BytecodeVM` 实现兼容 adapter。
+- [x] 为 `HaifaArmV9VM` 实现 adapter。
 - [ ] GUI visualizer 使用 adapter 读取状态。
 - [ ] TUI visualizer 使用 adapter 读取状态。
 
@@ -435,10 +435,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 9：寄存器分配优化
 
-- [ ] 增加 liveness analysis。
+- [x] 增加 liveness analysis。
 - [ ] 实现线性扫描寄存器分配。
-- [ ] 减少不必要的 `LDR`/`STR`。
-- [ ] 输出 spill report 供教学使用。
+- [x] 减少不必要的 `LDR`/`STR`（basic-block 寄存器缓存，支持开关）。
+- [x] 输出 spill report 供教学使用（`ArmV9RegisterAllocationReport`）。
 
 验收标准：
 
