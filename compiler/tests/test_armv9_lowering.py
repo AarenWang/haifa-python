@@ -324,3 +324,24 @@ def test_register_allocation_report_is_readable_for_teaching():
     assert "physical registers: X12, X13, X14, X15" in text
     assert "loads elided:" in text
     assert "stores elided:" in text
+
+
+def test_lowering_linear_scan_strategy_reduces_instruction_count():
+    instructions = [
+        Instruction(Opcode.LOAD_IMM, ["a", 10]),
+        Instruction(Opcode.LOAD_IMM, ["b", 20]),
+        Instruction(Opcode.ADD, ["c", "a", "b"]),
+        Instruction(Opcode.SUB, ["d", "c", "a"]),
+        Instruction(Opcode.PRINT, ["d"]),
+        Instruction(Opcode.HALT, []),
+    ]
+
+    naive_result, _, naive_output = run_armv9_lowered(instructions)
+    scan_result = lower_to_armv9(instructions, strategy="linear-scan")
+    vm = HaifaArmV9VM(scan_result.instructions, stack_size=64, const_pool=scan_result.const_pool)
+    scan_output = vm.run()
+
+    assert naive_output == scan_output == [20]
+    assert len(scan_result.instructions) < len(naive_result.instructions)
+    assert count_memory_ops(scan_result) < count_memory_ops(naive_result)
+    assert scan_result.allocation_report.strategy == "linear-scan"

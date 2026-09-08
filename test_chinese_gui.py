@@ -11,10 +11,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def test_chinese_display():
     """测试中文字体加载和显示"""
     try:
-        import pygame
+        from compiler.vm_visualizer import _get_chinese_font, pygame
         pygame.init()
-        
-        from compiler.vm_visualizer import _get_chinese_font
+        if hasattr(pygame, "font") and hasattr(pygame.font, "init") and not pygame.font.get_init():
+            try:
+                pygame.font.init()
+            except Exception:
+                pass
         
         print("测试中文字体加载...")
         font = _get_chinese_font(18)
@@ -33,9 +36,9 @@ def test_chinese_display():
             try:
                 surface = font.render(text, True, (0, 0, 0))
                 width = surface.get_width()
-                print(f"  ✓ '{text}' -> 宽度: {width}px")
+                print(f"  [OK] '{text}' -> 宽度: {width}px")
             except Exception as e:
-                print(f"  ✗ '{text}' -> 错误: {e}")
+                print(f"  [FAIL] '{text}' -> 错误: {e}")
         
         pygame.quit()
         print("中文字体测试完成！")

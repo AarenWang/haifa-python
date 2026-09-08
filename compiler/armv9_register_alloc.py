@@ -21,7 +21,7 @@ class ArmV9Liveness:
 
 @dataclass
 class ArmV9RegisterAllocationReport:
-    """Teaching-friendly report for the optional ARMv9 register cache."""
+    """Teaching-friendly report for ARMv9 register allocation."""
 
     enabled: bool = False
     strategy: str = "stack-slot-only"
@@ -34,6 +34,8 @@ class ArmV9RegisterAllocationReport:
     spills: int = 0
     flushes: int = 0
     max_cached_registers: int = 0
+    intervals: dict[str, tuple[int, int]] = field(default_factory=dict)
+    spilled_registers: tuple[str, ...] = ()
     notes: list[str] = field(default_factory=list)
 
     @classmethod
@@ -59,9 +61,66 @@ class ArmV9RegisterAllocationReport:
             ],
         )
 
+    @classmethod
+    def linear_scan_report(
+        cls,
+        *,
+        allocated_registers: Sequence[str],
+        liveness: ArmV9Liveness,
+        scan_result: ArmV9LinearScanResult,
+    ) -> ArmV9RegisterAllocationReport:
+        intervals_dict = {
+            name: (it.start, it.end)
+            for name, it in sorted(scan_result.intervals.items())
+        }
+        return cls(
+            enabled=True,
+            strategy="linear-scan",
+            allocated_registers=tuple(allocated_registers),
+            virtual_registers=tuple(sorted(liveness.defined_registers)),
+            last_use=dict(sorted(liveness.last_use.items())),
+            final_register_map=dict(sorted(scan_result.register_map.items())),
+            spills=len(scan_result.spilled),
+            spilled_registers=tuple(sorted(scan_result.spilled)),
+            intervals=intervals_dict,
+            notes=[
+                "Global linear scan register allocation (Poletto & Sarkar).",
+                f"Spilled {len(scan_result.spilled)} virtual register(s) to stack slots.",
+            ],
+        )
+
     def readable_text(self) -> str:
         if not self.enabled:
             return "register allocation: disabled (stack-slot-only lowering)"
+        if self.strategy == "linear-scan":
+            lines = [
+                f"register allocation: {self.strategy}",
+                f"physical registers: {', '.join(self.allocated_registers)}",
+                f"virtual registers: {len(self.virtual_registers)}",
+                f"spills: {self.spills}",
+            ]
+            if self.final_register_map:
+                mapping = ", ".join(
+                    f"{virtual}->{physical}"
+                    for virtual, physical in sorted(self.final_register_map.items())
+                )
+                lines.append(f"assigned map: {mapping}")
+            if self.spilled_registers:
+                lines.append(f"spilled registers: {', '.join(self.spilled_registers)}")
+            if self.intervals:
+                intervals_str = ", ".join(
+                    f"{v}:[{start},{end}]"
+                    for v, (start, end) in sorted(self.intervals.items())
+                )
+                lines.append(f"live intervals: {intervals_str}")
+            if self.loads_elided or self.stores_elided:
+                lines.append(f"loads elided: {self.loads_elided}")
+                lines.append(f"stores elided: {self.stores_elided}")
+            if self.notes:
+                lines.append("notes:")
+                lines.extend(f"- {note}" for note in self.notes)
+            return "\n".join(lines)
+
         lines = [
             f"register allocation: {self.strategy}",
             f"physical registers: {', '.join(self.allocated_registers)}",
@@ -114,6 +173,192 @@ def analyze_armv9_liveness(instructions: Sequence[Instruction]) -> ArmV9Liveness
         defs_by_index=defs_by_index,
         last_use=last_use,
     )
+
+
+@dataclass(frozen=True)
+class ArmV9LiveInterval:
+    """Live interval for one Haifa virtual register."""
+
+    virtual_register: str
+    start: int
+    end: int
+    defs: tuple[int, ...] = ()
+    uses: tuple[int, ...] = ()
+    spill_weight: float = 0.0
+
+    @property
+    def length(self) -> int:
+        return max(0, self.end - self.start)
+
+
+@dataclass
+class ArmV9LinearScanResult:
+    """Result of linear scan register allocation."""
+
+    register_map: dict[str, str] = field(default_factory=dict)
+    spilled: tuple[str, ...] = ()
+    intervals: dict[str, ArmV9LiveInterval] = field(default_factory=dict)
+    allocatable_registers: tuple[str, ...] = ()
+
+
+def compute_armv9_live_intervals(
+    instructions: Sequence[Instruction],
+    liveness: ArmV9Liveness | None = None,
+) -> list[ArmV9LiveInterval]:
+    if liveness is None:
+        liveness = analyze_armv9_liveness(instructions)
+
+    defs_map: dict[str, list[int]] = {reg: [] for reg in liveness.defined_registers}
+    uses_map: dict[str, list[int]] = {reg: [] for reg in liveness.defined_registers}
+    label_indices: dict[str, int] = {}
+
+    for idx, inst in enumerate(instructions):
+        if inst.opcode == Opcode.LABEL and inst.args:
+            label_indices[str(inst.args[0])] = idx
+        for reg in _string_args(_defined_values(inst)):
+            if reg in defs_map:
+                defs_map[reg].append(idx)
+        for reg in _string_args(_used_values(inst)):
+            if reg in uses_map:
+                uses_map[reg].append(idx)
+
+    # Detect backward branches (loops) to extend lifetimes
+    backward_jumps: list[tuple[int, int]] = []
+    for idx, inst in enumerate(instructions):
+        if inst.opcode in {Opcode.JMP, Opcode.JZ, Opcode.JNZ} and inst.args:
+            target_label = str(inst.args[-1] if inst.opcode != Opcode.JMP else inst.args[0])
+            if target_label in label_indices:
+                target_idx = label_indices[target_label]
+                if target_idx <= idx:
+                    backward_jumps.append((target_idx, idx))
+
+    intervals: list[ArmV9LiveInterval] = []
+    for reg in sorted(liveness.defined_registers):
+        reg_defs = defs_map.get(reg, [])
+        reg_uses = uses_map.get(reg, [])
+        start = min(reg_defs) if reg_defs else (min(reg_uses) if reg_uses else 0)
+        end = max(reg_uses) if reg_uses else start
+
+        for loop_start, loop_end in backward_jumps:
+            if start <= loop_end and any(u >= loop_start for u in reg_uses):
+                end = max(end, loop_end)
+
+        use_count = len(reg_uses)
+        interval_len = max(1, end - start + 1)
+        spill_weight = round(use_count / interval_len, 4)
+
+        intervals.append(
+            ArmV9LiveInterval(
+                virtual_register=reg,
+                start=start,
+                end=end,
+                defs=tuple(sorted(reg_defs)),
+                uses=tuple(sorted(reg_uses)),
+                spill_weight=spill_weight,
+            )
+        )
+
+    intervals.sort(key=lambda it: (it.start, it.end, it.virtual_register))
+    return intervals
+
+
+class ArmV9LinearScanAllocator:
+    """Linear scan register allocator (Poletto & Sarkar 1999)."""
+
+    def __init__(
+        self,
+        allocatable_registers: Sequence[str] = ("X12", "X13", "X14", "X15"),
+    ) -> None:
+        self.allocatable_registers = tuple(allocatable_registers)
+
+    def allocate(
+        self,
+        intervals: Sequence[ArmV9LiveInterval],
+        *,
+        instructions: Sequence[Instruction] | None = None,
+    ) -> ArmV9LinearScanResult:
+        call_crossing: set[str] = set()
+        if instructions:
+            call_indices = {
+                idx
+                for idx, inst in enumerate(instructions)
+                if inst.opcode in {Opcode.CALL_VALUE, Opcode.CALL}
+            }
+            for it in intervals:
+                if any(it.start < call_idx <= it.end for call_idx in call_indices):
+                    call_crossing.add(it.virtual_register)
+
+        sorted_intervals = sorted(
+            intervals, key=lambda it: (it.start, it.end, it.virtual_register)
+        )
+        active: list[tuple[ArmV9LiveInterval, str]] = []
+        free_registers: list[str] = sorted(list(self.allocatable_registers))
+        register_map: dict[str, str] = {}
+        spilled: list[str] = sorted(list(call_crossing))
+
+        for interval in sorted_intervals:
+            if interval.virtual_register in call_crossing:
+                continue
+
+            # 1. Expire old intervals
+            new_active: list[tuple[ArmV9LiveInterval, str]] = []
+            for active_it, phys_reg in active:
+                if active_it.end < interval.start:
+                    free_registers.append(phys_reg)
+                else:
+                    new_active.append((active_it, phys_reg))
+            active = new_active
+            free_registers.sort()
+
+            # 2. Check register availability
+            if not free_registers:
+                # Active is full: choose candidate with furthest end point to spill
+                candidate = max(
+                    active,
+                    key=lambda pair: (
+                        pair[0].end,
+                        -pair[0].spill_weight,
+                        pair[0].virtual_register,
+                    ),
+                )
+                cand_it, cand_reg = candidate
+                if cand_it.end > interval.end or (
+                    cand_it.end == interval.end
+                    and cand_it.spill_weight < interval.spill_weight
+                ):
+                    active.remove(candidate)
+                    register_map.pop(cand_it.virtual_register, None)
+                    spilled.append(cand_it.virtual_register)
+                    register_map[interval.virtual_register] = cand_reg
+                    active.append((interval, cand_reg))
+                    active.sort(key=lambda pair: pair[0].end)
+                else:
+                    spilled.append(interval.virtual_register)
+            else:
+                phys_reg = free_registers.pop(0)
+                register_map[interval.virtual_register] = phys_reg
+                active.append((interval, phys_reg))
+                active.sort(key=lambda pair: pair[0].end)
+
+        return ArmV9LinearScanResult(
+            register_map=register_map,
+            spilled=tuple(sorted(set(spilled))),
+            intervals={it.virtual_register: it for it in intervals},
+            allocatable_registers=self.allocatable_registers,
+        )
+
+
+def allocate_armv9_linear_scan(
+    instructions: Sequence[Instruction],
+    *,
+    allocatable_registers: Sequence[str] = ("X12", "X13", "X14", "X15"),
+    liveness: ArmV9Liveness | None = None,
+) -> ArmV9LinearScanResult:
+    if liveness is None:
+        liveness = analyze_armv9_liveness(instructions)
+    intervals = compute_armv9_live_intervals(instructions, liveness)
+    allocator = ArmV9LinearScanAllocator(allocatable_registers)
+    return allocator.allocate(intervals, instructions=instructions)
 
 
 def _string_args(values: Sequence[Any]) -> tuple[str, ...]:
