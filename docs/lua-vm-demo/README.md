@@ -11,6 +11,18 @@ VMs. It is designed for beginners who want to connect Lua source code to:
 Open `index.html` directly in a browser. The page uses `demo-data.js`, so it
 does not need a local web server.
 
+## ARMv9 Mode
+
+Switch the *VM* dropdown to **Haifa ARMv9** to replay the exact same Lua source
+as fixed `X0`-`X15` registers, `SP`/`FP`/`LR`/`PC`, and the `NZCV` flag panel.
+The memory panel shows the real `const_pool`, stack slots, heap objects, and
+globals recorded from `HaifaArmV9VM` via the debug adapter. Use the bytecode
+view side-by-side to see how a high-level Haifa instruction lowers to ARMv9
+instructions (`LDR`/`STR` stack traffic, `CMP`/`CSET` flag setting, branches).
+
+The `NZCV` panel renders each flag as `0`/`1` and highlights set flags; it is
+only populated in ARMv9 mode.
+
 ## Regenerate The Demo Data
 
 From the repository root:

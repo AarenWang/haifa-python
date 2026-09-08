@@ -16,6 +16,7 @@ const els = {
   callStackView: document.querySelector("#callStackView"),
   upvalueView: document.querySelector("#upvalueView"),
   outputView: document.querySelector("#outputView"),
+  nzcvView: document.querySelector("#nzcvView"),
   memoryView: document.querySelector("#memoryView"),
   instructionTitle: document.querySelector("#instructionTitle"),
   opcodeExplanation: document.querySelector("#opcodeExplanation"),
@@ -225,7 +226,37 @@ function renderState(trace, step) {
   );
   renderMiniList(els.upvalueView, step.upvalues.map(formatValue), "<empty>");
   renderMiniList(els.outputView, step.output.map(formatValue), "<empty>");
+  renderNzcV(step, mode);
   renderMemory(trace, step.memorySections || {});
+}
+
+function renderNzcV(step, mode) {
+  if (mode !== "armv9") {
+    const empty = document.createElement("div");
+    empty.className = "mini-item";
+    empty.textContent = "<not applicable for bytecode VM>";
+    els.nzcvView.replaceChildren(empty);
+    return;
+  }
+  const row = step.registers.find((entry) => entry.name === "NZCV");
+  if (!row || row.value === undefined) {
+    const empty = document.createElement("div");
+    empty.className = "mini-item";
+    empty.textContent = "<no NZCV flags>";
+    els.nzcvView.replaceChildren(empty);
+    return;
+  }
+  const flags = row.value;
+  const flagEntries = [];
+  for (const name of ["N", "Z", "C", "V"]) {
+    const item = document.createElement("div");
+    item.className = "mini-item nzcv-flag";
+    const on = flags && (flags[name] === true || flags[name] === "true" || flags[name] === 1);
+    item.textContent = `${name} = ${on ? "1" : "0"}`;
+    item.classList.toggle("on", on);
+    flagEntries.push(item);
+  }
+  els.nzcvView.replaceChildren(...flagEntries);
 }
 
 function renderMemory(trace, sections) {

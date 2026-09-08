@@ -306,6 +306,23 @@ select {
   margin-top: 6px;
 }
 
+.nzcv-flag {
+  display: inline-block;
+  margin: 0 6px 6px 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nzcv-flag.on {
+  background: var(--teal-soft);
+  color: #0f5f59;
+}
+
 .memory-view {
   display: grid;
   gap: 8px;
