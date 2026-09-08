@@ -423,10 +423,10 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 
 ### Phase 8：教学 HTML Demo
 
-- [ ] 扩展 `docs/lua-vm-demo`，增加 ARMv9 模式。
-- [ ] 同一段 Lua 源码展示高级 bytecode 和 ARMv9 lowering bytecode。
-- [ ] 显示 `X0` - `X15`、`SP`、`FP`、`LR`、`NZCV`。
-- [ ] 显示 stack/heap/global memory。
+- [x] 扩展 `docs/lua-vm-demo`，增加 ARMv9 模式。
+- [x] 同一段 Lua 源码展示高级 bytecode 和 ARMv9 lowering bytecode。
+- [x] 显示 `X0` - `X15`、`SP`、`FP`、`LR`、`NZCV`（新增 NZCV 面板，高亮置位标志）。
+- [x] 显示 stack/heap/global memory（const_pool/stack/heap/globals 分区渲染）。
 
 验收标准：
 
