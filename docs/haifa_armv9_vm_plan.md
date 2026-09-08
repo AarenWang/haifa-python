@@ -436,7 +436,7 @@ Phase 0 冻结的最小可执行指令集，覆盖算术、比较、分支、停
 ### Phase 9：寄存器分配优化
 
 - [x] 增加 liveness analysis。
-- [ ] 实现线性扫描寄存器分配。
+- [x] 实现线性扫描寄存器分配。
 - [x] 减少不必要的 `LDR`/`STR`（basic-block 寄存器缓存，支持开关）。
 - [x] 输出 spill report 供教学使用（`ArmV9RegisterAllocationReport`）。
 
