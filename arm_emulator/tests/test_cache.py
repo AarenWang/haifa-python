@@ -135,6 +135,75 @@ def test_cache_write_back_and_write_allocate():
     assert mem.read_bytes(addr, 12) == b"ModifiedData"
 
 
+def test_cache_read_crossing_block_boundary():
+    """Read that spans two cache blocks must be assembled from both blocks."""
+    mem = Memory(4096)
+    mem.write_bytes(0x3C, bytes(range(0x20)))  # 32 bytes at 0x3C..0x5B (crosses 0x40 boundary)
+
+    cache = CacheSimulator(
+        num_sets=16,
+        associativity=2,
+        block_size=64,
+        backing_read=mem.read_bytes,
+        backing_write=mem.write_bytes,
+    )
+
+    # Read 8 bytes starting at 0x3C: 4 bytes in block [0x00,0x40), 4 bytes in [0x40,0x80)
+    data = cache.read(0x3C, 8)
+
+    assert data == bytes(range(0x20))[0x3C - 0x3C : 0x3C - 0x3C + 8]
+    assert len(data) == 8
+    # Two cold misses: one per block
+    assert cache.stats.read_misses == 2
+    assert cache.stats.read_hits == 0
+
+    # Reading the same region again hits both blocks
+    cache.read(0x3C, 8)
+    assert cache.stats.read_hits == 2
+    assert cache.stats.read_misses == 2
+
+
+def test_cache_write_crossing_block_boundary():
+    """Write spanning two cache blocks must update both blocks correctly."""
+    mem = Memory(4096)
+    cache = CacheSimulator(
+        num_sets=16,
+        associativity=2,
+        block_size=64,
+        backing_read=mem.read_bytes,
+        backing_write=mem.write_bytes,
+    )
+
+    # Write 8 bytes starting at 0x3C, crossing the 0x40 boundary
+    payload = bytes(range(100, 108))
+    cache.write(0x3C, payload)
+
+    # Reading back from cache should return exact payload
+    assert cache.read(0x3C, 8) == payload
+
+    # Flush and verify backing memory got both pieces
+    cache.flush()
+    assert mem.read_bytes(0x3C, 8) == payload
+
+
+def test_cache_aligned_read_write_16_bytes():
+    """Aligned 16-byte read/write within a single cache block."""
+    mem = Memory(4096)
+    cache = CacheSimulator(
+        num_sets=16,
+        associativity=2,
+        block_size=64,
+        backing_read=mem.read_bytes,
+        backing_write=mem.write_bytes,
+    )
+
+    payload = bytes(range(16))
+    cache.write(0x200, payload)
+    assert cache.read(0x200, 16) == payload
+    assert cache.stats.write_misses == 1
+    assert cache.stats.read_hits == 1
+
+
 def test_cached_memory_transparent_adapter():
     backing = Memory(8192)
     cached_mem = CachedMemory(backing)
