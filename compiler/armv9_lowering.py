@@ -217,6 +217,18 @@ class ArmV9Lowerer:
             else:
                 self.allocation_report.stores_elided += 1
             return
+        if opcode == Opcode.NOT:
+            dst, src = self._expect_args(instruction, 2)
+            reg_src = self._reg_or_load(instruction, src, self.SCRATCH0)
+            self._emit(instruction, ArmV9Opcode.MOVI, self.SCRATCH1, 0)
+            self._emit(instruction, ArmV9Opcode.CMP, reg_src, self.SCRATCH1)
+            target = self._reg_for_def(str(dst), self.SCRATCH2)
+            self._emit(instruction, ArmV9Opcode.CSET, target, "EQ")
+            if target == self.SCRATCH2:
+                self._store_register(instruction, str(dst), self.SCRATCH2)
+            else:
+                self.allocation_report.stores_elided += 1
+            return
         if opcode == Opcode.TABLE_NEW:
             (dst,) = self._expect_args(instruction, 1)
             self._emit(instruction, ArmV9Opcode.NEW_TABLE, self.SCRATCH0)
